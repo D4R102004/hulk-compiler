@@ -1,0 +1,4 @@
+[package]
+name = "hulk-codegen"
+version.workspace = true
+edition.workspace = true
