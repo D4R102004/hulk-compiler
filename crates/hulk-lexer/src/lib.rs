@@ -158,3 +158,103 @@ pub enum LexError {
         span: Span,
     },
 }
+
+/// The HULK lexer.
+///
+/// Created with [`Lexer::new`] and consumed by [`Lexer::tokenize`].
+///
+/// # Example
+/// ```
+/// let mut lexer = Lexer::new("1 + 2;");
+/// let tokens = lexer.tokenize().unwrap();
+/// ```
+pub struct Lexer {
+    /// Source code as individual characters for index-based access.
+    source: Vec<char>,
+    /// Index of the next character to be read.
+    current: usize,
+    /// Current line number (1-based).
+    line: usize,
+    /// Current column number (1-based).
+    col: usize,
+}
+
+impl Lexer {
+    /// Creates a new [`Lexer`] ready to tokenize `source`.
+    ///
+    /// # Arguments
+    /// * `source` - The raw HULK source code to tokenize.
+    ///
+    /// # Example
+    /// ```
+    /// let mut lexer = Lexer::new("1 + 2;");
+    /// ```
+    pub fn new(source: &str) -> Self {
+        Self {
+            source: source.chars().collect(),
+            current: 0,
+            line: 1,
+            col: 1,
+        }
+    }
+    /// Returns `true` if all characters have been consumed.
+    fn is_at_end(&self) -> bool {
+        self.current >= self.source.len()
+    }
+    /// Returns the current character without consuming it.
+    ///
+    /// Returns `'\0'` as a sentinel when the source is exhausted,
+    /// so callers can check `peek() != '\0'` without a separate
+    /// bounds check.
+    fn peek(&self) -> char {
+        if self.is_at_end() {
+            '\0'
+        } else {
+            self.source[self.current]
+        }
+    }
+
+    /// Returns the character at `current + 1` without consuming it.
+    ///
+    /// Used to distinguish two-character tokens like `==`, `:=`, `=>`.
+    /// Returns `'\0'` as a sentinel when the lookahead is out of bounds.
+    fn peek_next(&self) -> char {
+        if self.current + 1 >= self.source.len() {
+            '\0'
+        } else {
+            self.source[self.current + 1]
+        }
+    }
+    /// Consumes the current character and advances the lexer state.
+    ///
+    /// Updates `line` and `col` for accurate error reporting.
+    /// Increments `line` and resets `col` on newlines.
+    ///
+    /// # Returns
+    /// The consumed character, or `'\0'` if already at end of source.
+    fn advance(&mut self) -> char {
+        let ch = self.peek();
+        if !self.is_at_end() {
+            self.current += 1;
+            if ch == '\n' {
+                self.line += 1;
+                self.col = 1;
+            } else {
+                self.col += 1;
+            }
+            ch
+        } else {
+            '\0'
+        }
+    }
+
+    /// Returns a [`Span`] representing the current cursor position.
+    ///
+    /// Used to stamp every token with where it started in the source.
+    fn current_span(&self) -> Span {
+        Span {
+            line: self.line,
+            col: self.col,
+        }
+    }
+}
