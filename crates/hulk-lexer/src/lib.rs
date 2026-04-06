@@ -131,3 +131,30 @@ pub struct Token {
     /// Where in the source this token starts.
     pub span: Span,
 }
+
+/// An error produced during lexing.
+///
+/// The lexer is intentionally strict: it halts on the first
+/// unrecognisable input rather than guessing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LexError {
+    /// A character that belongs to no HULK token was encountered.
+    ///
+    /// # Example
+    /// `#` or `$` in HULK source code.
+    UnexpectedChar {
+        /// The offending character.
+        ch: char,
+        /// Where it appeared.
+        span: Span,
+    },
+
+    /// A string literal was opened but never closed before end-of-file.
+    ///
+    /// # Example
+    /// `"hello` with no closing quote.
+    UnterminatedString {
+        /// Where the string literal started.
+        span: Span,
+    },
+}
