@@ -13,63 +13,121 @@
 /// Variants without data are self-descriptive.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
-  // ── Literals ──────────────────────────────────────────────────────
-  /// A numeric literal, e.g. `42` or `3.14`.
-  Number(f64),
-  /// A string literal, e.g. `"hello world"`
-  StringLit(String),
-  /// The boolean literal `true`.
-  True,
-  /// The boolean literal `false`.
-  False,
+    // ── Literals ──────────────────────────────────────────────────────
+    /// A numeric literal, e.g. `42` or `3.14`.
+    Number(f64),
+    /// A string literal, e.g. `"hello world"`
+    StringLit(String),
+    /// The boolean literal `true`.
+    True,
+    /// The boolean literal `false`.
+    False,
 
-  // ── Arithmetic operators ──────────────────────────────────────────
-  Plus, Minus, Star, Slash, Caret, Percent,
+    // ── Arithmetic operators ──────────────────────────────────────────
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Caret,
+    Percent,
 
-  // ── String operators ──────────────────────────────────────────────
-  /// Single concatenation `@`
-  At,
-  /// Concatenation with space `@@`
-  AtAt,
+    // ── String operators ──────────────────────────────────────────────
+    /// Single concatenation `@`
+    At,
+    /// Concatenation with space `@@`
+    AtAt,
 
+    // ── Comparison operators ──────────────────────────────────────────
+    EqEq,
+    Neq,
+    Lt,
+    Gt,
+    Leq,
+    Geq,
 
-  // ── Comparison operators ──────────────────────────────────────────
-  EqEq, Neq, Lt, Gt, Leq, Geq,
+    // ── Boolean operators ─────────────────────────────────────────────
+    And,
+    Or,
+    Not,
 
-  // ── Boolean operators ─────────────────────────────────────────────
-  And, Or, Not,
+    // ── Assignment ────────────────────────────────────────────────────
+    /// Simple assignment `=`
+    Assign,
+    /// Destructive assignment `:=`
+    ColonEq,
 
-  // ── Assignment ────────────────────────────────────────────────────
-  /// Simple assignment `=`
-  Assign,
-  /// Destructive assignment `:=`
-  ColonEq,
+    // ── Delimiters ────────────────────────────────────────────────────
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    LBracket,
+    RBracket,
+    Semicolon,
+    Comma,
+    Colon,
+    Dot,
+    /// Thin arrow `->` used in functor type annotations
+    Arrow,
+    /// Fat arrow `=>` used in inline functions
+    FatArrow,
+    /// Pipe `|` used in vector generator syntax `[x^2 | x in range(0,10)]`
+    Pipe,
 
-  // ── Delimiters ────────────────────────────────────────────────────
-  LParen, RParen, LBrace, RBrace, LBracket, RBracket,
-  Semicolon, Comma, Colon, Dot,
-  /// Thin arrow `->` used in functor type annotations
-  Arrow,
-  /// Fat arrow `=>` used in inline functions
-  FatArrow,
-  /// Pipe `|` used in vector generator syntax `[x^2 | x in range(0,10)]`
-  Pipe,
+    // ── Keywords ──────────────────────────────────────────────────────
+    Let,
+    In,
+    If,
+    Elif,
+    Else,
+    While,
+    For,
+    Function,
+    Type,
+    Inherits,
+    New,
+    /// The `self` keyword — renamed to avoid clash with Rust's `Self`
+    SelfKw,
+    Base,
+    Is,
+    As,
+    Protocol,
+    Extends,
+    /// `def` keyword for macro definitions
+    Def,
 
-  // ── Keywords ──────────────────────────────────────────────────────
-  Let, In, If, Elif, Else, While, For,
-  Function, Type, Inherits, New,
-  /// The `self` keyword — renamed to avoid clash with Rust's `Self`
-  SelfKw,
-  Base, Is, As, Protocol, Extends,
-  /// `def` keyword for macro definitions
-  Def,
+    // ── Extra feature: pattern matching ───────────────────────────────
+    Match,
+    Case,
+    Underscore,
 
-  // ── Extra feature: pattern matching ───────────────────────────────
-  Match, Case, Underscore,
+    // ── Identifier & end-of-file ──────────────────────────────────────
+    /// Any user-defined name: variable, function, type, etc.
+    Ident(String),
+    /// Signals the end of the token stream.
+    Eof,
+}
 
-  // ── Identifier & end-of-file ──────────────────────────────────────
-  /// Any user-defined name: variable, function, type, etc.
-  Ident(String),
-  /// Signals the end of the token stream.
-  Eof,
+/// A location in the source file, used for error reporting.
+///
+/// Both `line` and `col` are 1-based, matching what humans
+/// expect in error messages: "error at line 3, col 7".
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Span {
+    /// Line number, starting at 1.
+    pub line: usize,
+    /// Column number, starting at 1.
+    pub col: usize,
+}
+
+/// A single token produced by the lexer.
+///
+/// Bundles a [`TokenKind`] with the [`Span`] where it was found,
+/// so every later compiler phase can report precise error locations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Token {
+    /// What kind of token this is.
+    pub kind: TokenKind,
+    /// Where in the source this token starts.
+    pub span: Span,
 }
