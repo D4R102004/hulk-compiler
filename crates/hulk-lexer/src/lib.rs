@@ -71,8 +71,6 @@ pub enum TokenKind {
     Arrow,
     /// Fat arrow `=>` used in inline functions
     FatArrow,
-    /// Pipe `|` used in vector generator syntax `[x^2 | x in range(0,10)]`
-    Pipe,
 
     // ── Keywords ──────────────────────────────────────────────────────
     Let,
@@ -255,6 +253,278 @@ impl Lexer {
         Span {
             line: self.line,
             col: self.col,
+        }
+    }
+
+    /// Tokenizes the entire source string into a flat list of tokens.
+    ///
+    /// Skips whitespace and comments. Returns [`LexError`] on the first
+    /// unrecognised character or unterminated string literal.
+    ///
+    /// # Errors
+    /// - [`LexError::UnexpectedChar`] — character belongs to no HULK token.
+    /// - [`LexError::UnterminatedString`] — string literal never closed.
+    pub fn tokenize(&mut self) -> Result<Vec<Token>, LexError> {
+        let mut tokens = Vec::new();
+        while !self.is_at_end() {
+            let span: Span = self.current_span();
+            let ch: char = self.advance();
+
+            let kind = match ch {
+                // ── Whitespace ────────────────────────────────────────────
+                // Skip silently — whitespace carries no meaning in HULK.
+                ' ' | '\t' | '\r' | '\n' => continue,
+
+                // ── Single-character tokens ───────────────────────────────
+                '+' => TokenKind::Plus,
+                '-' => {
+                    if self.peek() == '>' {
+                        self.advance();
+                        TokenKind::Arrow
+                    } else {
+                        TokenKind::Minus
+                    }
+                }
+                '*' => TokenKind::Star,
+                '/' => {
+                    if self.peek() == '/' {
+                        // This is a comment — skip everything until end of line.
+                        // WHY: HULK uses // for single-line comments like most languages.
+                        while self.peek() != '\n' && !self.is_at_end() {
+                            self.advance();
+                        }
+                        continue;
+                    } else {
+                        TokenKind::Slash
+                    }
+                }
+                '^' => TokenKind::Caret,
+                '%' => TokenKind::Percent,
+                '(' => TokenKind::LParen,
+                ')' => TokenKind::RParen,
+                '{' => TokenKind::LBrace,
+                '}' => TokenKind::RBrace,
+                '[' => TokenKind::LBracket,
+                ']' => TokenKind::RBracket,
+                ';' => TokenKind::Semicolon,
+                ',' => TokenKind::Comma,
+                '.' => TokenKind::Dot,
+                '|' => TokenKind::Or,
+
+                // ── One-or-two character tokens ───────────────────────────
+                '=' => {
+                    if self.peek() == '=' {
+                        self.advance();
+                        TokenKind::EqEq
+                    } else if self.peek() == '>' {
+                        self.advance();
+                        TokenKind::FatArrow
+                    } else {
+                        TokenKind::Assign
+                    }
+                }
+                '!' => {
+                    if self.peek() == '=' {
+                        self.advance();
+                        TokenKind::Neq
+                    } else {
+                        TokenKind::Not
+                    }
+                }
+                '<' => {
+                    if self.peek() == '=' {
+                        self.advance();
+                        TokenKind::Leq
+                    } else {
+                        TokenKind::Lt
+                    }
+                }
+                '>' => {
+                    if self.peek() == '=' {
+                        self.advance();
+                        TokenKind::Geq
+                    } else {
+                        TokenKind::Gt
+                    }
+                }
+                ':' => {
+                    if self.peek() == '=' {
+                        self.advance();
+                        TokenKind::ColonEq
+                    } else {
+                        TokenKind::Colon
+                    }
+                }
+                '&' => TokenKind::And,
+                '@' => {
+                    if self.peek() == '@' {
+                        self.advance();
+                        TokenKind::AtAt
+                    } else {
+                        TokenKind::At
+                    }
+                }
+
+                // ── String literals ───────────────────────────────────────
+                '"' => self.lex_string(span)?,
+
+                // ── Numbers ───────────────────────────────────────────────
+                '0'..='9' => self.lex_number(ch),
+
+                // ── Identifiers and keywords ──────────────────────────────
+                'a'..='z' | 'A'..='Z' => self.lex_ident(ch),
+                '_' => TokenKind::Underscore,
+
+                // ── Unknown character ─────────────────────────────────────
+                _ => {
+                    return Err(LexError::UnexpectedChar { ch, span });
+                }
+            };
+
+            tokens.push(Token { kind, span });
+        }
+
+        tokens.push(Token {
+            kind: TokenKind::Eof,
+            span: self.current_span(),
+        });
+
+        Ok(tokens)
+    }
+
+    /// Consumes an identifier or keyword starting with `first_char`.
+    ///
+    /// Reads letters, digits, and underscores until a non-identifier
+    /// character is found. Then checks if the result is a HULK keyword.
+    ///
+    /// # Arguments
+    /// * `first_char` - The first character, already consumed by `tokenize`.
+    fn lex_ident(&mut self, first_char: char) -> TokenKind {
+        // Start building the identifier string with the first character.
+        let mut text = String::new();
+        text.push(first_char);
+
+        // Keep consuming as long as the character can be part of an identifier.
+        // WHY: identifiers can contain letters, digits, and underscores after
+        // the first character (which is always a letter, checked in tokenize).
+        while self.peek().is_alphanumeric() || self.peek() == '_' {
+            text.push(self.advance());
+        }
+
+        // Check if the collected text is a reserved keyword.
+        // WHY: keywords look like identifiers but have special meaning.
+        // We check here instead of in the main match to keep tokenize clean.
+
+        match text.as_str() {
+            "true" => TokenKind::True,
+            "false" => TokenKind::False,
+            "let" => TokenKind::Let,
+            "in" => TokenKind::In,
+            "if" => TokenKind::If,
+            "elif" => TokenKind::Elif,
+            "else" => TokenKind::Else,
+            "while" => TokenKind::While,
+            "for" => TokenKind::For,
+            "function" => TokenKind::Function,
+            "type" => TokenKind::Type,
+            "inherits" => TokenKind::Inherits,
+            "new" => TokenKind::New,
+            "self" => TokenKind::SelfKw,
+            "base" => TokenKind::Base,
+            "is" => TokenKind::Is,
+            "as" => TokenKind::As,
+            "protocol" => TokenKind::Protocol,
+            "extends" => TokenKind::Extends,
+            "def" => TokenKind::Def,
+            "match" => TokenKind::Match,
+            "case" => TokenKind::Case,
+            // Not a keyword — it's a user-defined identifier.
+            _ => TokenKind::Ident(text),
+        }
+    }
+
+    /// Consumes a numeric literal starting with `first_digit`.
+    ///
+    /// Collects digits and an optional single decimal point.
+    /// All HULK numbers are 64-bit floats — there is no integer type.
+    ///
+    /// # Arguments
+    /// * `first_digit` - The first digit, already consumed by `tokenize`.
+    fn lex_number(&mut self, first_digit: char) -> TokenKind {
+        // Start with the first digit we already consumed.
+        let mut number = String::new();
+        number.push(first_digit);
+
+        // Consume all following digits.
+        while self.peek().is_ascii_digit() {
+            number.push(self.advance());
+        }
+
+        // Consume a decimal point and the digits after it, if present.
+        // WHY: peek_next check ensures we don't consume a `..` range or
+        // a trailing dot with no digits after it.
+        if self.peek() == '.' && self.peek_next().is_ascii_digit() {
+            number.push(self.advance()); // consume the dot
+            while self.peek().is_ascii_digit() {
+                number.push(self.advance());
+            }
+        }
+
+        // Parse the collected text into an f64.
+        // WHY unwrap is safe here: we only collected digits and one dot,
+        // so the string is guaranteed to be a valid float.
+        let value = number.parse::<f64>().unwrap();
+        TokenKind::Number(value)
+    }
+
+    /// Consumes a string literal after the opening `"` has been consumed.
+    ///
+    /// Handles escape sequences: `\"` (quote), `\\` (backslash),
+    /// `\n` (newline), `\t` (tab).
+    ///
+    /// # Arguments
+    /// * `open_span` - The [`Span`] of the opening `"`, used in error
+    ///   reporting so the error points to where the string started,
+    ///   not where the file ended.
+    ///
+    /// # Errors
+    /// Returns [`LexError::UnterminatedString`] if EOF is reached before
+    /// the closing `"`.
+    fn lex_string(&mut self, open_span: Span) -> Result<TokenKind, LexError> {
+        let mut text = String::new();
+
+        loop {
+            // Check for EOF before advancing — an unclosed string is an error.
+            // WHY: we report open_span (where the string started) not current
+            // position, because that's where the programmer made the mistake.
+
+            if self.is_at_end() {
+                return Err(LexError::UnterminatedString { span: open_span });
+            }
+
+            let ch = self.advance();
+
+            match ch {
+                // Closing quote — string is complete, return what we collected.
+                '"' => return Ok(TokenKind::StringLit(text)),
+
+                // Escape sequence — the next character has special meaning.
+                '\\' => {
+                    let escaped = self.advance();
+
+                    match escaped {
+                        '"' => text.push('"'),   // literal quote
+                        '\\' => text.push('\\'), // literal backslash
+                        'n' => text.push('\n'),  // new line
+                        't' => text.push('\t'),  // tab
+
+                        // Unknown escape — include as-is, lenient handling.
+                        other => text.push(other),
+                    }
+                }
+
+                _ => text.push(ch),
+            }
         }
     }
 }
