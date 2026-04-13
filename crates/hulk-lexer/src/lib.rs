@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn test_float_number() {
-        assert_eq!(lex("3.14"), vec![TokenKind::Number(3.14), TokenKind::Eof]);
+        assert_eq!(lex("1.5"), vec![TokenKind::Number(1.5), TokenKind::Eof]);
     }
 
     #[test]
