@@ -163,6 +163,7 @@ pub enum LexError {
 ///
 /// # Example
 /// ```
+/// use hulk_lexer::Lexer;
 /// let mut lexer = Lexer::new("1 + 2;");
 /// let tokens = lexer.tokenize().unwrap();
 /// ```
@@ -185,6 +186,7 @@ impl Lexer {
     ///
     /// # Example
     /// ```
+    /// use hulk_lexer::Lexer;
     /// let mut lexer = Lexer::new("1 + 2;");
     /// ```
     pub fn new(source: &str) -> Self {
@@ -526,5 +528,131 @@ impl Lexer {
                 _ => text.push(ch),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tokenizes source and returns only the token kinds.
+    ///
+    /// WHY: most tests only care about kinds, not spans.
+    /// Avoids repeating Lexer::new(...).tokenize().unwrap() everywhere.
+    fn lex(source: &str) -> Vec<TokenKind> {
+        Lexer::new(source)
+            .tokenize()
+            .unwrap()
+            .into_iter()
+            .map(|token| token.kind)
+            .collect()
+    }
+
+    /// Tokenizes source and expects an error.
+    ///
+    /// WHY: error tests need the LexError value to assert on.
+    fn lex_err(source: &str) -> LexError {
+        Lexer::new(source).tokenize().unwrap_err()
+    }
+
+    #[test]
+    fn test_plus() {
+        assert_eq!(lex("+"), vec![TokenKind::Plus, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_minus() {
+        assert_eq!(lex("-"), vec![TokenKind::Minus, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_integer_number() {
+        assert_eq!(lex("42"), vec![TokenKind::Number(42.0), TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_float_number() {
+        assert_eq!(lex("3.14"), vec![TokenKind::Number(3.14), TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_string_literal() {
+        assert_eq!(
+            lex("\"hello\""),
+            vec![TokenKind::StringLit("hello".to_string()), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn test_keyword_let() {
+        assert_eq!(lex("let"), vec![TokenKind::Let, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_keyword_if() {
+        assert_eq!(lex("if"), vec![TokenKind::If, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_identifier() {
+        assert_eq!(
+            lex("myVar"),
+            vec![TokenKind::Ident("myVar".to_string()), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn test_two_char_eq() {
+        assert_eq!(lex("=="), vec![TokenKind::EqEq, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_two_char_colon_eq() {
+        assert_eq!(lex(":="), vec![TokenKind::ColonEq, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_two_char_fat_arrow() {
+        assert_eq!(lex("=>"), vec![TokenKind::FatArrow, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_whitespace_ignored() {
+        assert_eq!(lex("  +  "), vec![TokenKind::Plus, TokenKind::Eof]);
+    }
+
+    #[test]
+    fn test_comment_ignored() {
+        assert_eq!(
+            lex("// this is a comment\n+"),
+            vec![TokenKind::Plus, TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn test_unexpected_char_error() {
+        let err = lex_err("#");
+        assert!(matches!(err, LexError::UnexpectedChar { .. }));
+    }
+
+    #[test]
+    fn test_unterminated_string_error() {
+        let err = lex_err("\"hello");
+        assert!(matches!(err, LexError::UnterminatedString { .. }));
+    }
+
+    #[test]
+    fn test_full_expression() {
+        assert_eq!(
+            lex("let x = 5;"),
+            vec![
+                TokenKind::Let,
+                TokenKind::Ident("x".to_string()),
+                TokenKind::Assign,
+                TokenKind::Number(5.0),
+                TokenKind::Semicolon,
+                TokenKind::Eof,
+            ]
+        );
     }
 }
