@@ -2,3 +2,7 @@
 name = "hulk-cli"
 version.workspace = true
 edition.workspace = true
+
+[dependencies]
+hulk-lexer = { path = "../hulk-lexer" }
+clap = { version = "4", features = ["derive"] }
