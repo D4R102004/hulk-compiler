@@ -22,7 +22,7 @@ Source Code
        │
     ▼
 ┌─────────────┐
-│ hulk-parser │  Builds an Abstract Syntax Tree (AST)
+│ hulk-parser │  Builds an Abstract Syntax Tree (AST) with a hand-written LL(1) predictive parser
 └──────┬──────┘
        │
        ▼
@@ -50,7 +50,17 @@ cargo build --all
 ## Usage
 ```bash
 cargo run -p hulk-cli -- path/to/program.hulk
+# currently prints the parsed AST
 ```
+
+
+## Current Frontend Status
+
+- `hulk-lexer` converts source code into `Vec<Token>`.
+- `hulk-parser` now consumes those tokens and produces `hulk_ast::Program`.
+- The parser is implemented manually as an LL(1) predictive recursive-descent parser. Every grammar decision uses one token of lookahead; expression precedence is encoded by a left-recursion-free grammar with tail productions implemented as loops. The parser crate also includes `GRAMMAR_LL1.md`, which documents the grammar shape and the mapping from grammar non-terminals to Rust methods.
+
+Supported parser coverage includes global functions, types, protocols, `let`, blocks, `if`/`elif`/`else`, `while`, `for`, function/method calls, member access, object construction, destructive assignment, vectors, indexing, `is`/`as`, and the planned `match` extension node.
 
 ## Running Tests
 ```bash

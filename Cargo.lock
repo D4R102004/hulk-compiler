@@ -114,6 +114,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "hulk-lexer",
+ "hulk-parser",
 ]
 
 [[package]]
@@ -127,6 +128,10 @@ version = "0.1.0"
 [[package]]
 name = "hulk-parser"
 version = "0.1.0"
+dependencies = [
+ "hulk-ast",
+ "hulk-lexer",
+]
 
 [[package]]
 name = "hulk-semantic"

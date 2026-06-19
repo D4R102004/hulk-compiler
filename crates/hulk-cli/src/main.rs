@@ -8,6 +8,7 @@ use std::process;
 
 use clap::Parser;
 use hulk_lexer::Lexer;
+use hulk_parser::Parser;
 
 /// The HULK compiler.
 #[derive(Parser)]
@@ -37,10 +38,13 @@ fn main() {
         process::exit(1);
     });
 
-    // Print each token.
-    // WHY: for now the CLI just shows tokens — useful for debugging
-    // and verifying the lexer works on real .hulk files.
-    for token in &tokens {
-        println!("{:?}", token);
-    }
+    // Parse the token stream into an AST.
+    // WHY: the parser is now the second real frontend phase, so the CLI
+    // prints the AST instead of stopping at lexical debugging.
+    let program = Parser::new(tokens).parse_program().unwrap_or_else(|err| {
+        eprintln!("error: {}", err);
+        process::exit(1);
+    });
+
+    println!("{:#?}", program);
 }
