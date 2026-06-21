@@ -54,11 +54,7 @@ pub struct VerifiedProgram {
 /// - Pass 3: type checking
 ///
 /// Returns `Ok(VerifiedProgram)` on success, or a vector of errors otherwise.
-///
-/// # Note
-/// This function will be fully implemented once all underlying passes are
-/// written (see Step 11 of the implementation plan).
 pub fn analyze(_program: &hulk_ast::Program) -> Result<VerifiedProgram, Vec<SemanticError>> {
-    // TODO: Step 11 – implement the full pipeline once all modules exist.
-    unimplemented!("Semantic analysis pipeline will be implemented in Step 11")
+    // TODO: Implement the full pipeline once all modules exist.
+    unimplemented!("Semantic analysis pipeline will be implemented soon")
 }
