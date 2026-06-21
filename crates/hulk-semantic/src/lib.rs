@@ -19,7 +19,27 @@ mod passes;
 pub use error::{SemanticError, SemanticErrorKind};
 pub use environment::{Binding, Environment};
 pub use types::{Type, TypeRegistry};
-pub use typed::{TypedExpr, TypedProgram, VerifiedProgram};
+pub use typed::{TypedExpr, TypedProgram};
+
+// -----------------------------------------------------------------------------
+// Main structure
+// -----------------------------------------------------------------------------
+
+/// The result of a successful semantic analysis.
+///
+/// Contains the global type registry (with all resolved signatures) and
+/// the fully typed AST, where every expression node carries its resolved
+/// `Type` in its `anno` field.
+///
+/// This is the structure that `hulk-codegen` will consume.
+#[derive(Debug, Clone)]
+pub struct VerifiedProgram {
+    /// The complete global knowledge base: types, protocols, and functions.
+    pub registry: TypeRegistry,
+    /// The fully typed program tree, guaranteed by the type system to have
+    /// a resolved `Type` for every expression.
+    pub typed_program: TypedProgram,
+}
 
 // -----------------------------------------------------------------------------
 // Main entry point
