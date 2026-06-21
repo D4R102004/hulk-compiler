@@ -28,52 +28,52 @@ impl SourceSpan {
 /// HULK programs are a sequence of declarations followed by one global
 /// expression that acts as the entry point.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Program {
-    pub declarations: Vec<Declaration>,
-    pub entry: Expr,
+pub struct Program<A = ()> {
+    pub declarations: Vec<Declaration<A>>,
+    pub entry: Expr<A>,
 }
 
-impl Program {
-    pub fn new(declarations: Vec<Declaration>, entry: Expr) -> Self {
+impl<A> Program<A> {
+    pub fn new(declarations: Vec<Declaration<A>>, entry: Expr<A>) -> Self {
         Self { declarations, entry }
     }
 }
 
 /// A top-level declaration with its source span.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Declaration {
-    pub kind: DeclarationKind,
+pub struct Declaration<A = ()> {
+    pub kind: DeclarationKind<A>,
     pub span: SourceSpan,
 }
 
-impl Declaration {
-    pub fn new(kind: DeclarationKind, span: SourceSpan) -> Self {
+impl<A> Declaration<A> {
+    pub fn new(kind: DeclarationKind<A>, span: SourceSpan) -> Self {
         Self { kind, span }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum DeclarationKind {
-    Function(FunctionDecl),
-    Type(TypeDecl),
-    Protocol(ProtocolDecl),
+pub enum DeclarationKind<A = ()> {
+    Function(FunctionDecl<A>),
+    Type(TypeDecl<A>),
+    Protocol(ProtocolDecl), // protocols have no expression bodies
 }
 
 /// Function declaration, either inline (`=> expr`) or full-form (`{ ... }`).
 #[derive(Debug, Clone, PartialEq)]
-pub struct FunctionDecl {
+pub struct FunctionDecl<A = ()> {
     pub name: String,
     pub params: Vec<Param>,
     pub return_type: Option<TypeRef>,
-    pub body: Expr,
+    pub body: Expr<A>,
 }
 
-impl FunctionDecl {
+impl<A> FunctionDecl<A> {
     pub fn new(
         name: impl Into<String>,
         params: Vec<Param>,
         return_type: Option<TypeRef>,
-        body: Expr,
+        body: Expr<A>,
     ) -> Self {
         Self {
             name: name.into(),
@@ -86,19 +86,19 @@ impl FunctionDecl {
 
 /// Type declaration: `type T(args) inherits Base(args) { ... }`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TypeDecl {
+pub struct TypeDecl<A = ()> {
     pub name: String,
     pub params: Vec<Param>,
-    pub parent: Option<TypeParent>,
-    pub members: Vec<TypeMember>,
+    pub parent: Option<TypeParent<A>>,
+    pub members: Vec<TypeMember<A>>,
 }
 
-impl TypeDecl {
+impl<A> TypeDecl<A> {
     pub fn new(
         name: impl Into<String>,
         params: Vec<Param>,
-        parent: Option<TypeParent>,
-        members: Vec<TypeMember>,
+        parent: Option<TypeParent<A>>,
+        members: Vec<TypeMember<A>>,
     ) -> Self {
         Self {
             name: name.into(),
@@ -111,13 +111,13 @@ impl TypeDecl {
 
 /// Parent type and constructor arguments used by inheritance.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TypeParent {
+pub struct TypeParent<A = ()> {
     pub name: String,
-    pub args: Vec<Expr>,
+    pub args: Vec<Expr<A>>,
 }
 
-impl TypeParent {
-    pub fn new(name: impl Into<String>, args: Vec<Expr>) -> Self {
+impl<A> TypeParent<A> {
+    pub fn new(name: impl Into<String>, args: Vec<Expr<A>>) -> Self {
         Self {
             name: name.into(),
             args,
@@ -127,33 +127,33 @@ impl TypeParent {
 
 /// Member of a HULK type.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TypeMember {
-    pub kind: TypeMemberKind,
+pub struct TypeMember<A = ()> {
+    pub kind: TypeMemberKind<A>,
     pub span: SourceSpan,
 }
 
-impl TypeMember {
-    pub fn new(kind: TypeMemberKind, span: SourceSpan) -> Self {
+impl<A> TypeMember<A> {
+    pub fn new(kind: TypeMemberKind<A>, span: SourceSpan) -> Self {
         Self { kind, span }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum TypeMemberKind {
-    Attribute(AttributeDecl),
-    Method(FunctionDecl),
+pub enum TypeMemberKind<A = ()> {
+    Attribute(AttributeDecl<A>),
+    Method(FunctionDecl<A>),
 }
 
 /// Attribute declaration inside a type body.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AttributeDecl {
+pub struct AttributeDecl<A = ()> {
     pub name: String,
     pub type_annotation: Option<TypeRef>,
-    pub initializer: Expr,
+    pub initializer: Expr<A>,
 }
 
-impl AttributeDecl {
-    pub fn new(name: impl Into<String>, type_annotation: Option<TypeRef>, initializer: Expr) -> Self {
+impl<A> AttributeDecl<A> {
+    pub fn new(name: impl Into<String>, type_annotation: Option<TypeRef>, initializer: Expr<A>) -> Self {
         Self {
             name: name.into(),
             type_annotation,
@@ -260,14 +260,16 @@ impl fmt::Display for TypeRef {
 
 /// Expression node.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Expr {
-    pub kind: ExprKind,
+pub struct Expr<A = ()> {
+    pub kind: ExprKind<A>,
+    pub anno: A,
     pub span: SourceSpan,
 }
 
 impl Expr {
+    /// Creates a new expression node with `anno = ()`.
     pub fn new(kind: ExprKind, span: SourceSpan) -> Self {
-        Self { kind, span }
+        Self { kind, anno: (), span }
     }
 
     pub fn literal(literal: Literal, span: SourceSpan) -> Self {
@@ -290,7 +292,7 @@ impl Expr {
         Self::new(ExprKind::Variable(name.into()), span)
     }
 
-    pub fn unary(op: UnaryOp, expr: Expr, span: SourceSpan) -> Self {
+    pub fn unary(op: UnaryOp, expr: Self, span: SourceSpan) -> Self {
         Self::new(
             ExprKind::Unary(UnaryExpr {
                 op,
@@ -300,7 +302,7 @@ impl Expr {
         )
     }
 
-    pub fn binary(op: BinaryOp, left: Expr, right: Expr, span: SourceSpan) -> Self {
+    pub fn binary(op: BinaryOp, left: Self, right: Self, span: SourceSpan) -> Self {
         Self::new(
             ExprKind::Binary(BinaryExpr {
                 op,
@@ -311,7 +313,7 @@ impl Expr {
         )
     }
 
-    pub fn call(callee: Expr, args: Vec<Expr>, span: SourceSpan) -> Self {
+    pub fn call(callee: Self, args: Vec<Self>, span: SourceSpan) -> Self {
         Self::new(
             ExprKind::Call(CallExpr {
                 callee: Box::new(callee),
@@ -326,28 +328,28 @@ impl Expr {
 ///
 /// HULK is expression-based, so assignment, loops and blocks also appear here.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ExprKind {
+pub enum ExprKind<A = ()> {
     Literal(Literal),
     Variable(String),
     SelfRef,
     BaseRef,
-    Unary(UnaryExpr),
-    Binary(BinaryExpr),
-    Let(LetExpr),
-    Assign(AssignExpr),
-    Block(BlockExpr),
-    If(IfExpr),
-    While(WhileExpr),
-    For(ForExpr),
-    Call(CallExpr),
-    Member(MemberExpr),
-    New(NewExpr),
-    TypeTest(TypeTestExpr),
-    Downcast(DowncastExpr),
-    Vector(VectorExpr),
-    Index(IndexExpr),
+    Unary(UnaryExpr<A>),
+    Binary(BinaryExpr<A>),
+    Let(LetExpr<A>),
+    Assign(AssignExpr<A>),
+    Block(BlockExpr<A>),
+    If(IfExpr<A>),
+    While(WhileExpr<A>),
+    For(ForExpr<A>),
+    Call(CallExpr<A>),
+    Member(MemberExpr<A>),
+    New(NewExpr<A>),
+    TypeTest(TypeTestExpr<A>),
+    Downcast(DowncastExpr<A>),
+    Vector(VectorExpr<A>),
+    Index(IndexExpr<A>),
     /// Extra-feature friendly node for `match` expressions.
-    Match(MatchExpr),
+    Match(MatchExpr<A>),
 }
 
 /// Literal values.
@@ -360,9 +362,9 @@ pub enum Literal {
 
 /// Unary expression.
 #[derive(Debug, Clone, PartialEq)]
-pub struct UnaryExpr {
+pub struct UnaryExpr<A = ()> {
     pub op: UnaryOp,
-    pub expr: Box<Expr>,
+    pub expr: Box<Expr<A>>,
 }
 
 /// Unary operators.
@@ -374,10 +376,10 @@ pub enum UnaryOp {
 
 /// Binary expression.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BinaryExpr {
+pub struct BinaryExpr<A = ()> {
     pub op: BinaryOp,
-    pub left: Box<Expr>,
-    pub right: Box<Expr>,
+    pub left: Box<Expr<A>>,
+    pub right: Box<Expr<A>>,
 }
 
 /// Binary operators.
@@ -403,13 +405,13 @@ pub enum BinaryOp {
 
 /// `let a = expr, b: T = expr in body`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LetExpr {
-    pub bindings: Vec<LetBinding>,
-    pub body: Box<Expr>,
+pub struct LetExpr<A = ()> {
+    pub bindings: Vec<LetBinding<A>>,
+    pub body: Box<Expr<A>>,
 }
 
-impl LetExpr {
-    pub fn new(bindings: Vec<LetBinding>, body: Expr) -> Self {
+impl<A> LetExpr<A> {
+    pub fn new(bindings: Vec<LetBinding<A>>, body: Expr<A>) -> Self {
         Self {
             bindings,
             body: Box::new(body),
@@ -418,14 +420,14 @@ impl LetExpr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct LetBinding {
+pub struct LetBinding<A = ()> {
     pub name: String,
     pub type_annotation: Option<TypeRef>,
-    pub initializer: Expr,
+    pub initializer: Expr<A>,
 }
 
-impl LetBinding {
-    pub fn new(name: impl Into<String>, type_annotation: Option<TypeRef>, initializer: Expr) -> Self {
+impl<A> LetBinding<A> {
+    pub fn new(name: impl Into<String>, type_annotation: Option<TypeRef>, initializer: Expr<A>) -> Self {
         Self {
             name: name.into(),
             type_annotation,
@@ -436,13 +438,13 @@ impl LetBinding {
 
 /// Destructive assignment: `target := value`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AssignExpr {
-    pub target: AssignTarget,
-    pub value: Box<Expr>,
+pub struct AssignExpr<A = ()> {
+    pub target: AssignTarget<A>,
+    pub value: Box<Expr<A>>,
 }
 
-impl AssignExpr {
-    pub fn new(target: AssignTarget, value: Expr) -> Self {
+impl<A> AssignExpr<A> {
+    pub fn new(target: AssignTarget<A>, value: Expr<A>) -> Self {
         Self {
             target,
             value: Box::new(value),
@@ -452,39 +454,39 @@ impl AssignExpr {
 
 /// Valid left-hand sides for destructive assignment.
 #[derive(Debug, Clone, PartialEq)]
-pub enum AssignTarget {
+pub enum AssignTarget<A = ()> {
     Variable(String),
-    Member { object: Box<Expr>, field: String },
-    Index { object: Box<Expr>, index: Box<Expr> },
+    Member { object: Box<Expr<A>>, field: String },
+    Index { object: Box<Expr<A>>, index: Box<Expr<A>> },
 }
 
 /// Expression block: `{ expr1; expr2; ... }`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BlockExpr {
-    pub expressions: Vec<Expr>,
+pub struct BlockExpr<A = ()> {
+    pub expressions: Vec<Expr<A>>,
 }
 
-impl BlockExpr {
-    pub fn new(expressions: Vec<Expr>) -> Self {
+impl<A> BlockExpr<A> {
+    pub fn new(expressions: Vec<Expr<A>>) -> Self {
         Self { expressions }
     }
 }
 
 /// Conditional expression with optional `elif` branches and final `else`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct IfExpr {
-    pub condition: Box<Expr>,
-    pub then_branch: Box<Expr>,
-    pub elif_branches: Vec<ElifBranch>,
-    pub else_branch: Box<Expr>,
+pub struct IfExpr<A = ()> {
+    pub condition: Box<Expr<A>>,
+    pub then_branch: Box<Expr<A>>,
+    pub elif_branches: Vec<ElifBranch<A>>,
+    pub else_branch: Box<Expr<A>>,
 }
 
-impl IfExpr {
+impl<A> IfExpr<A> {
     pub fn new(
-        condition: Expr,
-        then_branch: Expr,
-        elif_branches: Vec<ElifBranch>,
-        else_branch: Expr,
+        condition: Expr<A>,
+        then_branch: Expr<A>,
+        elif_branches: Vec<ElifBranch<A>>,
+        else_branch: Expr<A>,
     ) -> Self {
         Self {
             condition: Box::new(condition),
@@ -496,26 +498,26 @@ impl IfExpr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ElifBranch {
-    pub condition: Expr,
-    pub body: Expr,
+pub struct ElifBranch<A = ()> {
+    pub condition: Expr<A>,
+    pub body: Expr<A>,
 }
 
-impl ElifBranch {
-    pub fn new(condition: Expr, body: Expr) -> Self {
+impl<A> ElifBranch<A> {
+    pub fn new(condition: Expr<A>, body: Expr<A>) -> Self {
         Self { condition, body }
     }
 }
 
 /// `while (condition) body`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct WhileExpr {
-    pub condition: Box<Expr>,
-    pub body: Box<Expr>,
+pub struct WhileExpr<A = ()> {
+    pub condition: Box<Expr<A>>,
+    pub body: Box<Expr<A>>,
 }
 
-impl WhileExpr {
-    pub fn new(condition: Expr, body: Expr) -> Self {
+impl<A> WhileExpr<A> {
+    pub fn new(condition: Expr<A>, body: Expr<A>) -> Self {
         Self {
             condition: Box::new(condition),
             body: Box::new(body),
@@ -525,14 +527,14 @@ impl WhileExpr {
 
 /// `for (var in iterable) body`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ForExpr {
+pub struct ForExpr<A = ()> {
     pub var: String,
-    pub iterable: Box<Expr>,
-    pub body: Box<Expr>,
+    pub iterable: Box<Expr<A>>,
+    pub body: Box<Expr<A>>,
 }
 
-impl ForExpr {
-    pub fn new(var: impl Into<String>, iterable: Expr, body: Expr) -> Self {
+impl<A> ForExpr<A> {
+    pub fn new(var: impl Into<String>, iterable: Expr<A>, body: Expr<A>) -> Self {
         Self {
             var: var.into(),
             iterable: Box::new(iterable),
@@ -546,20 +548,20 @@ impl ForExpr {
 /// The callee is an expression so the same node supports both `f(x)` and
 /// `obj.f(x)` after dot access has been parsed as a [`MemberExpr`].
 #[derive(Debug, Clone, PartialEq)]
-pub struct CallExpr {
-    pub callee: Box<Expr>,
-    pub args: Vec<Expr>,
+pub struct CallExpr<A = ()> {
+    pub callee: Box<Expr<A>>,
+    pub args: Vec<Expr<A>>,
 }
 
 /// Dot access: `object.member`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MemberExpr {
-    pub object: Box<Expr>,
+pub struct MemberExpr<A = ()> {
+    pub object: Box<Expr<A>>,
     pub member: String,
 }
 
-impl MemberExpr {
-    pub fn new(object: Expr, member: impl Into<String>) -> Self {
+impl<A> MemberExpr<A> {
+    pub fn new(object: Expr<A>, member: impl Into<String>) -> Self {
         Self {
             object: Box::new(object),
             member: member.into(),
@@ -569,26 +571,26 @@ impl MemberExpr {
 
 /// Object construction: `new Type(args)`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct NewExpr {
+pub struct NewExpr<A = ()> {
     pub type_name: TypeRef,
-    pub args: Vec<Expr>,
+    pub args: Vec<Expr<A>>,
 }
 
-impl NewExpr {
-    pub fn new(type_name: TypeRef, args: Vec<Expr>) -> Self {
+impl<A> NewExpr<A> {
+    pub fn new(type_name: TypeRef, args: Vec<Expr<A>>) -> Self {
         Self { type_name, args }
     }
 }
 
 /// Dynamic type test: `expr is Type`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TypeTestExpr {
-    pub expr: Box<Expr>,
+pub struct TypeTestExpr<A = ()> {
+    pub expr: Box<Expr<A>>,
     pub type_name: TypeRef,
 }
 
-impl TypeTestExpr {
-    pub fn new(expr: Expr, type_name: TypeRef) -> Self {
+impl<A> TypeTestExpr<A> {
+    pub fn new(expr: Expr<A>, type_name: TypeRef) -> Self {
         Self {
             expr: Box::new(expr),
             type_name,
@@ -598,13 +600,13 @@ impl TypeTestExpr {
 
 /// Downcast: `expr as Type`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DowncastExpr {
-    pub expr: Box<Expr>,
+pub struct DowncastExpr<A = ()> {
+    pub expr: Box<Expr<A>>,
     pub type_name: TypeRef,
 }
 
-impl DowncastExpr {
-    pub fn new(expr: Expr, type_name: TypeRef) -> Self {
+impl<A> DowncastExpr<A> {
+    pub fn new(expr: Expr<A>, type_name: TypeRef) -> Self {
         Self {
             expr: Box::new(expr),
             type_name,
@@ -614,20 +616,20 @@ impl DowncastExpr {
 
 /// Vector literal or vector comprehension.
 #[derive(Debug, Clone, PartialEq)]
-pub enum VectorExpr {
-    Literal(Vec<Expr>),
-    Comprehension(VectorComprehension),
+pub enum VectorExpr<A = ()> {
+    Literal(Vec<Expr<A>>),
+    Comprehension(VectorComprehension<A>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct VectorComprehension {
-    pub expr: Box<Expr>,
+pub struct VectorComprehension<A = ()> {
+    pub expr: Box<Expr<A>>,
     pub var: String,
-    pub iterable: Box<Expr>,
+    pub iterable: Box<Expr<A>>,
 }
 
-impl VectorComprehension {
-    pub fn new(expr: Expr, var: impl Into<String>, iterable: Expr) -> Self {
+impl<A> VectorComprehension<A> {
+    pub fn new(expr: Expr<A>, var: impl Into<String>, iterable: Expr<A>) -> Self {
         Self {
             expr: Box::new(expr),
             var: var.into(),
@@ -638,13 +640,13 @@ impl VectorComprehension {
 
 /// Indexing expression: `object[index]`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct IndexExpr {
-    pub object: Box<Expr>,
-    pub index: Box<Expr>,
+pub struct IndexExpr<A = ()> {
+    pub object: Box<Expr<A>>,
+    pub index: Box<Expr<A>>,
 }
 
-impl IndexExpr {
-    pub fn new(object: Expr, index: Expr) -> Self {
+impl<A> IndexExpr<A> {
+    pub fn new(object: Expr<A>, index: Expr<A>) -> Self {
         Self {
             object: Box::new(object),
             index: Box::new(index),
@@ -654,13 +656,13 @@ impl IndexExpr {
 
 /// Pattern matching expression for the planned extension.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MatchExpr {
-    pub value: Box<Expr>,
-    pub cases: Vec<MatchCase>,
+pub struct MatchExpr<A = ()> {
+    pub value: Box<Expr<A>>,
+    pub cases: Vec<MatchCase<A>>,
 }
 
-impl MatchExpr {
-    pub fn new(value: Expr, cases: Vec<MatchCase>) -> Self {
+impl<A> MatchExpr<A> {
+    pub fn new(value: Expr<A>, cases: Vec<MatchCase<A>>) -> Self {
         Self {
             value: Box::new(value),
             cases,
@@ -669,22 +671,24 @@ impl MatchExpr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MatchCase {
-    pub pattern: Pattern,
-    pub body: Expr,
+pub struct MatchCase<A = ()> {
+    pub pattern: Pattern<A>,
+    pub body: Expr<A>,
 }
 
-impl MatchCase {
-    pub fn new(pattern: Pattern, body: Expr) -> Self {
+impl<A> MatchCase<A> {
+    pub fn new(pattern: Pattern<A>, body: Expr<A>) -> Self {
         Self { pattern, body }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Pattern {
+pub enum Pattern<A = ()> {
     Wildcard,
     Literal(Literal),
     Variable(String),
+    // The `Type` variant does not contain an expression, but we keep the
+    // generic parameter for uniformity and future extension.
     Type(TypeRef, Option<String>),
 }
 
@@ -692,19 +696,22 @@ pub enum Pattern {
 ///
 /// This trait is intentionally small. Specific compiler passes can implement
 /// traversal manually or use [`walk_expr`] for the recursive part.
-pub trait AstVisitor {
+pub trait AstVisitor<A> {
     type Output;
 
-    fn visit_program(&mut self, program: &Program) -> Self::Output;
-    fn visit_declaration(&mut self, declaration: &Declaration) -> Self::Output;
-    fn visit_expr(&mut self, expr: &Expr) -> Self::Output;
+    fn visit_program(&mut self, program: &Program<A>) -> Self::Output;
+    fn visit_declaration(&mut self, declaration: &Declaration<A>) -> Self::Output;
+    fn visit_expr(&mut self, expr: &Expr<A>) -> Self::Output;
 }
 
 /// Walks an expression in pre-order and calls `visit` for each node.
 ///
 /// Useful for tests and simple analyses. Full semantic passes will usually
 /// implement their own visitor because they need scopes and synthesized values.
-pub fn walk_expr(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
+pub fn walk_expr<A, F>(expr: &Expr<A>, visit: &mut F)
+where
+    F: FnMut(&Expr<A>),
+{
     visit(expr);
 
     match &expr.kind {
@@ -784,7 +791,10 @@ pub fn walk_expr(expr: &Expr, visit: &mut impl FnMut(&Expr)) {
     }
 }
 
-fn walk_assign_target(target: &AssignTarget, visit: &mut impl FnMut(&Expr)) {
+fn walk_assign_target<A, F>(target: &AssignTarget<A>, visit: &mut F)
+where
+    F: FnMut(&Expr<A>),
+{
     match target {
         AssignTarget::Variable(_) => {}
         AssignTarget::Member { object, .. } => walk_expr(object, visit),
