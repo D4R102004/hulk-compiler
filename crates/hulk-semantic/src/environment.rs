@@ -20,19 +20,26 @@ use crate::types::Type;
 // Binding
 // -----------------------------------------------------------------------------
 
-/// A variable binding in the environment: its type and source location.
+/// A variable binding in the environment: its type, source location, and whether it is the original `self`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Binding {
     /// The resolved type of the variable.
     pub ty: Type,
     /// The source location where the variable was declared.
     pub span: SourceSpan,
+    /// Variable is the original `self`.
+    pub is_self: bool,
 }
 
 impl Binding {
-    /// Creates a new binding with the given type and source span.
+    /// Creates a new binding with `is_self = false`.
     pub fn new(ty: Type, span: SourceSpan) -> Self {
-        Self { ty, span }
+        Self { ty, span, is_self: false }
+    }
+
+    /// Creates a new binding with a custom `is_self` flag.
+    pub fn with_self(ty: Type, span: SourceSpan, is_self: bool) -> Self {
+        Self { ty, span, is_self }
     }
 }
 
@@ -76,7 +83,6 @@ impl Environment {
 
     /// Pops the innermost scope, discarding all its bindings.
     ///
-    /// # Panics
     /// Panics if called when there is only one scope left (the root).
     /// This prevents accidental removal of the root scope.
     pub fn pop_scope(&mut self) {
@@ -86,19 +92,26 @@ impl Environment {
         self.scopes.pop();
     }
 
-    /// Declares a variable in the innermost scope.
+    /// Defaultly declares a variable in the innermost scope.
     ///
     /// If a binding with the same name already exists in that scope, it is
     /// overwritten (rebinding). This is intentional and matches HULK's
-    /// rule that `let a = 7, a = 7*6 in ...` is valid.
-    ///
-    /// # Note
-    /// Duplicate declarations within the same parameter list or `for`/`match`
-    /// binding are caught earlier by the collection pass (Pass 0) and should
-    /// never reach this function. This function does not check for duplicates.
+    /// rule that `let a = 7, a = 7*6 in ...` is valid. This function does not 
+    /// check for duplicates.
     pub fn declare(&mut self, name: &str, ty: Type, span: SourceSpan) {
+        self.declare_with_self(name, ty, span, false);
+    }
+
+    /// Declares a variable in the innermost scope, allowing to specify whether 
+    /// it is the original `self` for `Binding` creation.
+    ///
+    /// If a binding with the same name already exists in that scope, it is
+    /// overwritten (rebinding). This is intentional and matches HULK's
+    /// rule that `let a = 7, a = 7*6 in ...` is valid. This function does not 
+    /// check for duplicates.
+    pub fn declare_with_self(&mut self, name: &str, ty: Type, span: SourceSpan, is_self: bool) {
         let scope = self.scopes.last_mut().expect("at least one scope exists");
-        scope.insert(name.to_string(), Binding::new(ty, span));
+        scope.insert(name.to_string(), Binding { ty, span, is_self });
     }
 
     /// Looks up a variable name starting from the innermost scope outward.

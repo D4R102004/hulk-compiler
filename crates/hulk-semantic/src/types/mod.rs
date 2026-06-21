@@ -37,7 +37,7 @@ pub use registry::TypeRegistry;
 pub enum Type {
     /// Number builtin value type
     Number,
-    /// Sring builtin value type
+    /// String builtin value type
     String,
     /// Boolean builtin value type
     Boolean,
@@ -77,19 +77,22 @@ impl Type {
     /// a value of `other`'s type is expected.
     ///
     /// This implements the `<=` relation from hulk‑docs §A.8.4, with the
-    /// addition of cascade suppression for `Error`.
+    /// addition of cascade suppression for `Error` and inference support
+    /// for `Unknown`.
     ///
     /// # Rules (in priority order)
     /// 1. Reflexivity: `self == other` → `true`.
     /// 2. Everything conforms to `Object`.
     /// 3. Cascade suppression: if either side is `Type::Error`, return `true`.
-    /// 4. Nominal inheritance: if both are `Named`, return `true` iff
+    /// 4. `Unknown` conforms to everything (and vice versa) – this allows
+    ///    inference to proceed with placeholders.
+    /// 5. Nominal inheritance: if both are `Named`, return `true` iff
     ///    `other` is an ancestor of `self` in the single‑inheritance tree
     ///    **or** `self`'s type structurally implements the protocol named
     ///    by `other`.
-    /// 5. Protocol conformance: if `self` is `Named` and `other` is a
+    /// 6. Protocol conformance: if `self` is `Named` and `other` is a
     ///    protocol name, delegate to `registry.implements_protocol`.
-    /// 6. Otherwise: return `false` (no implicit numeric widening in HULK).
+    /// 7. Otherwise: return `false` (no implicit numeric widening in HULK).
     pub fn conforms_to(&self, other: &Self, registry: &TypeRegistry) -> bool {
         // 1. Reflexivity
         if self == other {
@@ -106,7 +109,12 @@ impl Type {
             return true;
         }
 
-        // 4. Nominal inheritance or protocol implementation (both Named)
+        // 4. Unknown is a placeholder that conforms to everything (and vice versa)
+        if matches!(self, Type::Unknown) || matches!(other, Type::Unknown) {
+            return true;
+        }
+
+        // 5. Nominal inheritance or protocol implementation (both Named)
         if let (Type::Named(t1), Type::Named(t2)) = (self, other) {
             // a) nominal ancestor
             if registry.is_ancestor(t2, t1) {
@@ -118,13 +126,9 @@ impl Type {
             }
         }
 
-        // 5. Self is Named and other is a protocol (structural conformance)
+        // 6. Self is Named and other is a protocol (structural conformance)
         if let Type::Named(t1) = self {
-            // If other is a protocol name, we can check directly.
-            // But we need to know if other is a protocol; we'll use a helper.
             if registry.is_protocol(other) {
-                // We need the name string from other; if other is Named, we already have it.
-                // If other is a protocol type represented as Named, we can extract.
                 if let Type::Named(t2) = other {
                     if registry.implements_protocol(t1, t2) {
                         return true;
@@ -133,7 +137,7 @@ impl Type {
             }
         }
 
-        // 6. Fallback: no conformance
+        // 7. Fallback: no conformance
         false
     }
 }
@@ -168,8 +172,10 @@ impl fmt::Display for Type {
 /// # Behaviour
 /// - If the slice is empty, returns `Type::Error`.
 /// - If any type is `Type::Error`, returns `Type::Error` (propagate).
+/// - If all types are `Type::Unknown`, returns `Type::Unknown`.
 /// - Otherwise, walks each type's ancestor chain up to `Object` and
-///   returns the deepest node common to all chains.
+///   returns the deepest node common to all chains, ignoring `Unknown`
+///   types for the purpose of finding a concrete LCA.
 pub fn lowest_common_ancestor(types: &[Type], registry: &TypeRegistry) -> Type {
     if types.is_empty() {
         return Type::Error;
@@ -180,9 +186,15 @@ pub fn lowest_common_ancestor(types: &[Type], registry: &TypeRegistry) -> Type {
         return Type::Error;
     }
 
-    // Collect ancestor chains for each type (including the type itself)
+    // Filter out Unknown types; if all are Unknown, return Unknown.
+    let concrete: Vec<&Type> = types.iter().filter(|t| !matches!(t, Type::Unknown)).collect();
+    if concrete.is_empty() {
+        return Type::Unknown;
+    }
+
+    // Collect ancestor chains for each concrete type (including the type itself)
     let mut chains: Vec<Vec<Type>> = Vec::new();
-    for ty in types {
+    for ty in concrete {
         let chain = ancestor_chain(ty, registry);
         if chain.is_empty() {
             // Should not happen, but if it does, return Error.
@@ -192,9 +204,6 @@ pub fn lowest_common_ancestor(types: &[Type], registry: &TypeRegistry) -> Type {
     }
 
     // Start with the first chain's ancestors, find the deepest one that appears in all chains.
-    // We compare by string name for Named types; for builtins, we can compare by value.
-    // The simplest: for each ancestor in the first chain (starting from the type itself upward),
-    // check if it is present in every other chain.
     let first_chain = &chains[0];
     for candidate in first_chain {
         let mut common = true;
