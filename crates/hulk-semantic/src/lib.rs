@@ -12,13 +12,15 @@ mod typed;
 mod types;
 mod passes;
 
+use crate::error::Severity;
+
 // -----------------------------------------------------------------------------
 // Public API re-exports
 // -----------------------------------------------------------------------------
 
 pub use error::{SemanticError, SemanticErrorKind};
 pub use environment::{Binding, Environment};
-pub use types::{Type, TypeRegistry};
+pub use types::{Type, TypeRegistry, seeded_registry};
 pub use typed::{TypedExpr, TypedProgram};
 
 // -----------------------------------------------------------------------------
@@ -27,9 +29,8 @@ pub use typed::{TypedExpr, TypedProgram};
 
 /// The result of a successful semantic analysis.
 ///
-/// Contains the global type registry (with all resolved signatures) and
-/// the fully typed AST, where every expression node carries its resolved
-/// `Type` in its `anno` field.
+/// Contains the global type registry (with all resolved signatures), the fully
+/// typed AST, and any non‑fatal warnings that were emitted during analysis.
 ///
 /// This is the structure that `hulk-codegen` will consume.
 #[derive(Debug, Clone)]
@@ -39,6 +40,9 @@ pub struct VerifiedProgram {
     /// The fully typed program tree, guaranteed by the type system to have
     /// a resolved `Type` for every expression.
     pub typed_program: TypedProgram,
+    /// Non‑fatal diagnostics (warnings) that were emitted during analysis.
+    /// These do not block compilation but should be surfaced to the user.
+    pub warnings: Vec<SemanticError>,
 }
 
 // -----------------------------------------------------------------------------
@@ -48,13 +52,42 @@ pub struct VerifiedProgram {
 /// Performs full semantic analysis on an untyped HULK program.
 ///
 /// This runs the four‑pass pipeline:
-/// - Pass 0: collect declarations
-/// - Pass 1: resolve inheritance and protocol hierarchies
-/// - Pass 2: type inference (builds `Program<Type>`)
-/// - Pass 3: type checking
+/// 1. Declaration collection (Pass 0) – builds the global registry.
+/// 2. Hierarchy resolution (Pass 1) – resolves inheritance and protocol links.
+/// 3. Type inference (Pass 2) – builds the typed tree.
+/// 4. Type checking (Pass 3) – final consistency sweep.
 ///
-/// Returns `Ok(VerifiedProgram)` on success, or a vector of errors otherwise.
-pub fn analyze(_program: &hulk_ast::Program) -> Result<VerifiedProgram, Vec<SemanticError>> {
-    // TODO: Implement the full pipeline once all modules exist.
-    unimplemented!("Semantic analysis pipeline will be implemented soon")
+/// Returns `Ok(VerifiedProgram)` if no hard errors are present; warnings are
+/// always collected and returned inside `VerifiedProgram`. If any hard error
+/// is encountered, returns `Err(Vec<SemanticError>)` containing all errors.
+pub fn analyze(program: &hulk_ast::Program) -> Result<VerifiedProgram, Vec<SemanticError>> {
+    let mut errors = Vec::new();
+    let mut registry = seeded_registry();
+
+    passes::collect(program, &mut registry, &mut errors);
+    passes::hierarchy(&mut registry, &mut errors);
+
+    // Early exit: a broken hierarchy invalidates `conforms_to` itself.
+    // Continuing would only produce misleading cascade errors.
+    if errors.iter().any(|e| e.severity == Severity::Error) {
+        return Err(errors);
+    }
+
+    let typed_program = passes::infer(program, &mut registry, &mut errors);
+    passes::check(&typed_program, &registry, &mut errors);
+
+    // Separate errors from warnings.
+    let (hard_errors, warnings): (Vec<_>, Vec<_>) = errors
+        .into_iter()
+        .partition(|e| e.severity == Severity::Error);
+
+    if hard_errors.is_empty() {
+        Ok(VerifiedProgram {
+            registry,
+            typed_program,
+            warnings,
+        })
+    } else {
+        Err(hard_errors)
+    }
 }
