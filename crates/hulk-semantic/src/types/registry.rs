@@ -20,13 +20,23 @@ use super::Type;
 /// Three separate maps because HULK never resolves a function name and a
 /// type name through the same syntax (`f(...)` vs. `new T(...)`), so there
 /// is no ambiguity to arbitrate between them.
+#[derive(Debug, Clone)]
 pub struct TypeRegistry {
+    /// All user‑defined and builtin types, keyed by their name.
+    /// Includes classes (`type`) and builtin types (`Number`, `Object`, etc.).
     pub types: HashMap<String, TypeInfo>,
+
+    /// All user‑defined and builtin protocols, keyed by protocol name.
     pub protocols: HashMap<String, ProtocolInfo>,
+
+    /// All user‑defined and builtin global functions, keyed by function name.
+    /// Builtins such as `print`, `sqrt`, `sin`, `cos`, `exp`, `log`, `rand`,
+    /// `range`, `PI`, `E` are seeded here.
     pub functions: HashMap<String, FunctionSignature>,
 }
 
 /// Information about a user‑defined `type` declaration.
+#[derive(Debug, Clone)]
 pub struct TypeInfo {
     pub name: String,
     /// Constructor parameters (type arguments) of the type.
@@ -46,18 +56,21 @@ pub struct TypeInfo {
 }
 
 /// The `inherits Base(args)` clause, as written in source.
+#[derive(Debug, Clone)]
 pub struct ParentLink {
     pub name: String,
     pub args: Vec<Expr>, // untyped Expr<()>, collected before inference
 }
 
 /// Information about an attribute (field) of a type.
+#[derive(Debug, Clone)]
 pub struct AttributeInfo {
     pub declared_type: Option<Type>, // None until inferred in Pass 2
     pub span: SourceSpan,
 }
 
 /// Signature of a method (or protocol method).
+#[derive(Debug, Clone)]
 pub struct MethodSignature {
     pub params: Vec<(String, Type)>,
     pub return_type: Type,
@@ -66,6 +79,7 @@ pub struct MethodSignature {
 }
 
 /// Information about a `protocol` declaration.
+#[derive(Debug, Clone)]
 pub struct ProtocolInfo {
     pub name: String,
     pub extends: Vec<String>, // names of protocols this one extends
@@ -74,6 +88,7 @@ pub struct ProtocolInfo {
 }
 
 /// Signature of a global function (builtin or user‑defined).
+#[derive(Debug, Clone)]
 pub struct FunctionSignature {
     pub params: Vec<(String, Type)>,
     pub return_type: Type,
@@ -180,7 +195,6 @@ pub fn seeded_registry() -> TypeRegistry {
     // ─── Builtin type: Range ──────────────────────────────────────────────
 
     // Range(min: Number, max: Number) implements Iterable with current(): Number
-    // We add a type entry so it can be referenced.
     let range_type = TypeInfo {
         name: "Range".to_string(),
         params: vec![
@@ -394,7 +408,7 @@ impl TypeRegistry {
 }
 
 // -----------------------------------------------------------------------------
-// Test
+// Tests
 // -----------------------------------------------------------------------------
 
 #[cfg(test)]

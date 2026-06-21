@@ -34,8 +34,11 @@ pub enum Severity {
 /// both phases uniformly.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticError {
+    /// The specific kind of diagnostic (error or warning).
     pub kind: SemanticErrorKind,
+    /// The source location where the diagnostic originated.
     pub span: SourceSpan,
+    /// The severity level (error or warning).
     pub severity: Severity,
 }
 
@@ -73,56 +76,129 @@ impl SemanticError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SemanticErrorKind {
     // ─── Name resolution ──────────────────────────────────────────────────
+
     /// An undefined variable name was used.
     UndefinedVariable(String),
     /// An undefined function (or builtin) was called.
-    UndefinedFunction { name: String, arity: usize },
+    UndefinedFunction {
+        /// The name of the undefined function.
+        name: String,
+        /// The number of arguments supplied in the call.
+        arity: usize,
+    },
     /// An undefined type name was referenced.
     UndefinedType(String),
     /// A member (attribute or method) could not be found on a type.
-    UnknownMember { ty: Type, member: String },
+    UnknownMember {
+        /// The type on which the member was accessed.
+        ty: Type,
+        /// The name of the missing member.
+        member: String,
+    },
 
     // ─── Redeclaration ──────────────────────────────────────────────────
+
     /// A function was defined more than once (global namespace).
     DuplicateFunction(String),
     /// A type was defined more than once.
     DuplicateType(String),
     /// An attribute was defined more than once within the same type.
-    DuplicateAttribute { ty: String, attribute: String },
+    DuplicateAttribute {
+        /// The name of the type containing the attribute.
+        ty: String,
+        /// The name of the duplicate attribute.
+        attribute: String,
+    },
     /// A parameter name was duplicated within a function/method parameter list.
     DuplicateParameter(String),
 
     // ─── Inheritance ──────────────────────────────────────────────────────
+
     /// Attempt to inherit from a builtin value type (`Number`, `String`, `Boolean`).
     InheritFromBuiltinValueType(String),
     /// Attempt to inherit from a type that does not exist.
     InheritFromUndefinedType(String),
     /// A cycle was detected in the inheritance graph.
-    InheritanceCycle(Vec<String>),
+    InheritanceCycle(
+        /// The sequence of type names forming the cycle.
+        Vec<String>,
+    ),
     /// An overriding method does not match the parent's signature exactly.
-    InvalidOverride { method: String, in_type: String, expected: String, found: String },
+    InvalidOverride {
+        /// The name of the method being overridden.
+        method: String,
+        /// The type where the override occurs.
+        in_type: String,
+        /// The expected signature (from the parent).
+        expected: String,
+        /// The actual signature found.
+        found: String,
+    },
 
     // ─── Protocols ──────────────────────────────────────────────────────
+
     /// A type does not implement all methods required by a protocol.
-    ProtocolNotImplemented { ty: Type, protocol: String, missing: Vec<String> },
+    ProtocolNotImplemented {
+        /// The type that fails to implement the protocol.
+        ty: Type,
+        /// The name of the protocol.
+        protocol: String,
+        /// The list of missing method names.
+        missing: Vec<String>,
+    },
     /// A protocol extension violates contravariant/covariant variance rules.
-    InvalidProtocolVariance { method: String, reason: String },
+    InvalidProtocolVariance {
+        /// The method name where the variance error occurs.
+        method: String,
+        /// A description of the variance violation.
+        reason: String,
+    },
 
     // ─── Typing ──────────────────────────────────────────────────────────
+
     /// The inferred type does not match the declared annotation.
-    TypeMismatch { expected: Type, found: Type },
+    TypeMismatch {
+        /// The type expected by the annotation.
+        expected: Type,
+        /// The type inferred from the expression.
+        found: Type,
+    },
     /// A value of one type cannot be used where another type is expected.
-    NotConforming { found: Type, expected: Type },
+    NotConforming {
+        /// The type of the value provided.
+        found: Type,
+        /// The type that was required.
+        expected: Type,
+    },
     /// A call supplies the wrong number of arguments.
-    ArityMismatch { expected: usize, found: usize },
+    ArityMismatch {
+        /// The number of arguments expected.
+        expected: usize,
+        /// The number of arguments supplied.
+        found: usize,
+    },
     /// An operator is applied to incompatible operand types.
-    InvalidOperator { op: String, operand_types: Vec<Type> },
+    InvalidOperator {
+        /// The operator symbol.
+        op: String,
+        /// The types of the operands.
+        operand_types: Vec<Type>,
+    },
     /// A non‑boolean value was used as a condition.
-    NonBooleanCondition(Type),
+    NonBooleanCondition(
+        /// The actual type of the condition expression.
+        Type,
+    ),
     /// A value that does not implement `Iterable` was used in a `for` loop.
-    NotIterable(Type),
+    NotIterable(
+        /// The type that is not iterable.
+        Type,
+    ),
     /// Indexing was attempted on a non‑vector type.
-    IndexOnNonVector(Type),
+    IndexOnNonVector(
+        /// The type being indexed.
+        Type,
+    ),
     /// The left‑hand side of an assignment is not assignable.
     InvalidAssignTarget,
     /// `self` was used as an assignment target.
@@ -131,14 +207,29 @@ pub enum SemanticErrorKind {
     BaseOutsideOverridingMethod,
 
     // ─── Inference ──────────────────────────────────────────────────────
+
     /// A symbol's type could not be inferred (needs an explicit annotation).
-    CannotInferType { symbol: String },
+    CannotInferType {
+        /// The name of the symbol that could not be inferred.
+        symbol: String,
+    },
     /// Multiple incompatible types were possible for the same symbol.
-    AmbiguousInference { symbol: String, candidates: Vec<Type> },
+    AmbiguousInference {
+        /// The name of the symbol.
+        symbol: String,
+        /// The set of candidate types that were equally possible.
+        candidates: Vec<Type>,
+    },
 
     // ─── Non‑blocking warnings (quality‑of‑life) ──────────────────────
+
     /// A downcast (`as`) can never succeed because the types are unrelated.
-    UnreachableDowncast { from: Type, to: Type },
+    UnreachableDowncast {
+        /// The source type of the downcast.
+        from: Type,
+        /// The target type of the downcast.
+        to: Type,
+    },
     /// A `match` expression does not cover all possible cases.
     NonExhaustiveMatch,
 }

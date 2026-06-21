@@ -35,9 +35,11 @@ pub use registry::TypeRegistry;
 ///   in annotation position (hulk‑docs §A.10.2).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Type {
-    /// The three builtin value types.
+    /// Number builtin value type
     Number,
+    /// Sring builtin value type
     String,
+    /// Boolean builtin value type
     Boolean,
 
     /// Root of the nominal hierarchy; every type conforms to it.

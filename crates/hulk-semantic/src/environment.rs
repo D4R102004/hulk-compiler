@@ -23,11 +23,14 @@ use crate::types::Type;
 /// A variable binding in the environment: its type and source location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Binding {
+    /// The resolved type of the variable.
     pub ty: Type,
+    /// The source location where the variable was declared.
     pub span: SourceSpan,
 }
 
 impl Binding {
+    /// Creates a new binding with the given type and source span.
     pub fn new(ty: Type, span: SourceSpan) -> Self {
         Self { ty, span }
     }
