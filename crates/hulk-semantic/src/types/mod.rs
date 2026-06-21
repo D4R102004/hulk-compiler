@@ -1,0 +1,270 @@
+//! HULK type representation and core operations.
+//!
+//! This module defines the `Type` enum (the synthesized attribute of every
+//! expression) and the fundamental relations used by the semantic analyzer:
+//! conformance (`<=`) and lowest‑common‑ancestor (LCA) for multi‑branch
+//! constructs.
+//!
+//! All types are self‑contained values with no lifetimes or AST references,
+//! so they can be stored, compared, and returned cheaply.
+
+use std::collections::HashSet;
+use std::fmt;
+
+mod registry;
+pub use registry::TypeRegistry;
+
+// -----------------------------------------------------------------------------
+// Type enum
+// -----------------------------------------------------------------------------
+
+/// A fully‑resolved HULK type, as computed by the semantic analyzer.
+///
+/// This is the synthesized attribute of every expression visit (Section 2.2
+/// of the implementation plan). It carries no lifetime or AST reference so it 
+/// can be stored in maps, returned up the tree, and compared cheaply.
+///
+/// # Invariants
+/// - `Unknown` and `Error` are internal placeholders. `Unknown` is used
+///   only during inference (e.g., for self‑recursive functions) and must
+///   never survive into a successfully `analyze`d program. `Error` is a
+///   poison value that suppresses cascading diagnostics after an error
+///   has already been reported for a node.
+/// - All user‑defined types (classes and protocols) are represented as
+///   `Named(String)`. They share one namespace, because both can appear
+///   in annotation position (hulk‑docs §A.10.2).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Type {
+    /// The three builtin value types.
+    Number,
+    String,
+    Boolean,
+
+    /// Root of the nominal hierarchy; every type conforms to it.
+    Object,
+
+    /// A user‑defined `type` or `protocol`, resolved by name through
+    /// the `TypeRegistry`.
+    Named(String),
+
+    /// `Vector<T>` — both the `T[]` annotation sugar (§A.12.3) and the
+    /// type of vector literals / comprehensions.
+    Vector(Box<Type>),
+
+    /// `Iterable<T>` — the `T*` annotation sugar (§A.11.2) and the
+    /// builtin `Iterable` protocol specialized to an element type.
+    Iterable(Box<Type>),
+
+    /// Internal placeholder used while a symbol's type is still being
+    /// inferred (e.g., a self‑recursive function). Never appears in a
+    /// successfully verified program.
+    Unknown,
+
+    /// Poison value produced after a type error has already been
+    /// reported for this expression, so that the error does not cascade
+    /// into a flood of unrelated follow‑up errors.
+    Error,
+}
+
+// -----------------------------------------------------------------------------
+// Conformance (≤)
+// -----------------------------------------------------------------------------
+
+impl Type {
+    /// Returns `true` if a value of `self`'s type can be used wherever
+    /// a value of `other`'s type is expected.
+    ///
+    /// This implements the `<=` relation from hulk‑docs §A.8.4, with the
+    /// addition of cascade suppression for `Error`.
+    ///
+    /// # Rules (in priority order)
+    /// 1. Reflexivity: `self == other` → `true`.
+    /// 2. Everything conforms to `Object`.
+    /// 3. Cascade suppression: if either side is `Type::Error`, return `true`.
+    /// 4. Nominal inheritance: if both are `Named`, return `true` iff
+    ///    `other` is an ancestor of `self` in the single‑inheritance tree
+    ///    **or** `self`'s type structurally implements the protocol named
+    ///    by `other`.
+    /// 5. Protocol conformance: if `self` is `Named` and `other` is a
+    ///    protocol name, delegate to `registry.implements_protocol`.
+    /// 6. Otherwise: return `false` (no implicit numeric widening in HULK).
+    pub fn conforms_to(&self, other: &Self, registry: &TypeRegistry) -> bool {
+        // 1. Reflexivity
+        if self == other {
+            return true;
+        }
+
+        // 2. Everything conforms to Object
+        if matches!(other, Type::Object) {
+            return true;
+        }
+
+        // 3. Cascade suppression
+        if matches!(self, Type::Error) || matches!(other, Type::Error) {
+            return true;
+        }
+
+        // 4. Nominal inheritance or protocol implementation (both Named)
+        if let (Type::Named(t1), Type::Named(t2)) = (self, other) {
+            // a) nominal ancestor
+            if registry.is_ancestor(t2, t1) {
+                return true;
+            }
+            // b) structural protocol conformance
+            if registry.implements_protocol(t1, t2) {
+                return true;
+            }
+        }
+
+        // 5. Self is Named and other is a protocol (structural conformance)
+        if let Type::Named(t1) = self {
+            // If other is a protocol name, we can check directly.
+            // But we need to know if other is a protocol; we'll use a helper.
+            if registry.is_protocol(other) {
+                // We need the name string from other; if other is Named, we already have it.
+                // If other is a protocol type represented as Named, we can extract.
+                if let Type::Named(t2) = other {
+                    if registry.implements_protocol(t1, t2) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // 6. Fallback: no conformance
+        false
+    }
+}
+
+// Type enum Display formatting for error messages and debugging.
+impl fmt::Display for Type {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Type::Number => write!(f, "Number"),
+            Type::String => write!(f, "String"),
+            Type::Boolean => write!(f, "Boolean"),
+            Type::Object => write!(f, "Object"),
+            Type::Named(name) => write!(f, "{}", name),
+            Type::Vector(inner) => write!(f, "Vector<{}>", inner),
+            Type::Iterable(inner) => write!(f, "Iterable<{}>", inner),
+            Type::Unknown => write!(f, "unknown"),
+            Type::Error => write!(f, "error"),
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Lowest Common Ancestor (LCA)
+// -----------------------------------------------------------------------------
+
+/// Returns the lowest common ancestor (deepest type that is an ancestor
+/// of every type in `types`) according to the nominal hierarchy.
+///
+/// This implements the unification rule for multi‑branch constructs
+/// (§A.9.2): `if`/`elif`/`else`, vector literals, and `match` cases.
+///
+/// # Behaviour
+/// - If the slice is empty, returns `Type::Error`.
+/// - If any type is `Type::Error`, returns `Type::Error` (propagate).
+/// - Otherwise, walks each type's ancestor chain up to `Object` and
+///   returns the deepest node common to all chains.
+pub fn lowest_common_ancestor(types: &[Type], registry: &TypeRegistry) -> Type {
+    if types.is_empty() {
+        return Type::Error;
+    }
+
+    // Propagate Error
+    if types.iter().any(|t| matches!(t, Type::Error)) {
+        return Type::Error;
+    }
+
+    // Collect ancestor chains for each type (including the type itself)
+    let mut chains: Vec<Vec<Type>> = Vec::new();
+    for ty in types {
+        let chain = ancestor_chain(ty, registry);
+        if chain.is_empty() {
+            // Should not happen, but if it does, return Error.
+            return Type::Error;
+        }
+        chains.push(chain);
+    }
+
+    // Start with the first chain's ancestors, find the deepest one that appears in all chains.
+    // We compare by string name for Named types; for builtins, we can compare by value.
+    // The simplest: for each ancestor in the first chain (starting from the type itself upward),
+    // check if it is present in every other chain.
+    let first_chain = &chains[0];
+    for candidate in first_chain {
+        let mut common = true;
+        for other_chain in &chains[1..] {
+            if !other_chain.contains(candidate) {
+                common = false;
+                break;
+            }
+        }
+        if common {
+            return candidate.clone();
+        }
+    }
+
+    // Fallback: should never reach here because Object is common to all.
+    Type::Object
+}
+
+/// Returns the ancestor chain of `ty`, starting with `ty` itself and
+/// ending with `Object`. For `Named` types, the chain is built by walking
+/// the parent links in `registry`. For builtins, the chain is just
+/// `[ty, Object]` (or `[Object]` if `ty` is already `Object`).
+fn ancestor_chain(ty: &Type, registry: &TypeRegistry) -> Vec<Type> {
+    match ty {
+        Type::Object => vec![Type::Object],
+        Type::Number | Type::String | Type::Boolean => {
+            // Builtins implicitly inherit Object (§A.7.3)
+            vec![ty.clone(), Type::Object]
+        }
+        Type::Named(name) => {
+            let mut chain = Vec::new();
+            let mut current = name.clone();
+            // Avoid infinite loops (though cycles should have been caught in Pass 1)
+            let mut visited = HashSet::new();
+            while !visited.contains(&current) {
+                visited.insert(current.clone());
+                chain.push(Type::Named(current.clone()));
+                // Get parent name from registry
+                if let Some(parent) = registry.parent_of(&current) {
+                    current = parent;
+                } else {
+                    // No more parent -> reached Object implicitly
+                    break;
+                }
+            }
+            // Add Object if not already present
+            if !chain.contains(&Type::Object) {
+                chain.push(Type::Object);
+            }
+            chain
+        }
+        Type::Vector(inner) => {
+            // Vector is a builtin type, so it inherits from Object
+            vec![ty.clone(), Type::Object]
+        }
+        Type::Iterable(inner) => {
+            // In practice, protocols are never used as branch types in HULK (since they 
+            // cannot be instantiated). If we do encounter them, we just return [ty, Object].
+            vec![ty.clone(), Type::Object]
+        }
+        Type::Unknown | Type::Error => {
+            // Should never be asked for an ancestor chain of these.
+            vec![]
+        }
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Tests
+// -----------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    //TODO: Add tests for conformance and LCA once the registry is available.
+}
