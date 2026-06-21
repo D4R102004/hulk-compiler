@@ -100,6 +100,13 @@ pub enum SemanticErrorKind {
 
     /// A function was defined more than once (global namespace).
     DuplicateFunction(String),
+    /// A method was defined more than once within the same type.
+    DuplicateMethod {
+        /// The name of the type containing the method.
+        ty: String,
+        /// The name of the duplicate method.
+        method: String,
+    },
     /// A type was defined more than once.
     DuplicateType(String),
     /// An attribute was defined more than once within the same type.
@@ -135,8 +142,15 @@ pub enum SemanticErrorKind {
         found: String,
     },
 
-    // ─── Protocols ──────────────────────────────────────────────────────
+    // ─── Protocols & Annotations ──────────────────────────────────────
 
+    /// A type annotation is required but missing (e.g., protocol method parameter).
+    MissingTypeAnnotation {
+        /// The name of the symbol that lacks a type.
+        symbol: String,
+        /// The context where the annotation is missing (e.g., "protocol method `foo`").
+        context: String,
+    },
     /// A type does not implement all methods required by a protocol.
     ProtocolNotImplemented {
         /// The type that fails to implement the protocol.
@@ -276,6 +290,9 @@ impl fmt::Display for SemanticErrorKind {
             Self::DuplicateFunction(name) => {
                 write!(f, "duplicate function `{}`", name)
             }
+            Self::DuplicateMethod { ty, method } => {
+            write!(f, "duplicate method `{}` in type `{}`", method, ty)
+            }
             Self::DuplicateType(name) => {
                 write!(f, "duplicate type `{}`", name)
             }
@@ -304,7 +321,10 @@ impl fmt::Display for SemanticErrorKind {
                 )
             }
 
-            // Protocols
+            // Protocols and Annotations
+            Self::MissingTypeAnnotation { symbol, context } => {
+                write!(f, "missing type annotation for `{}` in {}", symbol, context)
+            }
             Self::ProtocolNotImplemented { ty, protocol, missing } => {
                 let missing_list = missing.join(", ");
                 write!(
