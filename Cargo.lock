@@ -136,6 +136,9 @@ dependencies = [
 [[package]]
 name = "hulk-semantic"
 version = "0.1.0"
+dependencies = [
+ "hulk-ast",
+]
 
 [[package]]
 name = "is_terminal_polyfill"

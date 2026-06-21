@@ -2,3 +2,6 @@
 name = "hulk-semantic"
 version.workspace = true
 edition.workspace = true
+
+[dependencies]
+hulk-ast = { path = "../hulk-ast" }
