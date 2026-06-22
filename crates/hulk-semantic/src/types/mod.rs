@@ -11,8 +11,9 @@
 use std::collections::HashSet;
 use std::fmt;
 
-mod registry;
+pub mod registry;
 pub use registry::TypeRegistry;
+pub use registry::seeded_registry;
 
 // -----------------------------------------------------------------------------
 // Type enum
