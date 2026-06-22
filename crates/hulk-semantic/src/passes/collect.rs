@@ -91,7 +91,7 @@ fn collect_function(
         .collect();
 
     // Check for duplicate parameter names within this function.
-    check_duplicate_params(&params, &func.name, "function", errors, decl_span);
+    check_duplicate_params(&params, errors, decl_span);
 
     let return_type = func
         .return_type
@@ -141,7 +141,7 @@ fn collect_type(
             (p.name.clone(), ty)
         })
         .collect();
-    check_duplicate_params(&params, &ty_decl.name, "type constructor", errors, decl_span);
+    check_duplicate_params(&params, errors, decl_span);
 
     // Parent link (unresolved at this point; will be resolved in Pass 1).
     let parent = ty_decl.parent.as_ref().map(|p| ParentLink {
@@ -199,7 +199,7 @@ fn collect_type(
                         (p.name.clone(), ty)
                     })
                     .collect();
-                check_duplicate_params(&params, &method.name, &format!("method `{}`", method.name), errors, member.span);
+                check_duplicate_params(&params, errors, member.span);
 
                 let return_type = method
                     .return_type
@@ -362,16 +362,8 @@ fn resolve_type_ref(tr: &TypeRef) -> Type {
 }
 
 /// Checks for duplicate parameter names within a parameter list and pushes errors.
-///
-/// Duplicate parameters are disallowed in HULK for functions, methods, and type
-/// constructors. The `owner` and `context` are used only for the error message,
-/// but the error kind is always `DuplicateParameter` (the name and span identify
-/// the specific occurrence). Since we don't have per‑parameter spans, we use
-/// the `fallback_span` which is the span of the containing declaration or member.
 fn check_duplicate_params(
     params: &[(String, Type)],
-    owner: &str,
-    context: &str,
     errors: &mut Vec<SemanticError>,
     fallback_span: SourceSpan,
 ) {

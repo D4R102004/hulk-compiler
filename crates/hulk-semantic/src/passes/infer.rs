@@ -13,7 +13,7 @@
 use std::collections::{HashMap, HashSet};
 
 use hulk_ast::{
-    AssignExpr, AssignTarget, AttributeDecl, BinaryOp, BlockExpr, CallExpr, Declaration,
+    AssignExpr, AssignTarget, AttributeDecl, BinaryExpr, BinaryOp, BlockExpr, CallExpr, Declaration,
     DeclarationKind, DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl, IfExpr,
     IndexExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr, Param,
     Pattern, Program, ProtocolDecl, ProtocolMethod, SourceSpan, TypeDecl, TypeMember, TypeMemberKind,
@@ -107,7 +107,7 @@ impl<'a> InferState<'a> {
                 Declaration::new(DeclarationKind::Function(typed), span)
             }
             DeclarationKind::Type(t) => {
-                let typed = self.infer_type(t);
+                let typed = self.infer_type(t, span);
                 Declaration::new(DeclarationKind::Type(typed), span)
             }
             DeclarationKind::Protocol(p) => {
@@ -259,12 +259,13 @@ impl<'a> InferState<'a> {
     /// parameters (not `self`, not sibling attributes). Methods are inferred with
     /// `self` bound to the type's name. Parent constructor arguments are inferred
     /// in a scope containing the inheriting type's own constructor parameters.
+    /// Use the type declaration's span for error reporting.
     ///
     /// Errors for arity mismatches or type mismatches in parent constructor
     /// arguments are reported using the span of the entire type declaration.
-    fn infer_type(&mut self, ty_decl: &TypeDecl) -> TypeDecl<Type> {
+    fn infer_type(&mut self, ty_decl: &TypeDecl, decl_span: SourceSpan) -> TypeDecl<Type> {
         let name = ty_decl.name.clone();
-        let decl_span = ty_decl.span; // Use the type declaration's span for error reporting.
+        let decl_span = decl_span; 
 
         // Infer each member.
         let mut typed_members = Vec::new();
@@ -397,9 +398,9 @@ impl<'a> InferState<'a> {
             ExprKind::For(for_expr) => self.infer_for(for_expr, env),
             ExprKind::Call(call) => self.infer_call(call, env),
             ExprKind::Member(member) => self.infer_member(member, env),
-            ExprKind::New(new_expr) => self.infer_new(new_expr, env),
-            ExprKind::TypeTest(type_test) => self.infer_type_test(type_test, env),
-            ExprKind::Downcast(downcast) => self.infer_downcast(downcast, env),
+            ExprKind::New(new_expr) => self.infer_new(new_expr, span, env),
+            ExprKind::TypeTest(type_test) => self.infer_type_test(type_test, span, env),
+            ExprKind::Downcast(downcast) => self.infer_downcast(downcast, span, env),
             ExprKind::Vector(vector) => self.infer_vector(vector, env),
             ExprKind::Index(index) => self.infer_index(index, env),
             ExprKind::Match(match_expr) => self.infer_match(match_expr, env),
@@ -416,7 +417,7 @@ impl<'a> InferState<'a> {
             Literal::String(_) => Type::String,
             Literal::Boolean(_) => Type::Boolean,
         };
-        TypedExpr::literal(lit.clone(), ty, span)
+        typed_expr(ExprKind::Literal(lit.clone()), ty, span)
     }
 
     // -------------------------------------------------------------------------
@@ -431,32 +432,32 @@ impl<'a> InferState<'a> {
     fn infer_variable(&mut self, name: &str, span: SourceSpan, env: &Environment) -> TypedExpr {
         if let Some(binding) = env.lookup(name) {
             let ty = binding.ty.clone();
-            TypedExpr::variable(name.to_string(), ty, span)
+            typed_expr(ExprKind::Variable(name.to_string()), ty, span)
         } else {
             // Check for global constants (zero-arity functions like PI, E)
             if let Some(sig) = self.registry.lookup_function(name) {
                 if sig.params.is_empty() {
                     let ty = sig.return_type.clone();
-                    return TypedExpr::variable(name.to_string(), ty, span);
+                    return typed_expr(ExprKind::Variable(name.to_string()), ty, span);
                 }
             }
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::UndefinedVariable(name.to_string()),
                 span,
             ));
-            TypedExpr::variable(name.to_string(), Type::Error, span)
+            typed_expr(ExprKind::Variable(name.to_string()), Type::Error, span)
         }
     }
 
-    fn infer_self_ref(&self, span: SourceSpan) -> TypedExpr {
+    fn infer_self_ref(&mut self, span: SourceSpan) -> TypedExpr {
         if let Some(ty) = &self.self_type {
-            TypedExpr::new(ExprKind::SelfRef, ty.clone(), span)
+            typed_expr(ExprKind::SelfRef, ty.clone(), span)
         } else {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::UndefinedVariable("self".to_string()),
                 span,
             ));
-            TypedExpr::new(ExprKind::SelfRef, Type::Error, span)
+            typed_expr(ExprKind::SelfRef, Type::Error, span)
         }
     }
 
@@ -472,7 +473,7 @@ impl<'a> InferState<'a> {
                     if let Some(parent_info) = self.registry.lookup_type(&parent.name) {
                         if let Some(parent_sig) = parent_info.methods.get(method_name) {
                             let return_type = parent_sig.return_type.clone();
-                            return TypedExpr::new(ExprKind::BaseRef, return_type, span);
+                            return typed_expr(ExprKind::BaseRef, return_type, span);
                         }
                     }
                 }
@@ -481,13 +482,13 @@ impl<'a> InferState<'a> {
                 SemanticErrorKind::BaseOutsideOverridingMethod,
                 span,
             ));
-            TypedExpr::new(ExprKind::BaseRef, Type::Error, span)
+            typed_expr(ExprKind::BaseRef, Type::Error, span)
         } else {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::BaseOutsideOverridingMethod,
                 span,
             ));
-            TypedExpr::new(ExprKind::BaseRef, Type::Error, span)
+            typed_expr(ExprKind::BaseRef, Type::Error, span)
         }
     }
 
@@ -502,14 +503,14 @@ impl<'a> InferState<'a> {
     /// If the operand is `Unknown` and it is an unannotated parameter, a constraint
     /// is added to pin it to the required type.
     fn infer_unary(&mut self, unary: &UnaryExpr, env: &mut Environment) -> TypedExpr {
-        let typed_expr = self.infer_expr(&unary.expr, env);
+        let type_infered_expr = self.infer_expr(&unary.expr, env);
         let op = unary.op;
-        let operand_type = typed_expr.anno.clone();
+        let operand_type = type_infered_expr.anno.clone();
 
         let result_type = match op {
             UnaryOp::Negate => {
                 if matches!(operand_type, Type::Number | Type::Unknown) {
-                    self.constrain_if_variable(&typed_expr, Type::Number);
+                    self.constrain_if_variable(&type_infered_expr, Type::Number);
                     Type::Number
                 } else {
                     self.errors.push(SemanticError::error(
@@ -524,7 +525,7 @@ impl<'a> InferState<'a> {
             }
             UnaryOp::Not => {
                 if matches!(operand_type, Type::Boolean | Type::Unknown) {
-                    self.constrain_if_variable(&typed_expr, Type::Boolean);
+                    self.constrain_if_variable(&type_infered_expr, Type::Boolean);
                     Type::Boolean
                 } else {
                     self.errors.push(SemanticError::error(
@@ -538,7 +539,14 @@ impl<'a> InferState<'a> {
                 }
             }
         };
-        TypedExpr::unary(op, typed_expr, result_type, unary.expr.span)
+        typed_expr(
+            ExprKind::Unary(UnaryExpr {
+                op,
+                expr: Box::new(type_infered_expr),
+            }),
+            result_type,
+            unary.expr.span,
+        )
     }
 
     /// Infers the type of a binary expression.
@@ -634,7 +642,15 @@ impl<'a> InferState<'a> {
                 }
             }
         };
-        TypedExpr::binary(op, left, right, result_type, binary.left.span)
+        typed_expr(
+            ExprKind::Binary(BinaryExpr {
+                op,
+                left: Box::new(left),
+                right: Box::new(right),
+            }),
+            result_type,
+            binary.left.span,
+        )
     }
     // -------------------------------------------------------------------------
     // Let expression
@@ -694,9 +710,10 @@ impl<'a> InferState<'a> {
         env.pop_scope();
 
         // 5. The let expression's type is the body's type.
-        let let_typed = LetExpr::new(typed_bindings, typed_body);
         let body_type = typed_body.anno.clone();
-        TypedExpr::new(ExprKind::Let(let_typed), body_type, let_expr.body.span)
+        let let_typed = LetExpr::new(typed_bindings, typed_body);
+        
+        typed_expr(ExprKind::Let(let_typed), body_type, let_expr.body.span)
     }
 
     // -------------------------------------------------------------------------
@@ -729,7 +746,7 @@ impl<'a> InferState<'a> {
         }
 
         let typed_assign = AssignExpr::new(typed_target, typed_value);
-        TypedExpr::new(ExprKind::Assign(typed_assign), value_type, assign.value.span)
+        typed_expr(ExprKind::Assign(typed_assign), value_type, assign.value.span)
     }
 
     /// Resolves the target of an assignment and returns its type and a typed target.
@@ -831,7 +848,7 @@ impl<'a> InferState<'a> {
             last_type = typed.anno.clone();
             typed_exprs.push(typed);
         }
-        TypedExpr::new(ExprKind::Block(BlockExpr::new(typed_exprs)), last_type, block.expressions.first().map(|e| e.span).unwrap_or(SourceSpan::new(0, 0)))
+        typed_expr(ExprKind::Block(BlockExpr::new(typed_exprs)), last_type, block.expressions.first().map(|e| e.span).unwrap_or(SourceSpan::new(0, 0)))
     }
 
     // -------------------------------------------------------------------------
@@ -870,7 +887,7 @@ impl<'a> InferState<'a> {
         let result_type = lowest_common_ancestor(&all_types, self.registry);
 
         let if_typed = IfExpr::new(cond, then_branch, elif_branches, else_branch);
-        TypedExpr::new(ExprKind::If(if_typed), result_type, if_expr.condition.span)
+        typed_expr(ExprKind::If(if_typed), result_type, if_expr.condition.span)
     }
 
     // -------------------------------------------------------------------------
@@ -888,7 +905,7 @@ impl<'a> InferState<'a> {
         let body = self.infer_expr(&while_expr.body, env);
         let result_type = body.anno.clone();
         let while_typed = WhileExpr::new(cond, body);
-        TypedExpr::new(ExprKind::While(while_typed), result_type, while_expr.condition.span)
+        typed_expr(ExprKind::While(while_typed), result_type, while_expr.condition.span)
     }
 
     // -------------------------------------------------------------------------
@@ -933,7 +950,7 @@ impl<'a> InferState<'a> {
 
         let result_type = body.anno.clone();
         let for_typed = ForExpr::new(&for_expr.var, iterable, body);
-        TypedExpr::new(ExprKind::For(for_typed), result_type, for_expr.iterable.span)
+        typed_expr(ExprKind::For(for_typed), result_type, for_expr.iterable.span)
     }
 
     // Helper: check if a type implements Iterable protocol.
@@ -977,20 +994,24 @@ impl<'a> InferState<'a> {
         // Global function call: callee is a bare variable.
         if let ExprKind::Variable(name) = &call.callee.kind {
             if let Some(sig) = self.registry.lookup_function(name) {
+                // Clone before mutating self.
+                let params: Vec<(String, Type)> = sig.params.clone();
+                let return_type = sig.return_type.clone();
+
                 let mut typed_args = Vec::new();
                 for arg in &call.args {
                     typed_args.push(self.infer_expr(arg, env));
                 }
-                if typed_args.len() != sig.params.len() {
+                if typed_args.len() != params.len() {
                     self.errors.push(SemanticError::error(
                         SemanticErrorKind::ArityMismatch {
-                            expected: sig.params.len(),
+                            expected: params.len(),
                             found: typed_args.len(),
                         },
                         call.callee.span,
                     ));
                 } else {
-                    for (arg, (_, param_type)) in typed_args.iter().zip(&sig.params) {
+                    for (arg, (_, param_type)) in typed_args.iter().zip(&params) {
                         // Add constraint if argument is a variable and parameter type is concrete.
                         if let ExprKind::Variable(var_name) = &arg.kind {
                             if !matches!(param_type, Type::Unknown) {
@@ -1008,8 +1029,11 @@ impl<'a> InferState<'a> {
                         }
                     }
                 }
-                let result_type = sig.return_type.clone();
-                return TypedExpr::call(typed_callee, typed_args, result_type, call.callee.span);
+                return typed_expr(
+                    ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
+                    return_type,
+                    call.callee.span,
+                );
             }
         }
 
@@ -1018,20 +1042,24 @@ impl<'a> InferState<'a> {
             let typed_obj = self.infer_expr(&member.object, env);
             let method_name = &member.member;
             if let Some(method_sig) = self.lookup_method(&typed_obj.anno, method_name) {
+                // Clone before mutating self.
+                let params: Vec<(String, Type)> = method_sig.params.clone();
+                let return_type = method_sig.return_type.clone();
+
                 let mut typed_args = Vec::new();
                 for arg in &call.args {
                     typed_args.push(self.infer_expr(arg, env));
                 }
-                if typed_args.len() != method_sig.params.len() {
+                if typed_args.len() != params.len() {
                     self.errors.push(SemanticError::error(
                         SemanticErrorKind::ArityMismatch {
-                            expected: method_sig.params.len(),
+                            expected: params.len(),
                             found: typed_args.len(),
                         },
                         call.callee.span,
                     ));
                 } else {
-                    for (arg, (_, param_type)) in typed_args.iter().zip(&method_sig.params) {
+                    for (arg, (_, param_type)) in typed_args.iter().zip(&params) {
                         // Add constraint if argument is a variable and parameter type is concrete.
                         if let ExprKind::Variable(var_name) = &arg.kind {
                             if !matches!(param_type, Type::Unknown) {
@@ -1049,15 +1077,29 @@ impl<'a> InferState<'a> {
                         }
                     }
                 }
-                let result_type = method_sig.return_type.clone();
-                let typed_member = TypedExpr::member(typed_obj, method_name.clone(), method_sig.return_type.clone(), member.object.span);
-                return TypedExpr::call(typed_member, typed_args, result_type, call.callee.span);
+                let typed_member = typed_expr(
+                    ExprKind::Member(MemberExpr {
+                        object: Box::new(typed_obj),
+                        member: method_name.clone(),
+                    }),
+                    return_type.clone(),
+                    member.object.span,
+                );
+                return typed_expr(
+                    ExprKind::Call(CallExpr { callee: Box::new(typed_member), args: typed_args }),
+                    return_type,
+                    call.callee.span,
+                );
             } else {
                 self.errors.push(SemanticError::error(
                     SemanticErrorKind::UnknownMember { ty: typed_obj.anno.clone(), member: method_name.clone() },
                     call.callee.span,
                 ));
-                return TypedExpr::call(typed_callee, Vec::new(), Type::Error, call.callee.span);
+                return typed_expr(
+                    ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: Vec::new() }),
+                    Type::Error,
+                    call.callee.span,
+                );
             }
         }
 
@@ -1070,7 +1112,11 @@ impl<'a> InferState<'a> {
         for arg in &call.args {
             typed_args.push(self.infer_expr(arg, env));
         }
-        TypedExpr::call(typed_callee, typed_args, Type::Error, call.callee.span)
+        typed_expr(
+            ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
+            Type::Error,
+            call.callee.span,
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -1095,13 +1141,20 @@ impl<'a> InferState<'a> {
                 self.constrain_if_variable(&typed_obj, owner_type);
             }
             let typed_member = MemberExpr::new(typed_obj, &member.member);
-            TypedExpr::new(ExprKind::Member(typed_member), member_type, member.object.span)
+            typed_expr(ExprKind::Member(typed_member), member_type, member.object.span)
         } else {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::UnknownMember { ty: obj_type, member: member.member.clone() },
                 member.object.span,
             ));
-            TypedExpr::member(typed_obj, member.member.clone(), Type::Error, member.object.span)
+            typed_expr(
+                        ExprKind::Member(MemberExpr {
+                            object: Box::new(typed_obj),
+                            member: member.member.clone(),
+                        }),
+                        Type::Error,
+                        member.object.span,
+                    )
         }
     }
 
@@ -1109,53 +1162,89 @@ impl<'a> InferState<'a> {
     // New
     // -------------------------------------------------------------------------
 
-    fn infer_new(&mut self, new_expr: &NewExpr, env: &mut Environment) -> TypedExpr {
+    /// Infers the type of a `new` expression.
+    ///
+    /// The type name is resolved in the registry. Each constructor argument is
+    /// inferred in the current environment. The arity and type of each argument
+    /// are checked against the type's constructor parameters. If the type does
+    /// not exist, an `UndefinedType` error is reported. The expression's type is
+    /// the resolved `Named` type.
+    ///
+    /// Errors are reported using the `span` of the `new` expression itself.
+    fn infer_new(&mut self, new_expr: &NewExpr, span: SourceSpan, env: &mut Environment) -> TypedExpr {
         let type_name = new_expr.type_name.name.clone();
-        if let Some(info) = self.registry.lookup_type(&type_name) {
-            let mut typed_args = Vec::new();
-            for arg in &new_expr.args {
-                typed_args.push(self.infer_expr(arg, env));
-            }
-            // Check arity and conformance against constructor params.
-            if typed_args.len() != info.params.len() {
+
+        // Look up the type in the registry; clone needed data before mutating self.
+        let params = match self.registry.lookup_type(&type_name) {
+            Some(info) => info.params.clone(),
+            None => {
                 self.errors.push(SemanticError::error(
-                    SemanticErrorKind::ArityMismatch {
-                        expected: info.params.len(),
-                        found: typed_args.len(),
-                    },
-                    new_expr.type_name.span, // FIXME: proper span
+                    SemanticErrorKind::UndefinedType(type_name.clone()),
+                    span,
                 ));
-            } else {
-                for (arg, (_, param_type)) in typed_args.iter().zip(&info.params) {
-                    if !arg.anno.conforms_to(param_type, self.registry) {
-                        self.errors.push(SemanticError::error(
-                            SemanticErrorKind::NotConforming {
-                                found: arg.anno.clone(),
-                                expected: param_type.clone(),
-                            },
-                            arg.span,
-                        ));
-                    }
+                return typed_expr(
+                    ExprKind::New(NewExpr::new(new_expr.type_name.clone(), Vec::new())),
+                    Type::Error,
+                    span,
+                );
+            }
+        };
+
+        // Infer each argument.
+        let mut typed_args = Vec::new();
+        for arg in &new_expr.args {
+            typed_args.push(self.infer_expr(arg, env));
+        }
+
+        // Check arity.
+        if typed_args.len() != params.len() {
+            self.errors.push(SemanticError::error(
+                SemanticErrorKind::ArityMismatch {
+                    expected: params.len(),
+                    found: typed_args.len(),
+                },
+                span,
+            ));
+        } else {
+            // Check conformance of each argument.
+            for (arg, (_, param_type)) in typed_args.iter().zip(&params) {
+                if !arg.anno.conforms_to(param_type, self.registry) {
+                    self.errors.push(SemanticError::error(
+                        SemanticErrorKind::NotConforming {
+                            found: arg.anno.clone(),
+                            expected: param_type.clone(),
+                        },
+                        arg.span,
+                    ));
                 }
             }
-            let result_type = Type::Named(type_name.clone());
-            TypedExpr::new(ExprKind::New(NewExpr::new(new_expr.type_name.clone(), typed_args)), result_type, new_expr.type_name.span)
-        } else {
-            self.errors.push(SemanticError::error(
-                SemanticErrorKind::UndefinedType(type_name.clone()),
-                new_expr.type_name.span,
-            ));
-            TypedExpr::new(ExprKind::New(NewExpr::new(new_expr.type_name.clone(), Vec::new())), Type::Error, new_expr.type_name.span)
         }
+
+        let result_type = Type::Named(type_name);
+        typed_expr(
+            ExprKind::New(NewExpr::new(new_expr.type_name.clone(), typed_args)),
+            result_type,
+            span,
+        )
     }
 
     // -------------------------------------------------------------------------
     // TypeTest (is)
     // -------------------------------------------------------------------------
 
-    fn infer_type_test(&mut self, type_test: &TypeTestExpr, env: &mut Environment) -> TypedExpr {
-        let typed_expr = self.infer_expr(&type_test.expr, env);
-        let expr_type = typed_expr.anno.clone();
+    /// Infers the type of an `is` type test expression.
+    ///
+    /// The receiver expression is inferred first. If its type is a builtin value
+    /// type (`Number`, `String`, `Boolean`), a `TypeMismatch` error is reported
+    /// because such types have no dynamic subtyping. The target type is resolved
+    /// in the registry; an `UndefinedType` error is reported if it does not exist.
+    /// The expression's type is always `Boolean`.
+    ///
+    /// The `span` parameter is the span of the entire `is` expression, used for
+    /// error reporting when the target type is undefined.
+    fn infer_type_test(&mut self, type_test: &TypeTestExpr, span: SourceSpan, env: &mut Environment) -> TypedExpr {
+        let type_infered_expr = self.infer_expr(&type_test.expr, env);
+        let expr_type = type_infered_expr.anno.clone();
         // Check receiver is Object-rooted (not builtin value).
         match expr_type {
             Type::Number | Type::String | Type::Boolean => {
@@ -1174,26 +1263,40 @@ impl<'a> InferState<'a> {
         if !self.registry.lookup_type(&target_name).is_some() && !self.registry.lookup_protocol(&target_name).is_some() {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::UndefinedType(target_name),
-                type_test.type_name.span,
+                span,
             ));
         }
-        TypedExpr::new(ExprKind::TypeTest(TypeTestExpr::new(typed_expr, type_test.type_name.clone())), Type::Boolean, type_test.expr.span)
+        typed_expr(ExprKind::TypeTest(TypeTestExpr::new(type_infered_expr, type_test.type_name.clone())), Type::Boolean, type_test.expr.span)
     }
 
     // -------------------------------------------------------------------------
     // Downcast (as)
     // -------------------------------------------------------------------------
-
-    fn infer_downcast(&mut self, downcast: &DowncastExpr, env: &mut Environment) -> TypedExpr {
-        let typed_expr = self.infer_expr(&downcast.expr, env);
-        let expr_type = typed_expr.anno.clone();
-        // Same receiver restriction.
-        match expr_type {
+    
+    /// Infers the type of an `as` downcast expression.
+    ///
+    /// The receiver expression is inferred first. Like `is`, if the receiver type
+    /// is a builtin value type, a `TypeMismatch` error is reported. The target type
+    /// is resolved in the registry; an `UndefinedType` error is reported if it does
+    /// not exist. The expression's static type is the target type.
+    ///
+    /// If the receiver static type and the target type are unrelated in the
+    /// hierarchy (neither conforms to the other), an `UnreachableDowncast` warning
+    /// is emitted, as the cast can never succeed at runtime. This warning does not
+    /// block compilation.
+    ///
+    /// The `span` parameter is the span of the entire `as` expression, used for
+    /// error reporting when the target type is undefined.
+    fn infer_downcast(&mut self, downcast: &DowncastExpr, span: SourceSpan, env: &mut Environment) -> TypedExpr {
+        let type_infered_expr = self.infer_expr(&downcast.expr, env);
+        let expr_type = type_infered_expr.anno.clone();
+        // Receiver must be Object-rooted.
+        match &expr_type {
             Type::Number | Type::String | Type::Boolean => {
                 self.errors.push(SemanticError::error(
                     SemanticErrorKind::TypeMismatch {
                         expected: Type::Object,
-                        found: expr_type,
+                        found: expr_type.clone(),
                     },
                     downcast.expr.span,
                 ));
@@ -1205,17 +1308,17 @@ impl<'a> InferState<'a> {
         if !self.registry.lookup_type(&target_name).is_some() && !self.registry.lookup_protocol(&target_name).is_some() {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::UndefinedType(target_name),
-                downcast.type_name.span,
+                span,
             ));
         }
         // Optional warning: unreachable downcast.
         if !expr_type.conforms_to(&target_type, self.registry) && !target_type.conforms_to(&expr_type, self.registry) {
             self.errors.push(SemanticError::warning(
-                SemanticErrorKind::UnreachableDowncast { from: expr_type, to: target_type.clone() },
+                SemanticErrorKind::UnreachableDowncast { from: expr_type.clone(), to: target_type.clone() },
                 downcast.expr.span,
             ));
         }
-        TypedExpr::new(ExprKind::Downcast(DowncastExpr::new(typed_expr, downcast.type_name.clone())), target_type, downcast.expr.span)
+        typed_expr(ExprKind::Downcast(DowncastExpr::new(type_infered_expr, downcast.type_name.clone())), target_type, downcast.expr.span)
     }
 
     // -------------------------------------------------------------------------
@@ -1236,7 +1339,7 @@ impl<'a> InferState<'a> {
                     lowest_common_ancestor(&item_types, self.registry)
                 };
                 let result_type = Type::Vector(Box::new(elem_type));
-                TypedExpr::new(ExprKind::Vector(VectorExpr::Literal(typed_items)), result_type, items.first().map(|e| e.span).unwrap_or(SourceSpan::new(0, 0)))
+                typed_expr(ExprKind::Vector(VectorExpr::Literal(typed_items)), result_type, items.first().map(|e| e.span).unwrap_or(SourceSpan::new(0, 0)))
             }
             VectorExpr::Comprehension(comp) => {
                 // Infer iterable.
@@ -1271,7 +1374,7 @@ impl<'a> InferState<'a> {
                 env.pop_scope();
                 let result_type = Type::Vector(Box::new(typed_head.anno.clone()));
                 let comp_typed = VectorComprehension::new(typed_head, &comp.var, typed_iterable);
-                TypedExpr::new(ExprKind::Vector(VectorExpr::Comprehension(comp_typed)), result_type, comp.iterable.span)
+                typed_expr(ExprKind::Vector(VectorExpr::Comprehension(comp_typed)), result_type, comp.iterable.span)
             }
         }
     }
@@ -1366,12 +1469,12 @@ impl<'a> InferState<'a> {
     /// The `span` parameter is used for error reporting and should point to the
     /// location of the pattern or its enclosing case body.
     fn infer_pattern(
-        &self,
+        &mut self,
         pattern: &Pattern,
         scrutinee_type: &Type,
         env: &Environment,
         span: SourceSpan,
-    ) -> (Pattern<Type>, Environment, bool) {
+    ) -> (Pattern, Environment, bool) {
         let mut case_env = env.clone();
         let catch_all = match pattern {
             Pattern::Wildcard => (Pattern::Wildcard, true),

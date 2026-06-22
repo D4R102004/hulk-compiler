@@ -105,10 +105,7 @@ impl<'a> Checker<'a> {
             self.check_expr(&func.body);
         } else {
             // Should never occur if the inference pass is correct.
-            self.errors.push(SemanticError::error(
-                SemanticErrorKind::Message("internal: function signature missing from registry".to_string()),
-                func.body.span,
-            ));
+            panic!("internal: function signature missing for `{}`", func.name);
         }
     }
 
@@ -145,20 +142,10 @@ impl<'a> Checker<'a> {
                         self.check_expr(&method.body);
                     } else {
                         // Should not happen; report an internal error.
-                        self.errors.push(SemanticError::error(
-                            SemanticErrorKind::Message(
-                                format!("internal: method signature missing for `{}`", method.name)
-                            ),
-                            member.span,
-                        ));
+                        panic!("internal: method signature missing for `{}` in type `{}`", method.name, type_name);
                     }
                 } else {
-                    self.errors.push(SemanticError::error(
-                        SemanticErrorKind::Message(
-                            format!("internal: type `{}` not found in registry", type_name)
-                        ),
-                        member.span,
-                    ));
+                    panic!("internal: type `{}` not found in registry", type_name);
                 }
             }
         }

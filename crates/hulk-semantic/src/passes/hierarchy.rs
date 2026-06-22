@@ -43,6 +43,8 @@ pub fn run(registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
 
     // Step 3: Detect cycles in the inheritance graph.
     let cycle = detect_cycles(registry);
+    let has_cycle = cycle.is_some(); // Store flag before moving.
+
     if let Some((cycle_path, span)) = cycle {
         errors.push(SemanticError::error(
             SemanticErrorKind::InheritanceCycle(cycle_path),
@@ -55,7 +57,7 @@ pub fn run(registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
 
     // Step 4: Check override signature compatibility (class‑to‑class).
     // Only if no cycle exists.
-    if cycle.is_none() {
+    if !has_cycle {
         check_overrides(registry, errors);
     }
 
@@ -64,7 +66,7 @@ pub fn run(registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
 
     // Step 6: Flatten attribute and method tables.
     // Only if no cycle exists.
-    if cycle.is_none() {
+    if !has_cycle {
         flatten_tables(registry, errors);
     }
 }
