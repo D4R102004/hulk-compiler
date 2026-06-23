@@ -12,13 +12,13 @@
 //! 5. Protocol extension variance (contravariant params, covariant return)
 //! 6. Flatten attribute/method tables (parent‑to‑child) — skipped if cycle
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, HashMap};
 
 use hulk_ast::SourceSpan;
 
 use crate::error::{SemanticError, SemanticErrorKind};
-use crate::types::registry::{MethodSignature, TypeInfo, TypeRegistry};
-use crate::types::Type;
+use crate::types::registry::{TypeRegistry, MethodSignature};
+use crate::passes::utils::topological_order;
 
 // -----------------------------------------------------------------------------
 // Public entry point
@@ -62,6 +62,7 @@ pub fn run(registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
     }
 
     // Step 5: Check protocol extension variance (always, because independent).
+    flatten_protocols(registry, errors);  // Flatten protocol method tables so variance check sees inherited methods
     check_protocol_variance(registry, errors);
 
     // Step 6: Flatten attribute and method tables.
@@ -313,11 +314,11 @@ fn check_protocol_variance(registry: &mut TypeRegistry, errors: &mut Vec<Semanti
                 continue;
             }
             let parent_methods = &registry.protocols[parent_name].methods;
-            let own_methods = &registry.protocols[&name].methods;
+            let child_methods = &registry.protocols[&name].flattened_methods;   
 
             // A protocol extension may not remove a method.
             for (method_name, parent_sig) in parent_methods {
-                let own_sig = match own_methods.get(method_name) {
+                let own_sig = match child_methods.get(method_name) {
                     Some(sig) => sig,
                     None => {
                         errors.push(SemanticError::error(
@@ -364,6 +365,43 @@ fn check_protocol_variance(registry: &mut TypeRegistry, errors: &mut Vec<Semanti
     }
 }
 
+// Internal helpers
+
+/// Flattens method tables for every protocol.
+fn flatten_protocols(registry: &mut TypeRegistry, _errors: &mut Vec<SemanticError>) {
+    let names: Vec<String> = registry.protocols.keys().cloned().collect();
+    for name in names {
+        let mut flattened = HashMap::new();
+        let mut visited = HashSet::new();
+        flatten_protocol_recursive(registry, &name, &mut flattened, &mut visited);
+        if let Some(proto) = registry.protocols.get_mut(&name) {
+            proto.flattened_methods = flattened;
+        }
+    }
+}
+
+/// Recursively collects methods from a protocol and its ancestors.
+fn flatten_protocol_recursive(
+    registry: &TypeRegistry,
+    name: &str,
+    result: &mut HashMap<String, MethodSignature>,
+    visited: &mut HashSet<String>,
+) {
+    if !visited.insert(name.to_string()) {
+        return;
+    }
+    if let Some(proto) = registry.protocols.get(name) {
+        // First, inherit from parents.
+        for parent in &proto.extends {
+            flatten_protocol_recursive(registry, parent, result, visited);
+        }
+        // Then add own methods (override parents).
+        for (k, v) in &proto.methods {
+            result.insert(k.clone(), v.clone());
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Step 6: Flatten attribute and method tables
 // -----------------------------------------------------------------------------
@@ -376,92 +414,42 @@ fn check_protocol_variance(registry: &mut TypeRegistry, errors: &mut Vec<Semanti
 ///
 /// # Precondition
 /// No cycles exist in the inheritance graph (ensured by `detect_cycles`).
-fn flatten_tables(registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
+fn flatten_tables(registry: &mut TypeRegistry, _errors: &mut Vec<SemanticError>) {
     // Compute topological order: parents before children.
     let order = topological_order(registry);
 
     for name in order {
-        // Skip types that are already flattened or have no parent.
-        let parent_name = match registry.types.get(&name).and_then(|info| info.parent.as_ref()) {
-            Some(parent) => &parent.name,
-            None => continue,
-        };
-        // If parent is not in registry (should not happen if previous checks passed), skip.
-        if !registry.types.contains_key(parent_name) {
-            continue;
-        }
-        // Borrow check: we need to modify the child and read from the parent.
-        // We'll clone the parent's maps and then overwrite with child's own.
-        let parent_attrs = registry.types[parent_name].attributes.clone();
-        let parent_methods = registry.types[parent_name].methods.clone();
+        // Clone parent members if the type has a parent.
+        let parent_name = registry.types.get(&name)
+            .and_then(|info| info.parent.as_ref())
+            .map(|p| p.name.clone());
 
+        if let Some(ref parent_name) = parent_name {
+            if let Some(parent_info) = registry.types.get(parent_name) {
+                let parent_attrs = parent_info.attributes.clone();
+                let parent_methods = parent_info.methods.clone();
+
+                let child_info = registry.types.get_mut(&name).unwrap();
+
+                // Merge parent attributes into child, then overwrite with child's own.
+                let mut combined_attrs = parent_attrs;
+                combined_attrs.extend(child_info.attributes.clone());
+                child_info.attributes = combined_attrs;
+
+                // Merge parent methods into child, then overwrite with child's own.
+                let mut combined_methods = parent_methods;
+                combined_methods.extend(child_info.methods.clone());
+                child_info.methods = combined_methods;
+            }
+        }
+
+        // Whether or not the type has a parent, its own (possibly merged) `methods`
+        // table now represents the full flattened set.
         let child_info = registry.types.get_mut(&name).unwrap();
-        // Copy parent's attributes, then overwrite with child's own.
-        let mut combined_attrs = parent_attrs;
-        for (k, v) in child_info.attributes.iter() {
-            combined_attrs.insert(k.clone(), v.clone());
-        }
-        child_info.attributes = combined_attrs;
-
-        // Same for methods.
-        let mut combined_methods = parent_methods;
-        for (k, v) in child_info.methods.iter() {
-            combined_methods.insert(k.clone(), v.clone());
-        }
-        child_info.methods = combined_methods;
-
-        // Also fill flattened_methods for compatibility with later passes.
         child_info.flattened_methods = child_info.methods.clone();
     }
 }
 
-/// Returns a topological order of types (parents before children) using Kahn's algorithm.
-fn topological_order(registry: &TypeRegistry) -> Vec<String> {
-    let mut in_degree: HashMap<String, usize> = HashMap::new();
-    let mut graph: HashMap<String, Vec<String>> = HashMap::new();
-
-    // Initialize.
-    for name in registry.types.keys() {
-        in_degree.entry(name.clone()).or_insert(0);
-        graph.entry(name.clone()).or_default();
-    }
-
-    // Build edges from parent to child.
-    for (name, info) in &registry.types {
-        if let Some(parent) = &info.parent {
-            if registry.types.contains_key(&parent.name) {
-                graph.entry(parent.name.clone()).or_default().push(name.clone());
-                *in_degree.entry(name.clone()).or_insert(0) += 1;
-            }
-        }
-    }
-
-    // Kahn's algorithm.
-    let mut queue: VecDeque<String> = VecDeque::new();
-    for (name, &deg) in &in_degree {
-        if deg == 0 {
-            queue.push_back(name.clone());
-        }
-    }
-
-    let mut order = Vec::new();
-    while let Some(name) = queue.pop_front() {
-        order.push(name.clone());
-        if let Some(children) = graph.get(&name) {
-            for child in children {
-                if let Some(deg) = in_degree.get_mut(child) {
-                    *deg -= 1;
-                    if *deg == 0 {
-                        queue.push_back(child.clone());
-                    }
-                }
-            }
-        }
-    }
-
-    // If there are cycles, the order will be incomplete, but we already checked for cycles.
-    order
-}
 
 // -----------------------------------------------------------------------------
 // Tests
@@ -469,5 +457,170 @@ fn topological_order(registry: &TypeRegistry) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    // TODO: Add tests
+    use super::*;
+    use hulk_lexer::Lexer;
+    use hulk_parser::parse;
+    use crate::{seeded_registry};
+    use crate::passes::{collect, hierarchy};
+    use crate::passes::utils::assert_error_kind;
+    use crate::error::Severity;
+    use crate::types::{Type, TypeRegistry};
+    use crate::analyze;
+
+    fn parse_and_hierarchy(src: &str) -> (TypeRegistry, Vec<SemanticError>) {
+        let tokens = Lexer::new(src).tokenize().expect("lex ok");
+        let program = parse(tokens).expect("parse ok");
+        let mut registry = seeded_registry();
+        let mut errors = Vec::new();
+        collect::run(&program, &mut registry, &mut errors);
+        if errors.iter().any(|e| e.severity == Severity::Error) {
+            return (registry, errors);
+        }
+        hierarchy::run(&mut registry, &mut errors);
+        (registry, errors)
+    }
+
+    #[test]
+    fn valid_inheritance_chain() {
+        let src = "
+            type A { }
+            type B inherits A { }
+            type C inherits B { }
+            print(0);
+        ";
+        let (registry, errors) = parse_and_hierarchy(src);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+        // Check ancestry.
+        assert!(registry.is_ancestor("A", "B"));
+        assert!(registry.is_ancestor("B", "C"));
+        assert!(registry.is_ancestor("A", "C"));
+        assert!(!registry.is_ancestor("C", "A"));
+    }
+
+    #[test]
+    fn inheritance_cycle_detected() {
+        let src = "
+            type A inherits B { }
+            type B inherits C { }
+            type C inherits A { }
+            print(0);
+        ";
+        let (_, errors) = parse_and_hierarchy(src);
+        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::InheritanceCycle(_))));
+    }
+
+    #[test]
+    fn inherit_from_builtin_value_type() {
+        let src = "type A inherits Number { } print(0);";
+        let (_, errors) = parse_and_hierarchy(src);
+        assert_error_kind(&errors, SemanticErrorKind::InheritFromBuiltinValueType("Number".to_string()));
+    }
+
+    #[test]
+    fn override_mismatch() {
+        let src = "
+            type A { f(): Number => 1; }
+            type B inherits A { f(): String => \"hello\"; }
+            print(0);
+        ";
+        let (_, errors) = parse_and_hierarchy(src);
+        // Expected: return type mismatch (Number vs String)
+        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::InvalidOverride { .. })));
+    }
+
+    #[test]
+    fn base_resolution() {
+        // Person/Knight example from §A.7.4
+        let src = "
+            type Person(firstname, lastname) {
+                firstname = firstname;
+                lastname = lastname;
+                name(): String => self.firstname @@ self.lastname;
+            }
+            type Knight(firstname, lastname) inherits Person(firstname, lastname) {
+                name(): String => \"Sir\" @@ base();
+            }
+            print((new Knight(\"Phil\", \"Collins\")).name());
+        ";
+
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "base resolution failed: {:?}", result.err());
+    }
+
+    /// Tests that constructor parameters are resolved through multiple inheritance levels.
+    /// A -> B -> C, with a concrete argument provided at the deepest level.
+    #[test]
+    fn constructor_param_resolved_through_two_levels_of_inheritance() {
+        let src = "
+            type A(x) { }
+            type B(x) inherits A(x) { }
+            type C(x) inherits B(x) { }
+            print(new C(42));
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "constructor resolution through two inheritance levels failed: {:?}", result.err());
+
+        let registry = &result.unwrap().registry;
+        // Check that all three types have their `x` parameter resolved to Number.
+        for type_name in ["A", "B", "C"] {
+            let info = registry.lookup_type(type_name).expect("type should exist");
+            assert_eq!(info.params[0].1, Type::Number,
+                "type {} parameter should be Number, got {:?}", type_name, info.params[0].1);
+        }
+    }
+
+    /// Tests that ambiguous constructor parameters across subclasses produce an error.
+    /// Two subclasses pass different concrete types to the same base parameter.
+    #[test]
+    fn constructor_param_ambiguous_across_subclasses() {
+        let src = "
+            type Base(x) { }
+            type Sub1(x) inherits Base(x) { }
+            type Sub2(x) inherits Base(x) { }
+            {
+                print(new Sub1(42));
+                print(new Sub2(\"hello\"));
+            }
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err(), "expected ambiguity error");
+        let errors = result.err().unwrap();
+        // Expect at least one AmbiguousInference error for parameter `x` in `Base`.
+        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::AmbiguousInference { .. })),
+            "missing AmbiguousInference error");
+    }
+
+    /// Tests that flattened method tables correctly resolve to the most derived signature
+    /// across a three-level inheritance chain.
+    #[test]
+    fn flatten_tables_three_level_chain() {
+        let src = "
+            type A {
+                f(): String => \"A\";
+                g(): String => \"A\";
+            }
+            type B inherits A {
+                f(): String => \"B\";  // override
+                h(): String => \"B\";  // new
+            }
+            type C inherits B {
+                g(): String => \"C\";  // override from A
+            }
+            print(new C().f());
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "three-level flattening failed: {:?}", result.err());
+
+        let registry = &result.unwrap().registry;
+        let c_info = registry.lookup_type("C").expect("type C should exist");
+        // Check that C.flattened_methods has the correct overrides:
+        // f should come from B (String), g from C (String), h from B (String)
+        assert_eq!(c_info.flattened_methods["f"].return_type, Type::String);
+        assert_eq!(c_info.flattened_methods["g"].return_type, Type::String);
+        assert_eq!(c_info.flattened_methods["h"].return_type, Type::String);
+        // Additionally, we could check that the defined_in field points to the correct type.
+        assert_eq!(c_info.flattened_methods["f"].defined_in, "B");
+        assert_eq!(c_info.flattened_methods["g"].defined_in, "C");
+        assert_eq!(c_info.flattened_methods["h"].defined_in, "B");
+    }
 }
