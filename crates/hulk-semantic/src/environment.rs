@@ -155,5 +155,58 @@ impl Default for Environment {
 
 #[cfg(test)]
 mod tests {
-    // TODO: Test fixtures and tests
+    use super::*;
+
+    fn dummy_span() -> SourceSpan {
+        SourceSpan::new(0, 0)
+    }
+
+    #[test]
+    fn shadowing_within_same_scope() {
+        let mut env = Environment::new();
+        // Declare `a` as Number, then overwrite with String in the same scope.
+        env.declare("a", Type::Number, dummy_span());
+        env.declare("a", Type::String, dummy_span());
+
+        let binding = env.lookup("a").expect("a should be bound");
+        assert_eq!(binding.ty, Type::String);
+    }
+
+    #[test]
+    fn shadowing_across_nested_scopes() {
+        let mut env = Environment::new();
+        // Outer scope: a = Number.
+        env.declare("a", Type::Number, dummy_span());
+        // Push new scope, declare a = String.
+        env.push_scope();
+        env.declare("a", Type::String, dummy_span());
+
+        // Lookup in nested scope should see String.
+        let binding = env.lookup("a").expect("a should be bound");
+        assert_eq!(binding.ty, Type::String);
+
+        // Pop scope, lookup should see outer Number.
+        env.pop_scope();
+        let binding = env.lookup("a").expect("a should be bound");
+        assert_eq!(binding.ty, Type::Number);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot pop the root scope")]
+    fn pop_root_scope_panics() {
+        let mut env = Environment::new();
+        // There is only the root scope. Popping it should panic.
+        env.pop_scope();
+    }
+
+    #[test]
+    fn is_self_flag_preserved_through_lookup() {
+        let mut env = Environment::new();
+        // Declare `self` with is_self = true.
+        env.declare_with_self("self", Type::Named("A".to_string()), dummy_span(), true);
+
+        let binding = env.lookup("self").expect("self should be bound");
+        assert!(binding.is_self, "is_self flag should be true");
+        assert_eq!(binding.ty, Type::Named("A".to_string()));
+    }
 }

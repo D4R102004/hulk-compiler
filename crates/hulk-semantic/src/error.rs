@@ -401,5 +401,205 @@ impl fmt::Display for SemanticErrorKind {
 
 #[cfg(test)]
 mod tests {
-    // TODO: Tests for Display formatting.
+    use super::*;
+    use hulk_ast::SourceSpan;
+
+    fn dummy_span() -> SourceSpan {
+        SourceSpan::new(1, 1)
+    }
+
+    #[test]
+    fn display_format_for_each_kind() {
+        // Table of (SemanticErrorKind, expected_display_string)
+        let cases = vec![
+            (
+                SemanticErrorKind::UndefinedVariable("x".to_string()),
+                "undefined variable `x`",
+            ),
+            (
+                SemanticErrorKind::UndefinedFunction {
+                    name: "foo".to_string(),
+                    arity: 2,
+                },
+                "undefined function `foo` with 2 argument(s)",
+            ),
+            (
+                SemanticErrorKind::UndefinedType("MyType".to_string()),
+                "undefined type `MyType`",
+            ),
+            (
+                SemanticErrorKind::UnknownMember {
+                    ty: Type::Named("T".to_string()),
+                    member: "field".to_string(),
+                },
+                "type `T` has no member `field`",
+            ),
+            (
+                SemanticErrorKind::DuplicateFunction("f".to_string()),
+                "duplicate function `f`",
+            ),
+            (
+                SemanticErrorKind::DuplicateMethod {
+                    ty: "A".to_string(),
+                    method: "m".to_string(),
+                },
+                "duplicate method `m` in type `A`",
+            ),
+            (
+                SemanticErrorKind::DuplicateType("T".to_string()),
+                "duplicate type `T`",
+            ),
+            (
+                SemanticErrorKind::DuplicateAttribute {
+                    ty: "A".to_string(),
+                    attribute: "x".to_string(),
+                },
+                "duplicate attribute `x` in type `A`",
+            ),
+            (
+                SemanticErrorKind::DuplicateParameter("p".to_string()),
+                "duplicate parameter `p`",
+            ),
+            (
+                SemanticErrorKind::InheritFromBuiltinValueType("Number".to_string()),
+                "cannot inherit from builtin value type `Number`",
+            ),
+            (
+                SemanticErrorKind::InheritFromUndefinedType("Missing".to_string()),
+                "cannot inherit from undefined type `Missing`",
+            ),
+            (
+                SemanticErrorKind::InheritanceCycle(vec!["A".to_string(), "B".to_string(), "A".to_string()]),
+                "inheritance cycle detected: A -> B -> A",
+            ),
+            (
+                SemanticErrorKind::InvalidOverride {
+                    method: "foo".to_string(),
+                    in_type: "A".to_string(),
+                    expected: "() -> Number".to_string(),
+                    found: "() -> String".to_string(),
+                },
+                "invalid override of method `foo` in type `A`: expected `() -> Number`, found `() -> String`",
+            ),
+            (
+                SemanticErrorKind::MissingTypeAnnotation {
+                    symbol: "x".to_string(),
+                    context: "protocol method `bar`".to_string(),
+                },
+                "missing type annotation for `x` in protocol method `bar`",
+            ),
+            (
+                SemanticErrorKind::ProtocolNotImplemented {
+                    ty: Type::Named("T".to_string()),
+                    protocol: "P".to_string(),
+                    missing: vec!["f".to_string()],
+                },
+                "type `T` does not implement protocol `P`; missing methods: f",
+            ),
+            (
+                SemanticErrorKind::InvalidProtocolVariance {
+                    method: "f".to_string(),
+                    reason: "return type mismatch".to_string(),
+                },
+                "invalid protocol variance for `f`: return type mismatch",
+            ),
+            (
+                SemanticErrorKind::TypeMismatch {
+                    expected: Type::Number,
+                    found: Type::String,
+                },
+                "type mismatch: expected `Number`, found `String`",
+            ),
+            (
+                SemanticErrorKind::NotConforming {
+                    found: Type::Number,
+                    expected: Type::String,
+                },
+                "type `Number` does not conform to `String`",
+            ),
+            (
+                SemanticErrorKind::ArityMismatch {
+                    expected: 2,
+                    found: 3,
+                },
+                "arity mismatch: expected 2, found 3",
+            ),
+            (
+                SemanticErrorKind::InvalidOperator {
+                    op: "+".to_string(),
+                    operand_types: vec![Type::Number, Type::String],
+                },
+                "invalid operator `+` for types Number, String",
+            ),
+            (
+                SemanticErrorKind::NonBooleanCondition(Type::Number),
+                "non‑boolean condition of type `Number`",
+            ),
+            (
+                SemanticErrorKind::NotIterable(Type::Number),
+                "type `Number` is not iterable",
+            ),
+            (
+                SemanticErrorKind::IndexOnNonVector(Type::Number),
+                "indexing applied to non‑vector type `Number`",
+            ),
+            (
+                SemanticErrorKind::InvalidAssignTarget,
+                "invalid assignment target",
+            ),
+            (
+                SemanticErrorKind::SelfIsNotAssignable,
+                "`self` is not assignable",
+            ),
+            (
+                SemanticErrorKind::BaseOutsideOverridingMethod,
+                "`base` can only be used inside an overriding method",
+            ),
+            (
+                SemanticErrorKind::CannotInferType {
+                    symbol: "x".to_string(),
+                },
+                "cannot infer type for `x`; add an explicit annotation",
+            ),
+            (
+                SemanticErrorKind::AmbiguousInference {
+                    symbol: "x".to_string(),
+                    candidates: vec![Type::Number, Type::String],
+                },
+                "ambiguous inference for `x`: possible types are Number, String",
+            ),
+            (
+                SemanticErrorKind::UnreachableDowncast {
+                    from: Type::Named("A".to_string()),
+                    to: Type::Named("B".to_string()),
+                },
+                "unreachable downcast: `A` as `B` can never succeed",
+            ),
+            (
+                SemanticErrorKind::NonExhaustiveMatch,
+                "non‑exhaustive match: no catch‑all pattern",
+            ),
+        ];
+
+        for (kind, expected) in cases {
+            let rendered = kind.to_string();
+            assert_eq!(rendered, expected, "rendered: `{}`, expected: `{}`", rendered, expected);
+        }
+    }
+
+    #[test]
+    fn severity_prefix_in_full_error_display() {
+        let span = dummy_span();
+        let error = SemanticError::error(
+            SemanticErrorKind::UndefinedVariable("x".to_string()),
+            span,
+        );
+        assert!(error.to_string().starts_with("semantic error at line 1, col 1: undefined variable `x`"));
+
+        let warning = SemanticError::warning(
+            SemanticErrorKind::NonExhaustiveMatch,
+            span,
+        );
+        assert!(warning.to_string().starts_with("semantic warning at line 1, col 1: non‑exhaustive match: no catch‑all pattern"));
+    }
 }
