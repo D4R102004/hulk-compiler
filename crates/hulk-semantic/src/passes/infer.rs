@@ -15,16 +15,15 @@ use std::collections::{HashMap, HashSet};
 use hulk_ast::{
     AssignExpr, AssignTarget, AttributeDecl, BinaryExpr, BinaryOp, BlockExpr, CallExpr, Declaration,
     DeclarationKind, DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl, IfExpr,
-    IndexExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr, Param,
-    Pattern, Program, ProtocolDecl, ProtocolMethod, SourceSpan, TypeDecl, TypeMember, TypeMemberKind,
-    TypeParent, TypeRef, TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr,
-    WhileExpr,
+    IndexExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr,
+    Pattern, Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, VectorExpr, WhileExpr,
+    TypeParent, TypeRef, TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, 
 };
 
 use crate::environment::Environment;
-use crate::error::{SemanticError, SemanticErrorKind, Severity};
+use crate::error::{SemanticError, SemanticErrorKind};
 use crate::typed::{TypedExpr, TypedProgram};
-use crate::types::registry::{AttributeInfo, FunctionSignature, MethodSignature, ParentLink, TypeInfo, TypeRegistry};
+use crate::types::registry::{MethodSignature, TypeRegistry};
 use crate::types::{Type, lowest_common_ancestor};
 
 // -----------------------------------------------------------------------------
@@ -135,6 +134,8 @@ impl<'a> InferState<'a> {
     fn infer_function(&mut self, func: &FunctionDecl) -> FunctionDecl<Type> {
         let name = func.name.clone();
         let return_type_was_unknown = func.return_type.is_none();
+
+        // Seed the registry with Unknown for the return type if unannotated.
         if return_type_was_unknown {
             if let Some(sig) = self.registry.functions.get_mut(&name) {
                 sig.return_type = Type::Unknown;
@@ -146,13 +147,12 @@ impl<'a> InferState<'a> {
 
         let mut env = Environment::new();
 
-        // Bind `self` if this is a method body.
-        // This must be done before parameters to allow parameters named `self` to shadow it.
+        // Bind `self` if this is a method body (shadowable by a parameter named `self`).
         if let Some(self_ty) = &self.self_type {
             env.declare_with_self("self", self_ty.clone(), func.body.span, true);
         }
 
-        // Declare parameters (may shadow `self` if a parameter is named `self`).
+        // Declare parameters; unannotated parameters start as Unknown and collect constraints.
         for p in &func.params {
             let ty = p
                 .type_annotation
@@ -165,11 +165,11 @@ impl<'a> InferState<'a> {
             }
         }
 
-        // Infer the body.
+        // Infer the body (this builds the typed tree with placeholder Unknowns).
         let typed_body = self.infer_expr(&func.body, &mut env);
         self.recursion_stack.remove(&name);
 
-        // Resolve unannotated parameters.
+        // Resolve unannotated parameters from constraints.
         let mut resolved_param_types = Vec::new();
         for p in &func.params {
             let mut ty = p
@@ -209,7 +209,7 @@ impl<'a> InferState<'a> {
             resolved_param_types.push((p.name.clone(), ty));
         }
 
-        // Update registry's FunctionSignature with resolved parameter types.
+        // Update the registry with resolved parameter types.
         if let Some(sig) = self.registry.functions.get_mut(&name) {
             for (i, (_, ty)) in resolved_param_types.iter().enumerate() {
                 if i < sig.params.len() {
@@ -218,18 +218,20 @@ impl<'a> InferState<'a> {
             }
         }
 
-        // Return type resolution.
-        if return_type_was_unknown {
+        // Determine the final resolved return type.
+        let resolved_return_type = if return_type_was_unknown {
             let body_type = typed_body.anno.clone();
             if matches!(body_type, Type::Unknown | Type::Error) {
                 self.errors.push(SemanticError::error(
                     SemanticErrorKind::CannotInferType { symbol: name.clone() },
                     func.body.span,
                 ));
+                Type::Error
             } else {
                 if let Some(sig) = self.registry.functions.get_mut(&name) {
                     sig.return_type = body_type.clone();
                 }
+                body_type
             }
         } else {
             let annotated = func.return_type.as_ref().unwrap();
@@ -237,17 +239,51 @@ impl<'a> InferState<'a> {
             if !typed_body.anno.conforms_to(&ann_type, self.registry) {
                 self.errors.push(SemanticError::error(
                     SemanticErrorKind::TypeMismatch {
-                        expected: ann_type,
+                        expected: ann_type.clone(),
                         found: typed_body.anno.clone(),
                     },
                     func.body.span,
                 ));
             }
+            ann_type
+        };
+
+        // If this function is a method, update the method signature in the type's methods.
+        if let Some(owner) = &self.current_type_owner {
+            if let Some(type_info) = self.registry.lookup_type_mut(owner) {
+                if let Some(method_sig) = type_info.methods.get_mut(&name) {
+                    // Update parameter types.
+                    for (i, (_, ty)) in resolved_param_types.iter().enumerate() {
+                        if i < method_sig.params.len() {
+                            method_sig.params[i].1 = ty.clone();
+                        }
+                    }
+                    // Update return type.
+                    method_sig.return_type = resolved_return_type.clone();
+                }
+                // Also update flattened_methods.
+                if let Some(flat_sig) = type_info.flattened_methods.get_mut(&name) {
+                    for (i, (_, ty)) in resolved_param_types.iter().enumerate() {
+                        if i < flat_sig.params.len() {
+                            flat_sig.params[i].1 = ty.clone();
+                        }
+                    }
+                    flat_sig.return_type = resolved_return_type.clone();
+                }
+            }
         }
 
+        // Build a map of parameter names to resolved types for patching.
+        let param_map: HashMap<String, Type> = resolved_param_types.into_iter().collect();
+
+        // Patch stale Unknown placeholders in the typed body.
+        let mut patched_body = typed_body;
+        patch_unknowns(&mut patched_body, &param_map, &name, &resolved_return_type);
+
         // Preserve original syntactic annotations in the typed AST.
-        FunctionDecl::new(name, func.params.clone(), func.return_type.clone(), typed_body)
+        FunctionDecl::new(name, func.params.clone(), func.return_type.clone(), patched_body)
     }
+
     // -------------------------------------------------------------------------
     // Type inference (attributes and methods)
     // -------------------------------------------------------------------------
@@ -350,6 +386,12 @@ impl<'a> InferState<'a> {
                             },
                             attr.initializer.span,
                         ));
+                    }
+                }
+                // Store the inferred type in the registry for later lookup.
+                if let Some(type_info) = self.registry.lookup_type_mut(type_name) {
+                    if let Some(attr_info) = type_info.attributes.get_mut(&attr.name) {
+                        attr_info.declared_type = Some(typed_init.anno.clone());
                     }
                 }
                 // Keep the original TypeRef annotation in the typed AST.
@@ -466,7 +508,7 @@ impl<'a> InferState<'a> {
     /// Returns the return type of the parent method if the current method overrides
     /// a parent method of the same name. Otherwise, reports
     /// `BaseOutsideOverridingMethod` and returns `Type::Error`.
-    fn infer_base_ref(&mut self, span: SourceSpan, env: &Environment) -> TypedExpr {
+    fn infer_base_ref(&mut self, span: SourceSpan, _env: &Environment) -> TypedExpr {
         if let (Some(owner), Some(method_name)) = (&self.current_type_owner, &self.current_method_name) {
             if let Some(info) = self.registry.lookup_type(owner) {
                 if let Some(parent) = &info.parent {
@@ -712,7 +754,7 @@ impl<'a> InferState<'a> {
         // 5. The let expression's type is the body's type.
         let body_type = typed_body.anno.clone();
         let let_typed = LetExpr::new(typed_bindings, typed_body);
-        
+
         typed_expr(ExprKind::Let(let_typed), body_type, let_expr.body.span)
     }
 
@@ -989,12 +1031,16 @@ impl<'a> InferState<'a> {
     /// treated as a method call, and the method is resolved on the object's type.
     /// Reports arity and type mismatches for arguments.
     fn infer_call(&mut self, call: &CallExpr, env: &mut Environment) -> TypedExpr {
-        let typed_callee = self.infer_expr(&call.callee, env);
-
-        // Global function call: callee is a bare variable.
+        // Global function call: callee is a bare variable naming a known function.
         if let ExprKind::Variable(name) = &call.callee.kind {
             if let Some(sig) = self.registry.lookup_function(name) {
-                // Clone before mutating self.
+                // Build the typed callee expression (annotation = return type).
+                let typed_callee = typed_expr(
+                    ExprKind::Variable(name.clone()),
+                    sig.return_type.clone(),
+                    call.callee.span,
+                );
+
                 let params: Vec<(String, Type)> = sig.params.clone();
                 let return_type = sig.return_type.clone();
 
@@ -1011,12 +1057,16 @@ impl<'a> InferState<'a> {
                         call.callee.span,
                     ));
                 } else {
-                    for (arg, (_, param_type)) in typed_args.iter().zip(&params) {
+                    for (idx, (arg, (_, param_type))) in typed_args.iter().zip(&params).enumerate() {
                         // Add constraint if argument is a variable and parameter type is concrete.
                         if let ExprKind::Variable(var_name) = &arg.kind {
                             if !matches!(param_type, Type::Unknown) {
                                 self.add_constraint_if_parameter(var_name, param_type.clone());
                             }
+                        }
+                        if matches!(param_type, Type::Unknown) && !matches!(arg.anno, Type::Unknown | Type::Error) {
+                            let param_name = &params[idx].0;
+                            self.add_constraint_if_parameter(param_name, arg.anno.clone());
                         }
                         if !arg.anno.conforms_to(&param_type, self.registry) {
                             self.errors.push(SemanticError::error(
@@ -1035,14 +1085,28 @@ impl<'a> InferState<'a> {
                     call.callee.span,
                 );
             }
+            // Bare name that is not a known function: a genuine undefined reference.
+            // Fall through to generic inference, which will raise UndefinedVariable.
         }
 
         // Method call: callee is a member access.
         if let ExprKind::Member(member) = &call.callee.kind {
+            // Infer the object, not the whole callee.
             let typed_obj = self.infer_expr(&member.object, env);
+            let obj_type = typed_obj.anno.clone();
             let method_name = &member.member;
-            if let Some(method_sig) = self.lookup_method(&typed_obj.anno, method_name) {
-                // Clone before mutating self.
+
+            if let Some(method_sig) = self.lookup_method(&obj_type, method_name) {
+                // Build the typed callee expression (member access with method's return type).
+                let typed_callee = typed_expr(
+                    ExprKind::Member(MemberExpr {
+                        object: Box::new(typed_obj),
+                        member: method_name.clone(),
+                    }),
+                    method_sig.return_type.clone(),
+                    member.object.span,
+                );
+
                 let params: Vec<(String, Type)> = method_sig.params.clone();
                 let return_type = method_sig.return_type.clone();
 
@@ -1059,12 +1123,16 @@ impl<'a> InferState<'a> {
                         call.callee.span,
                     ));
                 } else {
-                    for (arg, (_, param_type)) in typed_args.iter().zip(&params) {
+                    for (idx, (arg, (_, param_type))) in typed_args.iter().zip(&params).enumerate() {
                         // Add constraint if argument is a variable and parameter type is concrete.
                         if let ExprKind::Variable(var_name) = &arg.kind {
                             if !matches!(param_type, Type::Unknown) {
                                 self.add_constraint_if_parameter(var_name, param_type.clone());
                             }
+                        }
+                        if matches!(param_type, Type::Unknown) && !matches!(arg.anno, Type::Unknown | Type::Error) {
+                            let param_name = &params[idx].0;
+                            self.add_constraint_if_parameter(param_name, arg.anno.clone());
                         }
                         if !arg.anno.conforms_to(&param_type, self.registry) {
                             self.errors.push(SemanticError::error(
@@ -1077,24 +1145,25 @@ impl<'a> InferState<'a> {
                         }
                     }
                 }
-                let typed_member = typed_expr(
-                    ExprKind::Member(MemberExpr {
-                        object: Box::new(typed_obj),
-                        member: method_name.clone(),
-                    }),
-                    return_type.clone(),
-                    member.object.span,
-                );
                 return typed_expr(
-                    ExprKind::Call(CallExpr { callee: Box::new(typed_member), args: typed_args }),
+                    ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
                     return_type,
                     call.callee.span,
                 );
             } else {
                 self.errors.push(SemanticError::error(
-                    SemanticErrorKind::UnknownMember { ty: typed_obj.anno.clone(), member: method_name.clone() },
+                    SemanticErrorKind::UnknownMember { ty: obj_type, member: method_name.clone() },
                     call.callee.span,
                 ));
+                // Build a dummy callee and return error type.
+                let typed_callee = typed_expr(
+                    ExprKind::Member(MemberExpr {
+                        object: Box::new(typed_obj),
+                        member: method_name.clone(),
+                    }),
+                    Type::Error,
+                    call.callee.span,
+                );
                 return typed_expr(
                     ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: Vec::new() }),
                     Type::Error,
@@ -1103,7 +1172,90 @@ impl<'a> InferState<'a> {
             }
         }
 
-        // Fallback: unrecognized callee.
+        // Special case: base() call. The callee is a BaseRef.
+        if let ExprKind::BaseRef = &call.callee.kind {
+            if let (Some(owner), Some(method_name)) = (&self.current_type_owner, &self.current_method_name) {
+                if let Some(info) = self.registry.lookup_type(owner) {
+                    if let Some(parent) = &info.parent {
+                        if let Some(parent_info) = self.registry.lookup_type(&parent.name) {
+                            if let Some(parent_sig) = parent_info.methods.get(method_name) {
+                                let typed_callee = typed_expr(
+                                    ExprKind::BaseRef,
+                                    parent_sig.return_type.clone(),
+                                    call.callee.span,
+                                );
+
+                                let params: Vec<(String, Type)> = parent_sig.params.clone();
+                                let return_type = parent_sig.return_type.clone();
+
+                                let mut typed_args = Vec::new();
+                                for arg in &call.args {
+                                    typed_args.push(self.infer_expr(arg, env));
+                                }
+                                if typed_args.len() != params.len() {
+                                    self.errors.push(SemanticError::error(
+                                        SemanticErrorKind::ArityMismatch {
+                                            expected: params.len(),
+                                            found: typed_args.len(),
+                                        },
+                                        call.callee.span,
+                                    ));
+                                } else {
+                                    for (idx, (arg, (_, param_type))) in typed_args.iter().zip(&params).enumerate() {
+                                        // Add constraint if argument is a variable and param is concrete.
+                                        if let ExprKind::Variable(var_name) = &arg.kind {
+                                            if !matches!(param_type, Type::Unknown) {
+                                                self.add_constraint_if_parameter(var_name, param_type.clone());
+                                            }
+                                        }
+
+                                        // Add constraint if parameter is Unknown and argument type is concrete.
+                                        if matches!(param_type, Type::Unknown) && !matches!(arg.anno, Type::Unknown | Type::Error) {
+                                            let param_name = &params[idx].0;
+                                            self.add_constraint_if_parameter(param_name, arg.anno.clone());
+                                        }
+
+                                        // Conformance check.
+                                        if !arg.anno.conforms_to(&param_type, self.registry) {
+                                            self.errors.push(SemanticError::error(
+                                                SemanticErrorKind::NotConforming {
+                                                    found: arg.anno.clone(),
+                                                    expected: param_type.clone(),
+                                                },
+                                                arg.span,
+                                            ));
+                                        }
+                                    }
+                                }
+                                return typed_expr(
+                                    ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
+                                    return_type,
+                                    call.callee.span,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            // If base resolution fails, it's an error.
+            self.errors.push(SemanticError::error(
+                SemanticErrorKind::BaseOutsideOverridingMethod,
+                call.callee.span,
+            ));
+            let mut typed_args = Vec::new();
+            for arg in &call.args {
+                typed_args.push(self.infer_expr(arg, env));
+            }
+            return typed_expr(
+                ExprKind::Call(CallExpr { callee: Box::new(typed_expr(ExprKind::BaseRef, Type::Error, call.callee.span)), args: typed_args }),
+                Type::Error,
+                call.callee.span,
+            );
+        }
+
+        // Fallback: any other callee shape (e.g., a complex expression) or an
+        // undefined bare name is generically inferred here, exactly once.
+        let typed_callee = self.infer_expr(&call.callee, env);
         self.errors.push(SemanticError::error(
             SemanticErrorKind::UndefinedFunction { name: "unknown".to_string(), arity: call.args.len() },
             call.callee.span,
@@ -1556,13 +1708,20 @@ impl<'a> InferState<'a> {
     // Helpers
     // -----------------------------------------------------------------------------
 
-    // Helper to look up a method on a type.
+    // Helper to look up a method on a type or protocol.
     fn lookup_method(&self, ty: &Type, method_name: &str) -> Option<&MethodSignature> {
         match ty {
             Type::Named(name) => {
+                // Check class types first.
                 if let Some(info) = self.registry.lookup_type(name) {
                     // Use flattened methods.
                     if let Some(sig) = info.flattened_methods.get(method_name) {
+                        return Some(sig);
+                    }
+                }
+                // Then check protocols.
+                if let Some(proto) = self.registry.lookup_protocol(name) {
+                    if let Some(sig) = proto.flattened_methods.get(method_name) {
                         return Some(sig);
                     }
                 }
@@ -1579,17 +1738,17 @@ impl<'a> InferState<'a> {
     fn lookup_member(&self, ty: &Type, member_name: &str) -> Option<(Type, Type)> {
         match ty {
             Type::Named(name) => {
+                // 1. Attribute lookup (only on classes).
                 if let Some(info) = self.registry.lookup_type(name) {
-                    // Check attributes first.
                     if let Some(attr) = info.attributes.get(member_name) {
                         if let Some(declared) = &attr.declared_type {
                             return Some((Type::Named(name.clone()), declared.clone()));
                         }
                     }
-                    // Check methods.
-                    if let Some(method) = info.flattened_methods.get(member_name) {
-                        return Some((Type::Named(name.clone()), method.return_type.clone()));
-                    }
+                }
+                // 2. Method lookup (on both classes and protocols).
+                if let Some(method_sig) = self.lookup_method(ty, member_name) {
+                    return Some((Type::Named(name.clone()), method_sig.return_type.clone()));
                 }
                 None
             }
@@ -1615,4 +1774,456 @@ impl<'a> InferState<'a> {
 /// Helper to create a typed expression with the given kind, annotation, and span.
 fn typed_expr(kind: ExprKind<Type>, anno: Type, span: SourceSpan) -> TypedExpr {
     TypedExpr { kind, anno, span }
+}
+
+/// Walks a typed expression and replaces `Type::Unknown` annotations with
+/// resolved types for parameters and self‑recursive calls.
+fn patch_unknowns(
+    expr: &mut TypedExpr,
+    param_types: &HashMap<String, Type>,
+    current_function: &str,
+    return_type: &Type,
+) {
+    // Patch the current node if it's a variable or a recursive call.
+    match &mut expr.kind {
+        ExprKind::Variable(name) => {
+            if let Some(ty) = param_types.get(name) {
+                expr.anno = ty.clone();
+            }
+        }
+        ExprKind::Call(call) => {
+            if let ExprKind::Variable(callee_name) = &call.callee.kind {
+                if callee_name == current_function {
+                    expr.anno = return_type.clone();
+                    call.callee.anno = return_type.clone(); // patch the nested callee too
+                }
+            }
+            // Cover methods that call themselves (e. g. via self.m())
+            if let ExprKind::Member(member) = &call.callee.kind {
+                if member.member == *current_function {
+                    if let ExprKind::SelfRef = member.object.kind {
+                        expr.anno = return_type.clone();
+                        call.callee.anno = return_type.clone();
+                    }
+                }
+            }
+            // Recurse into children.
+            patch_unknowns(&mut call.callee, param_types, current_function, return_type);
+            for arg in &mut call.args {
+                patch_unknowns(arg, param_types, current_function, return_type);
+            }
+            // Return early because we already recursed into children.
+            return;
+        }
+        _ => {}
+    }
+
+    // For all other node types, recurse into their children.
+    match &mut expr.kind {
+        ExprKind::Unary(unary) => {
+            patch_unknowns(&mut unary.expr, param_types, current_function, return_type);
+        }
+        ExprKind::Binary(binary) => {
+            patch_unknowns(&mut binary.left, param_types, current_function, return_type);
+            patch_unknowns(&mut binary.right, param_types, current_function, return_type);
+        }
+        ExprKind::Let(let_expr) => {
+            for binding in &mut let_expr.bindings {
+                patch_unknowns(&mut binding.initializer, param_types, current_function, return_type);
+            }
+            patch_unknowns(&mut let_expr.body, param_types, current_function, return_type);
+        }
+        ExprKind::Assign(assign) => {
+            patch_unknowns(&mut assign.value, param_types, current_function, return_type);
+            // Target contains expressions; patch them.
+            match &mut assign.target {
+                AssignTarget::Variable(_) => {}
+                AssignTarget::Member { object, .. } => {
+                    patch_unknowns(object, param_types, current_function, return_type);
+                }
+                AssignTarget::Index { object, index } => {
+                    patch_unknowns(object, param_types, current_function, return_type);
+                    patch_unknowns(index, param_types, current_function, return_type);
+                }
+            }
+        }
+        ExprKind::Block(block) => {
+            for e in &mut block.expressions {
+                patch_unknowns(e, param_types, current_function, return_type);
+            }
+        }
+        ExprKind::If(if_expr) => {
+            patch_unknowns(&mut if_expr.condition, param_types, current_function, return_type);
+            patch_unknowns(&mut if_expr.then_branch, param_types, current_function, return_type);
+            for elif in &mut if_expr.elif_branches {
+                patch_unknowns(&mut elif.condition, param_types, current_function, return_type);
+                patch_unknowns(&mut elif.body, param_types, current_function, return_type);
+            }
+            patch_unknowns(&mut if_expr.else_branch, param_types, current_function, return_type);
+        }
+        ExprKind::While(while_expr) => {
+            patch_unknowns(&mut while_expr.condition, param_types, current_function, return_type);
+            patch_unknowns(&mut while_expr.body, param_types, current_function, return_type);
+        }
+        ExprKind::For(for_expr) => {
+            patch_unknowns(&mut for_expr.iterable, param_types, current_function, return_type);
+            patch_unknowns(&mut for_expr.body, param_types, current_function, return_type);
+        }
+        ExprKind::Call(call) => {
+            // We already handled Call in the earlier match; this is a catch‑all for safety.
+            patch_unknowns(&mut call.callee, param_types, current_function, return_type);
+            for arg in &mut call.args {
+                patch_unknowns(arg, param_types, current_function, return_type);
+            }
+            println!("Patching call to {} at {:?}", current_function, expr.span);
+        }
+        ExprKind::Member(member) => {
+            patch_unknowns(&mut member.object, param_types, current_function, return_type);
+        }
+        ExprKind::New(new_expr) => {
+            for arg in &mut new_expr.args {
+                patch_unknowns(arg, param_types, current_function, return_type);
+            }
+        }
+        ExprKind::TypeTest(type_test) => {
+            patch_unknowns(&mut type_test.expr, param_types, current_function, return_type);
+        }
+        ExprKind::Downcast(downcast) => {
+            patch_unknowns(&mut downcast.expr, param_types, current_function, return_type);
+        }
+        ExprKind::Vector(vector) => match vector {
+            VectorExpr::Literal(items) => {
+                for item in items {
+                    patch_unknowns(item, param_types, current_function, return_type);
+                }
+            }
+            VectorExpr::Comprehension(comp) => {
+                patch_unknowns(&mut comp.expr, param_types, current_function, return_type);
+                patch_unknowns(&mut comp.iterable, param_types, current_function, return_type);
+            }
+        },
+        ExprKind::Index(index) => {
+            patch_unknowns(&mut index.object, param_types, current_function, return_type);
+            patch_unknowns(&mut index.index, param_types, current_function, return_type);
+        }
+        ExprKind::Match(match_expr) => {
+            patch_unknowns(&mut match_expr.value, param_types, current_function, return_type);
+            for case in &mut match_expr.cases {
+                patch_unknowns(&mut case.body, param_types, current_function, return_type);
+            }
+        }
+        // Leaves: Literal, Variable, SelfRef, BaseRef already handled above.
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hulk_lexer::Lexer;
+    use hulk_parser::parse;
+    use crate::seeded_registry;
+    use crate::error::Severity;
+    use crate::passes::{collect, hierarchy, infer};
+    use crate::analyze;
+
+    fn parse_and_infer(src: &str) -> (TypeRegistry, Vec<SemanticError>) {
+        let tokens = Lexer::new(src).tokenize().expect("lex ok");
+        let program = parse(tokens).expect("parse ok");
+        let mut registry = seeded_registry();
+        let mut errors = Vec::new();
+        collect::run(&program, &mut registry, &mut errors);
+        if errors.iter().any(|e| e.severity == Severity::Error) { return (registry, errors); }
+        hierarchy::run(&mut registry, &mut errors);
+        if errors.iter().any(|e| e.severity == Severity::Error) { return (registry, errors); }
+        let _ = infer::run(&program, &mut registry, &mut errors);
+        (registry, errors)
+    }
+
+    // ---- Name resolution ----
+    #[test]
+    fn undefined_variable() {
+        let src = "print(x);";
+        let (_, errors) = parse_and_infer(src);
+        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::UndefinedVariable(ref name) if name == "x")));
+    }
+
+    #[test]
+    fn self_ref_inside_method() {
+        let src = "type A { f() => self; } print (0);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "self reference should work: {:?}", result.err());
+    }
+
+    #[test]
+    fn shadowing_example_from_spec() {
+        // §A.4.5: let a = 20 in { let a = 42 in print(a); print(a); }
+        let src = "let a = 20 in { let a = 42 in print(a); print(a); }";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "shadowing should be allowed");
+    }
+
+    // ---- Operators ----
+    #[test]
+    fn arithmetic_operators() {
+        let src = "print(1 + 2 * 3 / 4 - 5);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn comparison_operators() {
+        let src = "print(1 < 2 & 3 >= 4);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn invalid_operator_operands() {
+        let src = "print(\"hello\" + 1);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err());
+        let errs = result.err().unwrap();
+        assert!(errs.iter().any(|e| matches!(e.kind, SemanticErrorKind::InvalidOperator { .. })));
+    }
+
+    // ---- Control flow ----
+    #[test]
+    fn if_expression_branch_unification() {
+        let src = "print(if (true) 1 else 2);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn non_boolean_condition() {
+        let src = "if (42) print(1) else print(2);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err());
+        let errs = result.err().unwrap();
+        assert!(errs.iter().any(|e| matches!(e.kind, SemanticErrorKind::NonBooleanCondition(Type::Number))));
+    }
+
+    #[test]
+    fn for_loop_over_range() {
+        let src = "for (x in range(0, 10)) print(x);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok());
+    }
+
+    // ---- Inference examples from §A.9.4 ----
+    #[test]
+    fn fib_inference() {
+        let src = "
+            function fib(n) => if (n == 0 | n == 1) 1 else fib(n-1) + fib(n-2);
+            print(fib(10));
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "fib inference failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn fact_inference() {
+        let src = "
+            function fact(x) => let f = 1 in for (i in range(1, x+1)) f := f * i;
+            print(fact(5));
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn let_x_42_inference() {
+        let src = "let x = 42 in print(x);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok());
+    }
+
+    // ---- Vectors ----
+    #[test]
+    fn vector_literal_lca() {
+        let src = "let v = [1, 2, 3] in print(v[0]);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn vector_comprehension() {
+        let src = "let xs = [x^2 | x in range(1,10)] in print(xs[0]);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn index_on_non_vector() {
+        let src = "let x = 42 in print(x[0]);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err());
+        let errs = result.err().unwrap();
+        assert!(errs.iter().any(|e| matches!(e.kind, SemanticErrorKind::IndexOnNonVector(Type::Number))));
+    }
+
+    // ---- is/as/match ----
+    #[test]
+    fn is_expression() {
+        let src = "
+            type A { }
+            let x = new A() in print(x is A);
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn downcast_unreachable_warning() {
+        let src = "
+            type A { }
+            type B { }
+            let x = new A() in let y = x as B in print(y);
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok()); // warning, not error
+        let warnings = result.unwrap().warnings;
+        assert!(warnings.iter().any(|e| matches!(e.kind, SemanticErrorKind::UnreachableDowncast { from: Type::Named(ref a), to: Type::Named(ref b) } if a == "A" && b == "B")));
+    }
+
+    #[test]
+    fn match_non_exhaustive_warning() {
+        let src = "
+            let x = 5 in match x {
+                case 1 => print(1);
+                case 2 => print(2);
+            }
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok());
+        let warnings = result.unwrap().warnings;
+        assert!(warnings.iter().any(|e| matches!(e.kind, SemanticErrorKind::NonExhaustiveMatch)));
+    }
+
+    // ---- Recursive unresolvable ----
+    #[test]
+    fn unresolvable_recursion() {
+        // A function that only calls itself without base case
+        let src = "function loop() => loop(); print(loop());";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err());
+        let errs = result.err().unwrap();
+        assert!(errs.iter().any(|e| matches!(&e.kind, SemanticErrorKind::CannotInferType { symbol } if symbol == "loop")));
+    }
+
+    // ---- Extended tests ----
+
+    /// Tests that a method calling itself via `self` with an unannotated return type
+    /// infers correctly, and that `patch_unknowns` handles Member callees.
+    #[test]
+    fn recursive_method_self_call_unannotated_return_type() {
+        let src = "
+            type Counter(n) {
+                n = n;
+                tick() => if (self.n == 0) 0 else self.tick();
+            }
+            let c = new Counter(5) in print(c.tick());
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "recursive self‑call via self should work: {:?}", result.err());
+    }
+
+    /// Tests that mutual recursion between two functions without explicit return types
+    /// is currently a known limitation. This test documents the gap and ensures it fails
+    /// predictably rather than silently producing wrong results.
+    #[test]
+    fn mutual_recursion_two_functions() {
+        let src = "
+            function isEven(n) => if (n == 0) true else isOdd(n-1);
+            function isOdd(n) => if (n == 0) false else isEven(n-1);
+            print(isEven(4));
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err(), "mutual recursion should fail with CannotInferType");
+        let errors = result.err().unwrap();
+        // At least one of the functions should have a CannotInferType error.
+        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::CannotInferType { .. })),
+            "expected CannotInferType for mutual recursion");
+    }
+
+    /// Tests that an unannotated function parameter used in two incompatible contexts
+    /// inside the same body produces an `AmbiguousInference` error.
+    #[test]
+    fn ambiguous_function_parameter() {
+        // The parameter `x` is used in arithmetic (requires Number) and as an argument
+        // to a function expecting a class type `A` (requires `x` to be `A` or a subtype).
+        let src = "
+            type A { }
+            function g(y: A) => y;
+            function f(x) => if (true) x + 1 else g(x);
+            print(f(42));
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err(), "expected ambiguity error");
+        let errors = result.err().unwrap();
+        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::AmbiguousInference { .. })),
+            "missing AmbiguousInference error; got errors: {:?}", errors);
+    }
+    
+    /// Tests that `patch_unknowns` correctly handles deep member‑access chains.
+    /// A method that returns `self` and is called multiple times creates nested `Member`
+    /// expressions; all of them must be patched without panicking or leaving `Unknown`.
+    #[test]
+    fn deep_member_chain_recursion() {
+        let src = "
+            type A {
+                f(): A => self;
+                g(): A => self.f().f().g();
+            }
+            let x = new A().f().f().g() in print(x);
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "deep member chain should type‑check: {:?}", result.err());
+    }
+
+    /// Tests that vector literals containing instances of a type whose constructor
+    /// parameters are resolved (via Pass 1.5) correctly produce a vector type with
+    /// the resolved element type, rather than leaving `Unknown` in the LCA.
+    #[test]
+    fn vector_of_unannotated_constructor_type() {
+        let src = "
+            type Person(firstname, lastname) {
+                firstname = firstname;
+                lastname = lastname;
+            }
+            let v = [new Person(\"a\", \"b\"), new Person(\"c\", \"d\")] in print(v);
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        if let Err(errs) = &result {
+            println!("Errors: {:#?}", errs);
+        }
+        assert!(result.is_ok(), "vector of unresolved constructor types should work: {:?}", result.err());
+
+        // Verify that the vector's element type is `Named("Person")`.
+        let typed_program = result.unwrap().typed_program;
+        let entry = &typed_program.entry;
+
+        // Entry is a LetExpr: let v = [new Person(...), new Person(...)] in print(v)
+        if let ExprKind::Let(let_expr) = &entry.kind {
+            // The binding initializer is the vector literal.
+            let binding = &let_expr.bindings[0];
+            if let ExprKind::Vector(vector) = &binding.initializer.kind {
+                match vector {
+                    VectorExpr::Literal(_) => {
+                        if let Type::Vector(inner) = &binding.initializer.anno {
+                            assert_eq!(**inner, Type::Named("Person".to_string()));
+                        } else {
+                            panic!("vector type should be Vector, got {:?}", binding.initializer.anno);
+                        }
+                    }
+                    _ => panic!("expected vector literal"),
+                }
+            } else {
+                panic!("expected vector expression as initializer");
+            }
+        } else {
+            panic!("entry expression is not a let");
+        }
+    }
 }
