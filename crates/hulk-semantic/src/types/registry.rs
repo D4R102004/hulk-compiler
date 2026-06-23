@@ -432,6 +432,66 @@ impl TypeRegistry {
             .and_then(|info| info.parent.as_ref())
             .map(|parent| parent.name.clone())
     }
+    
+    /// Returns `Ok(())` if `type_name` structurally implements `protocol_name`.
+    /// Returns `Err(missing)` where `missing` is a list of method names that are
+    /// either missing from the type or have incompatible signatures (arity, variance).
+    pub fn protocol_conformance_details(
+        &self,
+        type_name: &str,
+        protocol_name: &str,
+    ) -> Result<(), Vec<String>> {
+        let type_info = match self.lookup_type(type_name) {
+            Some(info) => info,
+            None => return Err(vec!["type not found".to_string()]),
+        };
+        let protocol_info = match self.lookup_protocol(protocol_name) {
+            Some(info) => info,
+            None => return Err(vec!["protocol not found".to_string()]),
+        };
+
+        let type_methods = if !type_info.flattened_methods.is_empty() {
+            &type_info.flattened_methods
+        } else {
+            &type_info.methods
+        };
+
+        let mut missing = Vec::new();
+        for (method_name, proto_sig) in &protocol_info.flattened_methods {
+            if let Some(type_sig) = type_methods.get(method_name) {
+                // Check arity and variance.
+                if type_sig.params.len() != proto_sig.params.len() {
+                    missing.push(method_name.clone());
+                    continue;
+                }
+                // Check contravariance of parameters: protocol param <= type param.
+                let mut ok = true;
+                for ((_, p_type), (_, t_type)) in proto_sig.params.iter().zip(&type_sig.params) {
+                    if !p_type.conforms_to(t_type, self) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if !ok {
+                    missing.push(method_name.clone());
+                    continue;
+                }
+                // Check covariance of return: type return <= protocol return.
+                if !type_sig.return_type.conforms_to(&proto_sig.return_type, self) {
+                    missing.push(method_name.clone());
+                    continue;
+                }
+            } else {
+                missing.push(method_name.clone());
+            }
+        }
+
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(missing)
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------

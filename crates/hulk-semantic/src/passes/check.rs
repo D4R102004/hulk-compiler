@@ -330,22 +330,47 @@ impl<'a> Checker<'a> {
     // -------------------------------------------------------------------------
 
     /// Verifies that the actual type conforms to the expected type.
-    /// If not, appends a `NotConforming` error at the given span.
+    /// If not, and expected is a protocol and actual is Named, try 
+    /// to get detailed missing list. Otherwise appends a `NotConforming` 
+    /// error at the given span.
     fn check_conformance(
         &mut self,
         actual_type: &Type,
         expected_type: &Type,
         span: SourceSpan,
     ) {
-        if !actual_type.conforms_to(expected_type, self.registry) {
-            self.errors.push(SemanticError::error(
-                SemanticErrorKind::NotConforming {
-                    found: actual_type.clone(),
-                    expected: expected_type.clone(),
-                },
-                span,
-            ));
+        if actual_type.conforms_to(expected_type, self.registry) {
+            return;
         }
+        // If expected is a protocol and actual is Named, try to get detailed missing list.
+        if let Type::Named(actual_name) = actual_type {
+            if let Type::Named(protocol_name) = expected_type {
+                if self.registry.is_protocol(expected_type) {
+                    if let Err(missing) = self
+                        .registry
+                        .protocol_conformance_details(actual_name, protocol_name)
+                    {
+                        self.errors.push(SemanticError::error(
+                            SemanticErrorKind::ProtocolNotImplemented {
+                                ty: actual_type.clone(),
+                                protocol: protocol_name.clone(),
+                                missing,
+                            },
+                            span,
+                        ));
+                        return;
+                    }
+                }
+            }
+        }
+        // Fallback to generic NotConforming.
+        self.errors.push(SemanticError::error(
+            SemanticErrorKind::NotConforming {
+                found: actual_type.clone(),
+                expected: expected_type.clone(),
+            },
+            span,
+        ));
     }
 
     // -------------------------------------------------------------------------
