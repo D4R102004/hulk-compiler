@@ -21,7 +21,7 @@ use hulk_ast::{
 };
 
 use crate::environment::Environment;
-use crate::error::{SemanticError, SemanticErrorKind};
+use crate::error::{SemanticError, SemanticErrorKind, };
 use crate::typed::{TypedExpr, TypedProgram};
 use crate::types::registry::{MethodSignature, TypeRegistry};
 use crate::types::{Type, lowest_common_ancestor};
@@ -840,8 +840,16 @@ impl<'a> InferState<'a> {
             }
             AssignTarget::Member { object, field } => {
                 let typed_obj = self.infer_expr(object, env);
-                if let Some((_, member_type)) = self.lookup_member(&typed_obj.anno, field) {
-                    (member_type, AssignTarget::Member { object: Box::new(typed_obj), field: field.clone() })
+                if let Some((_owner_type, member_type)) = self.lookup_member(&typed_obj.anno, field) {
+                    if matches!(member_type, Type::Function { .. }) {
+                        self.errors.push(SemanticError::error(
+                            SemanticErrorKind::AssignToMethod { method: field.clone() },
+                            object.span,
+                        ));
+                        (Type::Error, AssignTarget::Member { object: Box::new(typed_obj), field: field.clone() })
+                    } else {
+                        (member_type, AssignTarget::Member { object: Box::new(typed_obj), field: field.clone() })
+                    }
                 } else {
                     self.errors.push(SemanticError::error(
                         SemanticErrorKind::UnknownMember { ty: typed_obj.anno.clone(), member: field.clone() },
@@ -997,153 +1005,15 @@ impl<'a> InferState<'a> {
 
     /// Resolves a function or method call.
     ///
-    /// If the callee is a variable name, it is treated as a global function call
-    /// and looked up in the registry. If the callee is a member access, it is
-    /// treated as a method call, and the method is resolved on the object's type.
-    /// Reports arity and type mismatches for arguments.
+    /// If the callee is a variable name naming a global function, it is handled
+    /// via the registry. If the callee is a `base` reference, it is handled as
+    /// an overriding method call. Otherwise, the callee is inferred, and if its
+    /// type is `Type::Function`, it is called with the provided arguments.
+    /// Reports arity and type mismatches.
     fn infer_call(&mut self, call: &CallExpr, env: &mut Environment) -> TypedExpr {
-        // Global function call: callee is a bare variable naming a known function.
-        if let ExprKind::Variable(name) = &call.callee.kind {
-            if let Some(sig) = self.registry.lookup_function(name) {
-                // Build the typed callee expression (annotation = return type).
-                let typed_callee = typed_expr(
-                    ExprKind::Variable(name.clone()),
-                    sig.return_type.clone(),
-                    call.callee.span,
-                );
 
-                let params: Vec<(String, Type)> = sig.params.clone();
-                let return_type = sig.return_type.clone();
-
-                let mut typed_args = Vec::new();
-                for arg in &call.args {
-                    typed_args.push(self.infer_expr(arg, env));
-                }
-                if typed_args.len() != params.len() {
-                    self.errors.push(SemanticError::error(
-                        SemanticErrorKind::ArityMismatch {
-                            expected: params.len(),
-                            found: typed_args.len(),
-                        },
-                        call.callee.span,
-                    ));
-                } else {
-                    for (idx, (arg, (_, param_type))) in typed_args.iter().zip(&params).enumerate() {
-                        // Add constraint if argument is a variable and parameter type is concrete.
-                        if let ExprKind::Variable(var_name) = &arg.kind {
-                            if !matches!(param_type, Type::Unknown) {
-                                self.add_constraint_if_parameter(var_name, param_type.clone());
-                            }
-                        }
-                        if matches!(param_type, Type::Unknown) && !matches!(arg.anno, Type::Unknown | Type::Error) {
-                            let param_name = &params[idx].0;
-                            self.add_constraint_if_parameter(param_name, arg.anno.clone());
-                        }
-                        if !arg.anno.conforms_to(&param_type, self.registry) {
-                            self.errors.push(SemanticError::error(
-                                SemanticErrorKind::NotConforming {
-                                    found: arg.anno.clone(),
-                                    expected: param_type.clone(),
-                                },
-                                arg.span,
-                            ));
-                        }
-                    }
-                }
-                return typed_expr(
-                    ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
-                    return_type,
-                    call.callee.span,
-                );
-            }
-            // Bare name that is not a known function: a genuine undefined reference.
-            // Fall through to generic inference, which will raise UndefinedVariable.
-        }
-
-        // Method call: callee is a member access.
-        if let ExprKind::Member(member) = &call.callee.kind {
-            // Infer the object, not the whole callee.
-            let typed_obj = self.infer_expr(&member.object, env);
-            let obj_type = typed_obj.anno.clone();
-            let method_name = &member.member;
-
-            if let Some(method_sig) = self.lookup_method(&obj_type, method_name) {
-                // Build the typed callee expression (member access with method's return type).
-                let typed_callee = typed_expr(
-                    ExprKind::Member(MemberExpr {
-                        object: Box::new(typed_obj),
-                        member: method_name.clone(),
-                    }),
-                    method_sig.return_type.clone(),
-                    member.object.span,
-                );
-
-                let params: Vec<(String, Type)> = method_sig.params.clone();
-                let return_type = method_sig.return_type.clone();
-
-                let mut typed_args = Vec::new();
-                for arg in &call.args {
-                    typed_args.push(self.infer_expr(arg, env));
-                }
-                if typed_args.len() != params.len() {
-                    self.errors.push(SemanticError::error(
-                        SemanticErrorKind::ArityMismatch {
-                            expected: params.len(),
-                            found: typed_args.len(),
-                        },
-                        call.callee.span,
-                    ));
-                } else {
-                    for (idx, (arg, (_, param_type))) in typed_args.iter().zip(&params).enumerate() {
-                        // Add constraint if argument is a variable and parameter type is concrete.
-                        if let ExprKind::Variable(var_name) = &arg.kind {
-                            if !matches!(param_type, Type::Unknown) {
-                                self.add_constraint_if_parameter(var_name, param_type.clone());
-                            }
-                        }
-                        if matches!(param_type, Type::Unknown) && !matches!(arg.anno, Type::Unknown | Type::Error) {
-                            let param_name = &params[idx].0;
-                            self.add_constraint_if_parameter(param_name, arg.anno.clone());
-                        }
-                        if !arg.anno.conforms_to(&param_type, self.registry) {
-                            self.errors.push(SemanticError::error(
-                                SemanticErrorKind::NotConforming {
-                                    found: arg.anno.clone(),
-                                    expected: param_type.clone(),
-                                },
-                                arg.span,
-                            ));
-                        }
-                    }
-                }
-                return typed_expr(
-                    ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
-                    return_type,
-                    call.callee.span,
-                );
-            } else {
-                self.errors.push(SemanticError::error(
-                    SemanticErrorKind::UnknownMember { ty: obj_type, member: method_name.clone() },
-                    call.callee.span,
-                ));
-                // Build a dummy callee and return error type.
-                let typed_callee = typed_expr(
-                    ExprKind::Member(MemberExpr {
-                        object: Box::new(typed_obj),
-                        member: method_name.clone(),
-                    }),
-                    Type::Error,
-                    call.callee.span,
-                );
-                return typed_expr(
-                    ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: Vec::new() }),
-                    Type::Error,
-                    call.callee.span,
-                );
-            }
-        }
-
-        // Special case: base() call. The callee is a BaseRef.
+        // ─── Special case: base() call ──────────────────────────────────────
+        
         if let ExprKind::BaseRef = &call.callee.kind {
             if let (Some(owner), Some(method_name)) = (&self.current_type_owner, &self.current_method_name) {
                 if let Some(info) = self.registry.lookup_type(owner) {
@@ -1163,41 +1033,7 @@ impl<'a> InferState<'a> {
                                 for arg in &call.args {
                                     typed_args.push(self.infer_expr(arg, env));
                                 }
-                                if typed_args.len() != params.len() {
-                                    self.errors.push(SemanticError::error(
-                                        SemanticErrorKind::ArityMismatch {
-                                            expected: params.len(),
-                                            found: typed_args.len(),
-                                        },
-                                        call.callee.span,
-                                    ));
-                                } else {
-                                    for (idx, (arg, (_, param_type))) in typed_args.iter().zip(&params).enumerate() {
-                                        // Add constraint if argument is a variable and param is concrete.
-                                        if let ExprKind::Variable(var_name) = &arg.kind {
-                                            if !matches!(param_type, Type::Unknown) {
-                                                self.add_constraint_if_parameter(var_name, param_type.clone());
-                                            }
-                                        }
-
-                                        // Add constraint if parameter is Unknown and argument type is concrete.
-                                        if matches!(param_type, Type::Unknown) && !matches!(arg.anno, Type::Unknown | Type::Error) {
-                                            let param_name = &params[idx].0;
-                                            self.add_constraint_if_parameter(param_name, arg.anno.clone());
-                                        }
-
-                                        // Conformance check.
-                                        if !arg.anno.conforms_to(&param_type, self.registry) {
-                                            self.errors.push(SemanticError::error(
-                                                SemanticErrorKind::NotConforming {
-                                                    found: arg.anno.clone(),
-                                                    expected: param_type.clone(),
-                                                },
-                                                arg.span,
-                                            ));
-                                        }
-                                    }
-                                }
+                                self.check_call_arity_and_types(&typed_args, &params, call.callee.span);
                                 return typed_expr(
                                     ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
                                     return_type,
@@ -1208,7 +1044,6 @@ impl<'a> InferState<'a> {
                     }
                 }
             }
-            // If base resolution fails, it's an error.
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::BaseOutsideOverridingMethod,
                 call.callee.span,
@@ -1218,17 +1053,71 @@ impl<'a> InferState<'a> {
                 typed_args.push(self.infer_expr(arg, env));
             }
             return typed_expr(
-                ExprKind::Call(CallExpr { callee: Box::new(typed_expr(ExprKind::BaseRef, Type::Error, call.callee.span)), args: typed_args }),
+                ExprKind::Call(CallExpr {
+                    callee: Box::new(typed_expr(ExprKind::BaseRef, Type::Error, call.callee.span)),
+                    args: typed_args,
+                }),
                 Type::Error,
                 call.callee.span,
             );
         }
 
-        // Fallback: any other callee shape (e.g., a complex expression) or an
-        // undefined bare name is generically inferred here, exactly once.
+        // ─── Special case: global function call ─────────────────────────────
+
+        // Global functions (like `print`) are not values; they are only callable, and their 
+        // return type is known from the registry, not from a `Type::Function` annotation.
+        if let ExprKind::Variable(name) = &call.callee.kind {
+            if let Some(sig) = self.registry.lookup_function(name) {
+                let params: Vec<(String, Type)> = sig.params.clone();
+                let return_type = sig.return_type.clone();
+                let typed_callee = typed_expr(
+                    ExprKind::Variable(name.clone()),
+                    sig.return_type.clone(),
+                    call.callee.span,
+                );
+
+                let mut typed_args = Vec::new();
+                for arg in &call.args {
+                    typed_args.push(self.infer_expr(arg, env));
+                }
+                self.check_call_arity_and_types(&typed_args, &params, call.callee.span);
+                return typed_expr(
+                    ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
+                    return_type,
+                    call.callee.span,
+                );
+            }
+        }
+
+        // ─── Infer the callee expression ─────────────────────────────────────
+
         let typed_callee = self.infer_expr(&call.callee, env);
+
+        // ─── Generic callable: callee has Function type ─────────────────────
+
+        if let Type::Function { params, return_type } = typed_callee.anno.clone() {
+            let mut typed_args = Vec::new();
+            for arg in &call.args {
+                typed_args.push(self.infer_expr(arg, env));
+            }
+            // Convert params to (String, Type) for arity/type checking.
+            let param_names: Vec<String> = (0..params.len()).map(|i| format!("arg{}", i)).collect();
+            let param_types: Vec<(String, Type)> = param_names
+                .into_iter()
+                .zip(params.into_iter())
+                .collect();
+            self.check_call_arity_and_types(&typed_args, &param_types, call.callee.span);
+            return typed_expr(
+                ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
+                *return_type,
+                call.callee.span,
+            );
+        }
+
+        // ─── Fallback: not callable ─────────────────────────────────────────
+
         self.errors.push(SemanticError::error(
-            SemanticErrorKind::UndefinedFunction { name: "unknown".to_string(), arity: call.args.len() },
+            SemanticErrorKind::CallOnNonFunction { ty: typed_callee.anno.clone() },
             call.callee.span,
         ));
         let mut typed_args = Vec::new();
@@ -1240,6 +1129,48 @@ impl<'a> InferState<'a> {
             Type::Error,
             call.callee.span,
         )
+    }
+
+    /// Helper: checks arity and type conformance of call arguments.
+    /// Pushes errors and adds parameter constraints for unannotated parameters.
+    fn check_call_arity_and_types(
+        &mut self,
+        typed_args: &[TypedExpr],
+        params: &[(String, Type)],
+        span: SourceSpan,
+    ) {
+        if typed_args.len() != params.len() {
+            self.errors.push(SemanticError::error(
+                SemanticErrorKind::ArityMismatch {
+                    expected: params.len(),
+                    found: typed_args.len(),
+                },
+                span,
+            ));
+            return;
+        }
+        for (_idx, (arg, (param_name, param_type))) in typed_args.iter().zip(params).enumerate() {
+            // Add constraint if argument is a variable and param type is concrete.
+            if let ExprKind::Variable(var_name) = &arg.kind {
+                if !matches!(param_type, Type::Unknown) {
+                    self.add_constraint_if_parameter(var_name, param_type.clone());
+                }
+            }
+            // If param is Unknown and argument is concrete, add constraint.
+            if matches!(param_type, Type::Unknown) && !matches!(arg.anno, Type::Unknown | Type::Error) {
+                self.add_constraint_if_parameter(param_name, arg.anno.clone());
+            }
+            // Conformance check.
+            if !arg.anno.conforms_to(param_type, self.registry) {
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::NotConforming {
+                        found: arg.anno.clone(),
+                        expected: param_type.clone(),
+                    },
+                    arg.span,
+                ));
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -1708,17 +1639,32 @@ impl<'a> InferState<'a> {
                         }
                     }
                 }
-                // 2. Method lookup on both classes and protocols using generic-aware helper.
+                // 2. Method lookup -> return Function type.
                 if let Some(method_sig) = self.lookup_method(ty, member_name) {
-                    return Some((Type::Named(name.clone()), method_sig.return_type));
+                    let param_types: Vec<Type> = method_sig.params.iter()
+                        .map(|(_, t)| t.clone())
+                        .collect();
+                    let return_type = method_sig.return_type.clone();
+                    let func_type = Type::Function {
+                        params: param_types,
+                        return_type: Box::new(return_type),
+                    };
+                    return Some((Type::Named(name.clone()), func_type));
                 }
                 None
             }
-            // For Vector and Iterable, only methods exist (no attributes).
+            // For Vector and Iterable, we still need method lookup (no attributes).
             Type::Vector(_) | Type::Iterable(_) => {
                 if let Some(method_sig) = self.lookup_method(ty, member_name) {
-                    // Owner is the type itself.
-                    return Some((ty.clone(), method_sig.return_type));
+                    let param_types: Vec<Type> = method_sig.params.iter()
+                        .map(|(_, t)| t.clone())
+                        .collect();
+                    let return_type = method_sig.return_type.clone();
+                    let func_type = Type::Function {
+                        params: param_types,
+                        return_type: Box::new(return_type),
+                    };
+                    return Some((ty.clone(), func_type));
                 }
                 None
             }
@@ -2336,5 +2282,96 @@ mod tests {
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
         assert!(result.is_ok(), "loop variable should be Number and usable in arithmetic");
+    }
+
+    // ─── Function type / method reference tests ────────────────────────────
+
+    /// Tests that a method reference can be stored and called later.
+    #[test]
+    fn method_reference_stored_and_called() {
+        let src = "
+            type Counter(n) {
+                n = n;
+                tick(): Number => self.n + 1;
+            }
+            let c = new Counter(5) in {
+                let f = c.tick in   // method reference
+                print(f());
+            }
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "method reference should work: {:?}", result.err());
+    }
+
+    /// Tests that a method reference can be called with arguments.
+    #[test]
+    fn method_reference_with_arguments() {
+        let src = "
+            type Calc {
+                add(x: Number, y: Number): Number => x + y;
+            }
+            let c = new Calc() in {
+                let f = c.add in
+                print(f(3, 4));
+            }
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "method reference with args should work: {:?}", result.err());
+    }
+
+    /// Tests that assigning to a method is rejected.
+    #[test]
+    fn assign_to_method_rejected() {
+        let src = "
+            type Counter(n) {
+                n = n;
+                tick(): Number => self.n + 1;
+            }
+            let c = new Counter(5) in {
+                c.tick := 42;   // ERROR: cannot assign to method
+                print(c.tick());
+            }
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err(), "assignment to method should fail");
+        let errors = result.err().unwrap();
+        assert!(
+            errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::AssignToMethod { .. })),
+            "expected AssignToMethod error; got: {:?}", errors
+        );
+    }
+
+    /// Tests that calling a non‑function value is rejected.
+    #[test]
+    fn call_on_non_function_rejected() {
+        let src = "
+            let x = 5 in
+            x();   // ERROR: cannot call number
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err(), "calling a non‑function should fail");
+        let errors = result.err().unwrap();
+        assert!(
+            errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::CallOnNonFunction { .. })),
+            "expected CallOnNonFunction error; got: {:?}", errors
+        );
+    }
+
+    /// Tests that a method reference is correctly typed as a function
+    /// by using it in a context that expects a function type.
+    #[test]
+    #[ignore = "parser does not support function type annotations yet"]
+    fn method_reference_type_is_function() {
+        let src = "
+            type A {
+                f(): Number => 42;
+            }
+            let a = new A() in {
+                let g: (): Number = a.f;   // explicit function type annotation
+                print(g());
+            }
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "method reference with function type annotation should work: {:?}", result.err());
     }
 }

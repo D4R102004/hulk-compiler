@@ -57,6 +57,15 @@ pub enum Type {
     /// `Iterable<T>` — the `T*` annotation sugar (§A.11.2) and the
     /// builtin `Iterable` protocol specialized to an element type.
     Iterable(Box<Type>),
+    
+    /// Function type: (params) -> return_type.
+    /// Used for method references and future lambda expressions.
+    Function {
+        /// Parameter types (in order)
+        params: Vec<Type>,
+        /// Return type
+        return_type: Box<Type>,
+    },
 
     /// Internal placeholder used while a symbol's type is still being
     /// inferred (e.g., a self‑recursive function). Never appears in a
@@ -99,7 +108,10 @@ impl Type {
     ///    - `Vector(T)` ≤ `Iterable(U)` if `T ≤ U`.
     ///    - `Iterable(T)` ≤ `Iterable(U)` if `T ≤ U`.
     /// 8. `Vector` covariance: `Vector(T)` ≤ `Vector(U)` if `T ≤ U`.
-    /// 9. Otherwise: return `false` (no implicit numeric widening in HULK).
+    /// 9. Function types: `(A1, A2, ...) -> R1` ≤ `(B1, B2, ...) -> R2` if
+    ///    - the parameter lists are the same length, and
+    ///    - each parameter in `self` conforms to the corresponding parameter in `other`.
+    /// 10. Otherwise: return `false` (no implicit numeric widening in HULK).
     pub fn conforms_to(&self, other: &Self, registry: &TypeRegistry) -> bool {
         // 1. Reflexivity
         if self == other {
@@ -194,7 +206,17 @@ impl Type {
             return false;
         }
 
-        // 9. Fallback: no conformance
+        // 9. Function types: contravariant params, covariant return.
+        if let (Type::Function { params: p1, return_type: r1 },
+                Type::Function { params: p2, return_type: r2 }) = (self, other) {
+            if p1.len() != p2.len() { return false; }
+            for (a, b) in p1.iter().zip(p2) {
+                if !b.conforms_to(a, registry) { return false; } // contravariant
+            }
+            return r1.conforms_to(r2, registry); // covariant
+        }
+
+        // 10. Fallback: no conformance
         false
     }
 }
@@ -210,6 +232,13 @@ impl fmt::Display for Type {
             Type::Named(name) => write!(f, "{}", name),
             Type::Vector(inner) => write!(f, "Vector<{}>", inner),
             Type::Iterable(inner) => write!(f, "Iterable<{}>", inner),
+            Type::Function { params, return_type } => {
+                let param_str = params.iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "({}) -> {}", param_str, return_type)
+            }
             Type::Unknown => write!(f, "unknown"),
             Type::Error => write!(f, "error"),
         }
@@ -316,11 +345,16 @@ fn ancestor_chain(ty: &Type, registry: &TypeRegistry) -> Vec<Type> {
             // Vector is a builtin type, so it inherits from Object
             vec![ty.clone(), Type::Object]
         }
+
+        // In practice never used as branch types in HULK. 
+        // If we do encounter them, we just return [ty, Object].
         Type::Iterable(_inner) => {
-            // In practice, protocols are never used as branch types in HULK (since they 
-            // cannot be instantiated). If we do encounter them, we just return [ty, Object].
             vec![ty.clone(), Type::Object]
         }
+        Type::Function { params: _params, return_type: _return_type } => {
+            vec![ty.clone(), Type::Object]
+        }
+
         Type::Unknown | Type::Error => {
             // Should never be asked for an ancestor chain of these.
             vec![]

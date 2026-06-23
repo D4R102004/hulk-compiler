@@ -219,6 +219,16 @@ pub enum SemanticErrorKind {
     SelfIsNotAssignable,
     /// `base` was used outside an overriding method.
     BaseOutsideOverridingMethod,
+    /// A call was made on a value that is not a function. 
+    CallOnNonFunction { 
+        /// The type of the value being called.
+        ty: Type 
+    },
+    /// An assignment was made to a method (e.g., `obj.method = ...`).
+    AssignToMethod { 
+        /// The name of the method being assigned to.
+        method: String 
+    },
 
     // ─── Inference ──────────────────────────────────────────────────────
 
@@ -368,6 +378,12 @@ impl fmt::Display for SemanticErrorKind {
             }
             Self::BaseOutsideOverridingMethod => {
                 write!(f, "`base` can only be used inside an overriding method")
+            }
+            Self::CallOnNonFunction { ty } => {
+                write!(f, "cannot call value of type `{}`", ty)
+            }
+            Self::AssignToMethod { method } => {
+                write!(f, "cannot assign to method `{}`", method)
             }
 
             // Inference
