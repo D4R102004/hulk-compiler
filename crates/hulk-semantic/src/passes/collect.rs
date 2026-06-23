@@ -213,7 +213,6 @@ fn collect_type(
                     defined_in: ty_decl.name.clone(),
                     span: member.span,
                 };
-                println!("Registering method {} in type {}", method.name, ty_decl.name);
                 methods.insert(method.name.clone(), sig);
             }
         }
@@ -230,9 +229,6 @@ fn collect_type(
         is_builtin_value: false,           // user types are never builtin value types
         span: decl_span,
     };
-
-    println!("TypeInfo for {}: methods: {:?}", ty_decl.name, info.methods.keys());
-    println!("Collecting type {} with parent: {:?}", ty_decl.name, ty_decl.parent);
 
     registry.types.insert(ty_decl.name.clone(), info);
 }

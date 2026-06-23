@@ -1845,7 +1845,6 @@ fn patch_unknowns(
             for arg in &mut call.args {
                 patch_unknowns(arg, param_types, current_function, return_type);
             }
-            println!("Patching call to {} at {:?}", current_function, expr.span);
         }
         ExprKind::Member(member) => {
             patch_unknowns(&mut member.object, param_types, current_function, return_type);

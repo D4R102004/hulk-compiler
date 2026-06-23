@@ -966,6 +966,7 @@ pub fn analyze(program: &hulk_ast::Program) -> Result<VerifiedProgram, Vec<Seman
 `hulk_parser::parse` → print the AST with `{:#?}`.
 
 **New behavior to implement:**
+
 1. Run `hulk_semantic::analyze(&program)` immediately after a successful
    parse.
 2. On `Err(errors)` — print every `SemanticError` (not just the first),
