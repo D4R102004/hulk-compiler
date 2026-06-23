@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 hulk-ast = { path = "../hulk-ast" }
+indexmap = { version = "2.0", features = ["std"] } 
 
 [dev-dependencies]
 hulk-lexer = { path = "../hulk-lexer" }

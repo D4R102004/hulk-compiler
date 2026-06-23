@@ -5,7 +5,7 @@
 //! It is constructed once during semantic analysis and remains read‑only
 //! after Pass 1.
 
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 use hulk_ast::{Expr, SourceSpan};
 
@@ -24,15 +24,15 @@ use super::Type;
 pub struct TypeRegistry {
     /// All user‑defined and builtin types, keyed by their name.
     /// Includes classes (`type`) and builtin types (`Number`, `Object`, etc.).
-    pub types: HashMap<String, TypeInfo>,
+    pub types: IndexMap<String, TypeInfo>,
 
     /// All user‑defined and builtin protocols, keyed by protocol name.
-    pub protocols: HashMap<String, ProtocolInfo>,
+    pub protocols: IndexMap<String, ProtocolInfo>,
 
     /// All user‑defined and builtin global functions, keyed by function name.
     /// Builtins such as `print`, `sqrt`, `sin`, `cos`, `exp`, `log`, `rand`,
     /// `range`, `PI`, `E` are seeded here.
-    pub functions: HashMap<String, FunctionSignature>,
+    pub functions: IndexMap<String, FunctionSignature>,
 }
 
 /// Information about a user‑defined `type` declaration.
@@ -44,11 +44,11 @@ pub struct TypeInfo {
     /// Parent type and its constructor arguments, as written in source.
     pub parent: Option<ParentLink>,
     /// Own attributes (not yet including inherited ones).
-    pub attributes: HashMap<String, AttributeInfo>,
+    pub attributes: IndexMap<String, AttributeInfo>,
     /// Own methods (not yet including inherited ones).
-    pub methods: HashMap<String, MethodSignature>,
+    pub methods: IndexMap<String, MethodSignature>,
     /// Flattened method table (own + inherited), built during Pass 1.
-    pub flattened_methods: HashMap<String, MethodSignature>,
+    pub flattened_methods: IndexMap<String, MethodSignature>,
     /// Flag to mark builtin value types (`Number`, `String`, `Boolean`)
     /// so that inheritance from them can be rejected.
     pub is_builtin_value: bool,
@@ -83,8 +83,8 @@ pub struct MethodSignature {
 pub struct ProtocolInfo {
     pub name: String,
     pub extends: Vec<String>, // names of protocols this one extends
-    pub methods: HashMap<String, MethodSignature>,
-    pub flattened_methods: HashMap<String, MethodSignature>,
+    pub methods: IndexMap<String, MethodSignature>,
+    pub flattened_methods: IndexMap<String, MethodSignature>,
     pub span: SourceSpan,
 }
 
@@ -106,9 +106,9 @@ pub struct FunctionSignature {
 /// name is already present before the user's declarations are collected.
 pub fn seeded_registry() -> TypeRegistry {
     let mut registry = TypeRegistry {
-        types: HashMap::new(),
-        protocols: HashMap::new(),
-        functions: HashMap::new(),
+        types: IndexMap::new(),
+        protocols: IndexMap::new(),
+        functions: IndexMap::new(),
     };
 
     // ─── Builtin types ─────────────────────────────────────────────────────
@@ -118,9 +118,9 @@ pub fn seeded_registry() -> TypeRegistry {
         name: "Object".to_string(),
         params: Vec::new(),
         parent: None,
-        attributes: HashMap::new(),
-        methods: HashMap::new(),
-        flattened_methods: HashMap::new(),
+        attributes: IndexMap::new(),
+        methods: IndexMap::new(),
+        flattened_methods: IndexMap::new(),
         is_builtin_value: false,
         span: SourceSpan::new(0, 0),
     };
@@ -135,9 +135,9 @@ pub fn seeded_registry() -> TypeRegistry {
                 name: "Object".to_string(),
                 args: Vec::new(),
             }),
-            attributes: HashMap::new(),
-            methods: HashMap::new(),
-            flattened_methods: HashMap::new(),
+            attributes: IndexMap::new(),
+            methods: IndexMap::new(),
+            flattened_methods: IndexMap::new(),
             is_builtin_value: true, // prevents inheriting from them
             span: SourceSpan::new(0, 0),
         };
@@ -148,7 +148,7 @@ pub fn seeded_registry() -> TypeRegistry {
 
     // Iterable protocol
     let placeholder_t = Type::Named("T".to_string());
-    let iterable_methods = HashMap::from([
+    let iterable_methods = IndexMap::from([
         (
             "next".to_string(),
             MethodSignature {
@@ -172,13 +172,13 @@ pub fn seeded_registry() -> TypeRegistry {
         name: "Iterable".to_string(),
         extends: Vec::new(),
         methods: iterable_methods,
-        flattened_methods: HashMap::new(),
+        flattened_methods: IndexMap::new(),
         span: SourceSpan::new(0, 0),
     };
     registry.protocols.insert("Iterable".to_string(), iterable_protocol);
 
     // Enumerable protocol
-    let enumerable_methods = HashMap::from([(
+    let enumerable_methods = IndexMap::from([(
         "iter".to_string(),
         MethodSignature {
             params: Vec::new(),
@@ -191,7 +191,7 @@ pub fn seeded_registry() -> TypeRegistry {
         name: "Enumerable".to_string(),
         extends: Vec::new(),
         methods: enumerable_methods,
-        flattened_methods: HashMap::new(),
+        flattened_methods: IndexMap::new(),
         span: SourceSpan::new(0, 0),
     };
     registry.protocols.insert("Enumerable".to_string(), enumerable_protocol);
@@ -209,8 +209,8 @@ pub fn seeded_registry() -> TypeRegistry {
             name: "Object".to_string(),
             args: Vec::new(),
         }),
-        attributes: HashMap::new(),
-        methods: HashMap::from([
+        attributes: IndexMap::new(),
+        methods: IndexMap::from([
             (
                 "current".to_string(),
                 MethodSignature {
@@ -230,7 +230,7 @@ pub fn seeded_registry() -> TypeRegistry {
                 },
             ),
         ]),
-        flattened_methods: HashMap::new(),
+        flattened_methods: IndexMap::new(),
         is_builtin_value: false,
         span: SourceSpan::new(0, 0),
     };
@@ -240,7 +240,7 @@ pub fn seeded_registry() -> TypeRegistry {
 
     // Vector is a generic collection. Its method signatures use a placeholder
     // type `T` which will be substituted with the concrete element type.
-    let vector_methods = HashMap::from([
+    let vector_methods = IndexMap::from([
         (
             "size".to_string(),
             MethodSignature {
@@ -298,9 +298,9 @@ pub fn seeded_registry() -> TypeRegistry {
             name: "Object".to_string(),
             args: Vec::new(),
         }),
-        attributes: HashMap::new(),
+        attributes: IndexMap::new(),
         methods: vector_methods,
-        flattened_methods: HashMap::new(), // will be filled later, but we can copy now
+        flattened_methods: IndexMap::new(), // will be filled later, but we can copy now
         is_builtin_value: false,
         span: SourceSpan::new(0, 0),
     };
@@ -414,7 +414,7 @@ impl TypeRegistry {
     /// For `Type::Vector(inner)` and `Type::Iterable(inner)`, it retrieves the
     /// built‑in table for "Vector" or "Iterable" and substitutes `inner` for `T`.
     /// For other types, returns `None`.
-    pub fn method_table_for(&self, ty: &Type) -> Option<HashMap<String, MethodSignature>> {
+    pub fn method_table_for(&self, ty: &Type) -> Option<IndexMap<String, MethodSignature>> {
         match ty {
             Type::Named(name) => {
                 // Prefer type over protocol (they share a namespace anyway).
@@ -655,9 +655,9 @@ fn substitute_type(ty: &Type, param_name: &str, concrete: &Type) -> Type {
 /// Substitutes the generic parameter `"T"` with `concrete` across an entire
 /// method table, producing a new table with all signatures updated.
 fn substitute_method_table(
-    table: &HashMap<String, MethodSignature>,
+    table: &IndexMap<String, MethodSignature>,
     concrete: &Type,
-) -> HashMap<String, MethodSignature> {
+) -> IndexMap<String, MethodSignature> {
     let param = "T";
     table
         .iter()
@@ -691,16 +691,16 @@ mod tests {
     // Helper: build a minimal registry with a protocol P (method f(): Number)
     // and a type T with optional custom methods.
     fn build_registry_with_protocol_and_type(
-        type_methods: HashMap<String, MethodSignature>,
+        type_methods: IndexMap<String, MethodSignature>,
     ) -> TypeRegistry {
         let mut registry = TypeRegistry {
-            types: HashMap::new(),
-            protocols: HashMap::new(),
-            functions: HashMap::new(),
+            types: IndexMap::new(),
+            protocols: IndexMap::new(),
+            functions: IndexMap::new(),
         };
 
         // Protocol P: f(): Number
-        let p_methods = HashMap::from([(
+        let p_methods = IndexMap::from([(
             "f".to_string(),
             MethodSignature {
                 params: Vec::new(),
@@ -727,7 +727,7 @@ mod tests {
                 name: "T".to_string(),
                 params: Vec::new(),
                 parent: None,
-                attributes: HashMap::new(),
+                attributes: IndexMap::new(),
                 methods: type_methods.clone(),
                 flattened_methods: type_methods,
                 is_builtin_value: false,
@@ -741,14 +741,14 @@ mod tests {
     #[test]
     fn implements_protocol_missing_method() {
         // Type T has no method `f`.
-        let registry = build_registry_with_protocol_and_type(HashMap::new());
+        let registry = build_registry_with_protocol_and_type(IndexMap::new());
         assert!(!registry.implements_protocol("T", "P"));
     }
 
     #[test]
     fn implements_protocol_wrong_arity() {
         // Type T has method `f` but with one parameter, while protocol expects zero.
-        let mut methods = HashMap::new();
+        let mut methods = IndexMap::new();
         methods.insert(
             "f".to_string(),
             MethodSignature {
@@ -771,12 +771,12 @@ mod tests {
         // with a parameter and a type with a parameter of a type that does NOT conform.
         // Let's redefine: protocol P has f(x: Number), type T has f(x: String) -> String does not conform to Number.
         let mut registry = TypeRegistry {
-            types: HashMap::new(),
-            protocols: HashMap::new(),
-            functions: HashMap::new(),
+            types: IndexMap::new(),
+            protocols: IndexMap::new(),
+            functions: IndexMap::new(),
         };
 
-        let p_methods = HashMap::from([(
+        let p_methods = IndexMap::from([(
             "f".to_string(),
             MethodSignature {
                 params: vec![("x".to_string(), Type::Number)],
@@ -796,7 +796,7 @@ mod tests {
             },
         );
 
-        let mut type_methods = HashMap::new();
+        let mut type_methods = IndexMap::new();
         type_methods.insert(
             "f".to_string(),
             MethodSignature {
@@ -812,7 +812,7 @@ mod tests {
                 name: "T".to_string(),
                 params: Vec::new(),
                 parent: None,
-                attributes: HashMap::new(),
+                attributes: IndexMap::new(),
                 methods: type_methods.clone(),
                 flattened_methods: type_methods,
                 is_builtin_value: false,
@@ -828,7 +828,7 @@ mod tests {
     fn implements_protocol_covariant_violation() {
         // Protocol P: f(): Number
         // Type T: f(): String -> String does not conform to Number.
-        let mut methods = HashMap::new();
+        let mut methods = IndexMap::new();
         methods.insert(
             "f".to_string(),
             MethodSignature {
@@ -852,9 +852,9 @@ mod tests {
                 name: "T".to_string(),
                 params: Vec::new(),
                 parent: None,
-                attributes: HashMap::new(),
-                methods: HashMap::new(),
-                flattened_methods: HashMap::new(),
+                attributes: IndexMap::new(),
+                methods: IndexMap::new(),
+                flattened_methods: IndexMap::new(),
                 is_builtin_value: false,
                 span: SourceSpan::new(0, 0),
             },
@@ -901,7 +901,7 @@ mod tests {
     fn method_table_for_named_type_returns_own_methods() {
         let mut registry = seeded_registry();
         // Insert a user type with a method.
-        let mut methods = HashMap::new();
+        let mut methods = IndexMap::new();
         methods.insert(
             "foo".to_string(),
             MethodSignature {
@@ -917,7 +917,7 @@ mod tests {
                 name: "User".to_string(),
                 params: Vec::new(),
                 parent: None,
-                attributes: HashMap::new(),
+                attributes: IndexMap::new(),
                 methods: methods.clone(),
                 flattened_methods: methods,
                 is_builtin_value: false,

@@ -10,7 +10,7 @@
 //! It is not persisted between passes; a fresh `Environment` is created
 //! for each traversal.
 
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 use hulk_ast::SourceSpan;
 
@@ -60,7 +60,7 @@ impl Binding {
 ///   sequencing and do not affect name resolution.
 #[derive(Debug, Clone)]
 pub struct Environment {
-    scopes: Vec<HashMap<String, Binding>>,
+    scopes: Vec<IndexMap<String, Binding>>,
 }
 
 impl Environment {
@@ -70,7 +70,7 @@ impl Environment {
     /// HULK has no global variables, so the root scope remains empty in practice.
     pub fn new() -> Self {
         Self {
-            scopes: vec![HashMap::new()],
+            scopes: vec![IndexMap::new()],
         }
     }
 
@@ -78,7 +78,7 @@ impl Environment {
     ///
     /// Must be paired with a subsequent `pop_scope`.
     pub fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
+        self.scopes.push(IndexMap::new());
     }
 
     /// Pops the innermost scope, discarding all its bindings.

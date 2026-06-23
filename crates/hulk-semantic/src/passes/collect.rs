@@ -7,7 +7,8 @@
 //! The goal is to make every name visible before any body is checked,
 //! solving the forward-reference problem (§A.3.1) structurally.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use indexmap::IndexMap;
 
 use hulk_ast::{ DeclarationKind, FunctionDecl, ProtocolDecl,
                 TypeDecl, TypeMemberKind, TypeRef,
@@ -149,8 +150,8 @@ fn collect_type(
     });
 
     // Collect own members: attributes and methods.
-    let mut attributes = HashMap::new();
-    let mut methods = HashMap::new();
+    let mut attributes = IndexMap::new();
+    let mut methods = IndexMap::new();
 
     for member in &ty_decl.members {
         match &member.kind {
@@ -225,7 +226,7 @@ fn collect_type(
         parent,
         attributes,
         methods,
-        flattened_methods: HashMap::new(), // filled in Pass 1
+        flattened_methods: IndexMap::new(), // filled in Pass 1
         is_builtin_value: false,           // user types are never builtin value types
         span: decl_span,
     };
@@ -259,7 +260,7 @@ fn collect_protocol(
         return;
     }
 
-    let mut method_sigs = HashMap::new();
+    let mut method_sigs = IndexMap::new();
 
     for method in &protocol.methods {
         // Every protocol method must have fully annotated parameters.
@@ -318,7 +319,7 @@ fn collect_protocol(
         name: protocol.name.clone(),
         extends: protocol.parents.iter().map(|p| p.name.clone()).collect(),
         methods: method_sigs,
-        flattened_methods: HashMap::new(), // filled in Pass 1
+        flattened_methods: IndexMap::new(), // filled in Pass 1
         span: decl_span,
     };
 

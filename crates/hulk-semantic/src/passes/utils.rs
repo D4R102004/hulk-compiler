@@ -1,7 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::types::registry::{TypeRegistry};
-use crate::error::{SemanticError, SemanticErrorKind};
 
 /// Returns a topological order of types (parents before children) using Kahn's algorithm.
 pub fn topological_order(registry: &TypeRegistry) -> Vec<String> {
@@ -51,6 +50,10 @@ pub fn topological_order(registry: &TypeRegistry) -> Vec<String> {
     order
 }
 
+#[cfg(test)]
+use crate::error::{SemanticError, SemanticErrorKind};
+
+#[cfg(test)]
 pub fn assert_error_kind(errors: &[SemanticError], expected: SemanticErrorKind) {
     assert!(errors.iter().any(|e| e.kind == expected),
         "expected error {:?} not found", expected);

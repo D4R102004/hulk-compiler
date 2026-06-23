@@ -338,7 +338,7 @@ mod tests {
     use crate::types::registry::seeded_registry;
     use crate::types::registry::{MethodSignature, ParentLink, ProtocolInfo, TypeInfo};
     use hulk_ast::SourceSpan;
-    use std::collections::HashMap;
+    use indexmap::IndexMap;
 
     #[test]
     fn conforms_to_reflexivity() {
@@ -393,7 +393,7 @@ mod tests {
         let mut registry = seeded_registry();
 
         // Insert protocol P with method f(): Number.
-        let p_methods = HashMap::from([(
+        let p_methods = IndexMap::from([(
             "f".to_string(),
             MethodSignature {
                 params: Vec::new(),
@@ -414,7 +414,7 @@ mod tests {
         );
 
         // Insert type T with method f(): Number => 42.
-        let t_methods = HashMap::from([(
+        let t_methods = IndexMap::from([(
             "f".to_string(),
             MethodSignature {
                 params: Vec::new(),
@@ -429,7 +429,7 @@ mod tests {
                 name: "T".to_string(),
                 params: Vec::new(),
                 parent: None,
-                attributes: HashMap::new(),
+                attributes: IndexMap::new(),
                 methods: t_methods.clone(),
                 flattened_methods: t_methods,
                 is_builtin_value: false,
@@ -461,9 +461,9 @@ mod tests {
                         name: parent.to_string(),
                         args: Vec::new(),
                     }),
-                    attributes: HashMap::new(),
-                    methods: HashMap::new(),
-                    flattened_methods: HashMap::new(),
+                    attributes: IndexMap::new(),
+                    methods: IndexMap::new(),
+                    flattened_methods: IndexMap::new(),
                     is_builtin_value: false,
                     span: SourceSpan::new(0, 0),
                 },
@@ -476,9 +476,9 @@ mod tests {
                 name: "A".to_string(),
                 params: Vec::new(),
                 parent: None,
-                attributes: HashMap::new(),
-                methods: HashMap::new(),
-                flattened_methods: HashMap::new(),
+                attributes: IndexMap::new(),
+                methods: IndexMap::new(),
+                flattened_methods: IndexMap::new(),
                 is_builtin_value: false,
                 span: SourceSpan::new(0, 0),
             },
@@ -506,9 +506,9 @@ mod tests {
                     name: "Missing".to_string(),
                     args: Vec::new(),
                 }),
-                attributes: HashMap::new(),
-                methods: HashMap::new(),
-                flattened_methods: HashMap::new(),
+                attributes: IndexMap::new(),
+                methods: IndexMap::new(),
+                flattened_methods: IndexMap::new(),
                 is_builtin_value: false,
                 span: SourceSpan::new(0, 0),
             },
@@ -527,9 +527,7 @@ mod tests {
         let mut registry = seeded_registry();
 
         // Insert a type T that implements Iterable with current(): Number.
-        use std::collections::HashMap;
-        use crate::types::registry::{MethodSignature, TypeInfo, ParentLink};
-        let mut methods = HashMap::new();
+        let mut methods = IndexMap::new();
         methods.insert(
             "next".to_string(),
             MethodSignature {
@@ -557,7 +555,7 @@ mod tests {
                     name: "Object".to_string(),
                     args: Vec::new(),
                 }),
-                attributes: HashMap::new(),
+                attributes: IndexMap::new(),
                 methods: methods.clone(),
                 flattened_methods: methods,
                 is_builtin_value: false,

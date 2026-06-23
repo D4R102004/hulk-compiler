@@ -2,7 +2,7 @@
 //!
 //! This pass resolves every `inherits` and `extends` link collected in Pass 0
 //! into a validated, linked tree. After this pass, `Type::conforms_to` becomes
-//! well‑defined, and member lookup in later passes is a single `HashMap` access.
+//! well‑defined, and member lookup in later passes is a single `IndexMap` access.
 //!
 //! Checks are performed in a specific order:
 //! 1. Parent existence
@@ -12,7 +12,8 @@
 //! 5. Protocol extension variance (contravariant params, covariant return)
 //! 6. Flatten attribute/method tables (parent‑to‑child) — skipped if cycle
 
-use std::collections::{HashSet, HashMap};
+use std::collections::HashSet;
+use indexmap::IndexMap;
 
 use hulk_ast::SourceSpan;
 
@@ -371,7 +372,7 @@ fn check_protocol_variance(registry: &mut TypeRegistry, errors: &mut Vec<Semanti
 fn flatten_protocols(registry: &mut TypeRegistry, _errors: &mut Vec<SemanticError>) {
     let names: Vec<String> = registry.protocols.keys().cloned().collect();
     for name in names {
-        let mut flattened = HashMap::new();
+        let mut flattened = IndexMap::new();
         let mut visited = HashSet::new();
         flatten_protocol_recursive(registry, &name, &mut flattened, &mut visited);
         if let Some(proto) = registry.protocols.get_mut(&name) {
@@ -384,7 +385,7 @@ fn flatten_protocols(registry: &mut TypeRegistry, _errors: &mut Vec<SemanticErro
 fn flatten_protocol_recursive(
     registry: &TypeRegistry,
     name: &str,
-    result: &mut HashMap<String, MethodSignature>,
+    result: &mut IndexMap<String, MethodSignature>,
     visited: &mut HashSet<String>,
 ) {
     if !visited.insert(name.to_string()) {
