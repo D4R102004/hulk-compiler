@@ -451,19 +451,86 @@ mod tests {
         assert!(result.is_ok(), "protocol conformance should work");
     }
 
+    /// Tests that a protocol conformance failure due to contravariance violation
+    /// produces a ProtocolNotImplemented error with the offending method name in
+    /// the missing list.
     #[test]
-    fn protocol_conformance_missing_method() {
+    fn protocol_conformance_variance_violation() {
+        // Protocol P requires f(x: Object): Number; type T provides f(x: Number): Number.
+        // For contravariance, the protocol parameter type (Object) must conform to the
+        // type parameter type (Number). Object does not conform to Number, so this is
+        // a violation.
+        let src = "
+            protocol P { f(x: Object): Number; }
+            type T { f(x: Number): Number => x; }
+            let x: P = new T() in print(x.f(1));
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        let errors = result.expect_err("should fail due to variance violation");
+
+        // Look for a ProtocolNotImplemented error mentioning method 'f'.
+        assert!(
+            errors.iter().any(|e| {
+                matches!(
+                    &e.kind,
+                    SemanticErrorKind::ProtocolNotImplemented { missing, .. }
+                    if missing.iter().any(|m| m == "f")
+                )
+            }),
+            "Expected ProtocolNotImplemented error with missing method 'f'"
+        );
+    }
+
+    /// Tests that when a type is missing a protocol method, the error's missing
+    /// list contains the method name, providing a detailed diagnostic.
+    #[test]
+    fn protocol_conformance_missing_method_detailed() {
+        let src = "
+            protocol P { f(): Number; g(): String; }
+            type T { f(): Number => 42; }  // missing g
+            let x: P = new T() in print(x.g());
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        let errors = result.expect_err("should fail due to missing method");
+
+        // Look for ProtocolNotImplemented with missing list containing "g".
+        assert!(
+            errors.iter().any(|e| {
+                matches!(
+                    &e.kind,
+                    SemanticErrorKind::ProtocolNotImplemented { ty, protocol, missing }
+                    if ty == &Type::Named("T".to_string())
+                        && protocol == &"P".to_string()
+                        && missing.len() == 1
+                        && missing[0] == "g"
+                )
+            }),
+            "Expected ProtocolNotImplemented with missing method 'g'"
+        );
+    }
+
+    /// Tests that a covariance violation (return type too specific) is also
+    /// caught and reported as a ProtocolNotImplemented error with the method name.
+    #[test]
+    fn protocol_conformance_covariance_violation() {
         let src = "
             protocol P { f(): Number; }
-            type T { g(): Number => 42; }
+            type T { f(): String => \"hello\"; }
             let x: P = new T() in print(x.f());
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_err());
-        let errors = result.err().unwrap();
-        // Expect either ProtocolNotImplemented or NotConforming; if ProtocolNotImplemented is used,
-        // also verify missing list contains "f".
-        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::ProtocolNotImplemented { .. })));
+        let errors = result.expect_err("should fail due to return type covariance violation");
+
+        assert!(
+            errors.iter().any(|e| {
+                matches!(
+                    &e.kind,
+                    SemanticErrorKind::ProtocolNotImplemented { missing, .. }
+                    if missing.iter().any(|m| m == "f")
+                )
+            }),
+            "Expected ProtocolNotImplemented error with missing method 'f' for covariance violation"
+        );
     }
 
     /// Tests that the `Unknown` sweep detects nested recursive call nodes that were
@@ -480,11 +547,6 @@ mod tests {
         assert!(result.is_ok(), "inference should succeed");
 
         let typed_program = result.unwrap().typed_program;
-        // Find the first Call node whose callee is Variable("fib").
-        // We'll walk the entry expression (which is a call to print, whose argument is fib(10)).
-        // But the recursive call is inside the function body, not in the entry expression.
-        // To inspect the body of the function, we need to look at the declarations.
-        // There is only one declaration, a function.
         let fib_decl = &typed_program.declarations[0];
         let fib_body = match &fib_decl.kind {
             DeclarationKind::Function(f) => &f.body,
