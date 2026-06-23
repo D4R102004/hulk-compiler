@@ -8,10 +8,13 @@
 
 mod collect;
 mod hierarchy;
+mod resolve_constructor_params;
 mod infer;
 mod check;
+mod utils;
 
 pub use collect::run as collect;
 pub use hierarchy::run as hierarchy;
+pub use resolve_constructor_params::run as resolve_constructor_params;
 pub use infer::run as infer;
 pub use check::run as check;
