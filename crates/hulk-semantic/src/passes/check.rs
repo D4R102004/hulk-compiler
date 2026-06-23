@@ -12,13 +12,13 @@
 //! any new structures.
 
 use hulk_ast::{
-    AttributeDecl, Declaration, DeclarationKind, ExprKind, FunctionDecl, LetBinding, Param,
-    Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeRef,
+    AttributeDecl, Declaration, DeclarationKind, ExprKind, FunctionDecl, LetBinding, 
+    SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeRef,
 };
 
 use crate::error::{SemanticError, SemanticErrorKind};
 use crate::typed::{TypedExpr, TypedProgram};
-use crate::types::registry::{MethodSignature, TypeRegistry};
+use crate::types::registry::{TypeRegistry};
 use crate::types::Type;
 
 // -----------------------------------------------------------------------------
@@ -395,5 +395,224 @@ impl<'a> Checker<'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hulk_lexer::Lexer;
+    use hulk_parser::parse;
+    use hulk_ast::VectorExpr;
+    use crate::analyze;
+
+    #[test]
+    fn annotation_mismatch() {
+        let src = "let x: Number = \"hello\" in print(x);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err());
+        let errs = result.err().unwrap();
+        assert!(errs.iter().any(|e| matches!(e.kind, SemanticErrorKind::NotConforming { .. })));
+    }
+
+    #[test]
+    fn protocol_conformance_use() {
+        let src = "
+            protocol P { f(): Number; }
+            type T { f(): Number => 42; }
+            let x: P = new T() in print(x.f());
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "protocol conformance should work");
+    }
+
+    #[test]
+    fn protocol_conformance_missing_method() {
+        let src = "
+            protocol P { f(): Number; }
+            type T { g(): Number => 42; }
+            let x: P = new T() in print(x.f());
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err());
+        let errors = result.err().unwrap();
+        // Expect either ProtocolNotImplemented or NotConforming; if ProtocolNotImplemented is used,
+        // also verify missing list contains "f".
+        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::ProtocolNotImplemented { .. })));
+    }
+
+    /// Tests that the `Unknown` sweep detects nested recursive call nodes that were
+    /// patched incorrectly. This directly inspects the typed program after inference
+    /// to ensure the recursive call node (callee = Variable("fib")) has its `anno`
+    /// set to `Number`, not `Unknown`.
+    #[test]
+    fn unknown_sweep_finds_nested_callee_after_patch() {
+        let src = "
+            function fib(n) => if (n == 0 | n == 1) 1 else fib(n-1) + fib(n-2);
+            print(fib(10));
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "inference should succeed");
+
+        let typed_program = result.unwrap().typed_program;
+        // Find the first Call node whose callee is Variable("fib").
+        // We'll walk the entry expression (which is a call to print, whose argument is fib(10)).
+        // But the recursive call is inside the function body, not in the entry expression.
+        // To inspect the body of the function, we need to look at the declarations.
+        // There is only one declaration, a function.
+        let fib_decl = &typed_program.declarations[0];
+        let fib_body = match &fib_decl.kind {
+            DeclarationKind::Function(f) => &f.body,
+            _ => panic!("expected function declaration"),
+        };
+
+        // Recursively search for a Call with callee Variable("fib").
+        fn find_recursive_call(expr: &TypedExpr) -> Option<&TypedExpr> {
+            match &expr.kind {
+                ExprKind::Call(call) => {
+                    if let ExprKind::Variable(name) = &call.callee.kind {
+                        if name == "fib" {
+                            return Some(expr);
+                        }
+                    }
+                    // Recurse into children.
+                    if let Some(found) = find_recursive_call(&call.callee) {
+                        return Some(found);
+                    }
+                    for arg in &call.args {
+                        if let Some(found) = find_recursive_call(arg) {
+                            return Some(found);
+                        }
+                    }
+                    None
+                }
+                // For other nodes, recurse normally.
+                ExprKind::Unary(unary) => find_recursive_call(&unary.expr),
+                ExprKind::Binary(binary) => {
+                    find_recursive_call(&binary.left)
+                        .or_else(|| find_recursive_call(&binary.right))
+                }
+                ExprKind::If(if_expr) => {
+                    find_recursive_call(&if_expr.condition)
+                        .or_else(|| find_recursive_call(&if_expr.then_branch))
+                        .or_else(|| {
+                            for elif in &if_expr.elif_branches {
+                                if let Some(found) = find_recursive_call(&elif.condition) {
+                                    return Some(found);
+                                }
+                                if let Some(found) = find_recursive_call(&elif.body) {
+                                    return Some(found);
+                                }
+                            }
+                            find_recursive_call(&if_expr.else_branch)
+                        })
+                }
+                ExprKind::Let(let_expr) => {
+                    for binding in &let_expr.bindings {
+                        if let Some(found) = find_recursive_call(&binding.initializer) {
+                            return Some(found);
+                        }
+                    }
+                    find_recursive_call(&let_expr.body)
+                }
+                ExprKind::Block(block) => {
+                    for e in &block.expressions {
+                        if let Some(found) = find_recursive_call(e) {
+                            return Some(found);
+                        }
+                    }
+                    None
+                }
+                ExprKind::While(while_expr) => {
+                    find_recursive_call(&while_expr.condition)
+                        .or_else(|| find_recursive_call(&while_expr.body))
+                }
+                ExprKind::For(for_expr) => {
+                    find_recursive_call(&for_expr.iterable)
+                        .or_else(|| find_recursive_call(&for_expr.body))
+                }
+                ExprKind::Member(member) => find_recursive_call(&member.object),
+                ExprKind::New(new_expr) => {
+                    for arg in &new_expr.args {
+                        if let Some(found) = find_recursive_call(arg) {
+                            return Some(found);
+                        }
+                    }
+                    None
+                }
+                ExprKind::TypeTest(type_test) => find_recursive_call(&type_test.expr),
+                ExprKind::Downcast(downcast) => find_recursive_call(&downcast.expr),
+                ExprKind::Vector(vector) => match vector {
+                    VectorExpr::Literal(items) => {
+                        for item in items {
+                            if let Some(found) = find_recursive_call(item) {
+                                return Some(found);
+                            }
+                        }
+                        None
+                    }
+                    VectorExpr::Comprehension(comp) => {
+                        find_recursive_call(&comp.expr)
+                            .or_else(|| find_recursive_call(&comp.iterable))
+                    }
+                },
+                ExprKind::Index(index) => {
+                    find_recursive_call(&index.object)
+                        .or_else(|| find_recursive_call(&index.index))
+                }
+                ExprKind::Match(match_expr) => {
+                    find_recursive_call(&match_expr.value)
+                        .or_else(|| {
+                            for case in &match_expr.cases {
+                                if let Some(found) = find_recursive_call(&case.body) {
+                                    return Some(found);
+                                }
+                            }
+                            None
+                        })
+                }
+                // Leaves: Literal, Variable, SelfRef, BaseRef have no children.
+                _ => None,
+            }
+        }
+
+        let recursive_call = find_recursive_call(fib_body)
+            .expect("should find a recursive call to fib");
+
+        // The recursive call should have its annotation resolved to Number.
+        assert_eq!(recursive_call.anno, Type::Number,
+            "recursive call annotation should be Number, got {:?}", recursive_call.anno);
+    }
+
+    /// Tests that a method declared on an ancestor protocol can be called through
+    /// a variable typed as a descendant protocol.
+    #[test]
+    fn protocol_method_call_through_two_protocols() {
+        let src = "
+            protocol P { f(): Number; }
+            protocol Q extends P { g(): Number; }
+            type T { f(): Number => 1; g(): Number => 2; }
+            let x: Q = new T() in print(x.f() + x.g());
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "protocol ancestor method call should work: {:?}", result.err());
+    }
+
+    /// Tests that attribute access through a variable typed as a protocol is rejected
+    /// (since protocols never expose attributes). This guards against a future change
+    /// that might accidentally allow attribute lookup through protocol-typed variables.
+    #[test]
+    fn attribute_privacy_violation_through_protocol_view() {
+        let src = "
+            type T { attr = 42; }
+            protocol P { }
+            let x: P = new T() in print(x.attr);
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err(), "attribute access through protocol should fail");
+        let errors = result.err().unwrap();
+        // Expect an UnknownMember error (or a privacy violation).
+        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::UnknownMember { .. })),
+            "missing UnknownMember error; got errors: {:?}", errors);
     }
 }

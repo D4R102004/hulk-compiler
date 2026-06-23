@@ -9,10 +9,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use hulk_ast::{
-    AttributeDecl, Declaration, DeclarationKind, FunctionDecl, Param, ProtocolDecl,
-    ProtocolMethod, TypeDecl, TypeMemberKind, TypeParent, TypeRef,
-};
+use hulk_ast::{ DeclarationKind, FunctionDecl, ProtocolDecl,
+                TypeDecl, TypeMemberKind, TypeRef,
+            };
 use hulk_ast::SourceSpan;
 
 use crate::error::{SemanticError, SemanticErrorKind};
@@ -120,7 +119,7 @@ fn collect_type(
     errors: &mut Vec<SemanticError>,
 ) {
     // Duplicate check: type namespace (shared with protocols, per §A.10.2).
-    if registry.types.contains_key(&ty_decl.name) {
+    if registry.types.contains_key(&ty_decl.name) || registry.protocols.contains_key(&ty_decl.name) {
         errors.push(SemanticError::error(
             SemanticErrorKind::DuplicateType(ty_decl.name.clone()),
             decl_span,
@@ -213,6 +212,7 @@ fn collect_type(
                     defined_in: ty_decl.name.clone(),
                     span: member.span,
                 };
+                println!("Registering method {} in type {}", method.name, ty_decl.name);
                 methods.insert(method.name.clone(), sig);
             }
         }
@@ -229,6 +229,9 @@ fn collect_type(
         is_builtin_value: false,           // user types are never builtin value types
         span: decl_span,
     };
+
+    println!("TypeInfo for {}: methods: {:?}", ty_decl.name, info.methods.keys());
+    println!("Collecting type {} with parent: {:?}", ty_decl.name, ty_decl.parent);
 
     registry.types.insert(ty_decl.name.clone(), info);
 }
@@ -248,7 +251,7 @@ fn collect_protocol(
     errors: &mut Vec<SemanticError>,
 ) {
     // Duplicate check: protocols share the type namespace with classes.
-    if registry.protocols.contains_key(&protocol.name) {
+    if registry.protocols.contains_key(&protocol.name) || registry.types.contains_key(&protocol.name) {
         errors.push(SemanticError::error(
             SemanticErrorKind::DuplicateType(protocol.name.clone()),
             decl_span,
@@ -315,6 +318,7 @@ fn collect_protocol(
         name: protocol.name.clone(),
         extends: protocol.parents.iter().map(|p| p.name.clone()).collect(),
         methods: method_sigs,
+        flattened_methods: HashMap::new(), // filled in Pass 1
         span: decl_span,
     };
 
@@ -375,5 +379,132 @@ fn check_duplicate_params(
                 fallback_span,
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hulk_lexer::Lexer;
+    use hulk_parser::parse;
+    use crate::seeded_registry;
+    use crate::passes::utils::assert_error_kind;
+
+    fn parse_and_collect(src: &str) -> (TypeRegistry, Vec<SemanticError>) {
+        let tokens = Lexer::new(src).tokenize().expect("lex ok");
+        let program = parse(tokens).expect("parse ok");
+        println!("{:#?}", program);  // Print the AST
+        let mut registry = seeded_registry();
+        let mut errors = Vec::new();
+        run(&program, &mut registry, &mut errors);
+        (registry, errors)
+    }
+
+    #[test]
+    fn duplicate_function() {
+        let src = "
+            function f() => 1;
+            function f() => 2;
+            print(0);
+        ";
+        let (_, errors) = parse_and_collect(src);
+        assert_error_kind(&errors, SemanticErrorKind::DuplicateFunction("f".to_string()));
+    }
+
+    #[test]
+    fn duplicate_type() {
+        let src = "
+            type A { x = 1; }
+            type A { y = 2; }
+            print(0);
+        ";
+        let (_, errors) = parse_and_collect(src);
+        assert_error_kind(&errors, SemanticErrorKind::DuplicateType("A".to_string()));
+    }
+
+    #[test]
+    fn duplicate_attribute() {
+        let src = "
+            type A {
+                x = 1;
+                x = 2;
+            }
+            print(0);
+        ";
+        let (_, errors) = parse_and_collect(src);
+        assert_error_kind(&errors,
+            SemanticErrorKind::DuplicateAttribute { ty: "A".to_string(), attribute: "x".to_string() }
+        );
+    }
+
+    #[test]
+    fn duplicate_method() {
+        let src = "
+            type A {
+                f() => 1;
+                f() => 2;
+            }
+            print(0);
+        ";
+        let (_, errors) = parse_and_collect(src);
+        assert_error_kind(&errors,
+            SemanticErrorKind::DuplicateMethod { ty: "A".to_string(), method: "f".to_string() }
+        );
+    }
+
+    #[test]
+    fn duplicate_parameter() {
+        let src = "
+            function f(x, x) => x;
+            print(0);
+        ";
+        let (_, errors) = parse_and_collect(src);
+        assert_error_kind(&errors, SemanticErrorKind::DuplicateParameter("x".to_string()));
+    }
+
+    // ---- Extended tests ----
+
+    /// Tests that an unannotated type constructor parameter defaults to `Type::Unknown`
+    /// immediately after collection, before any later pass (e.g., constructor resolution)
+    /// modifies it.
+    #[test]
+    fn unannotated_type_constructor_param_defaults_to_unknown() {
+        let src = "
+            type T(a, b: Number) { }
+            print(0);
+        ";
+        let (registry, errors) = parse_and_collect(src);
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+
+        let info = registry.lookup_type("T").expect("type T should exist");
+        // The first parameter `a` has no annotation → should be Unknown.
+        assert_eq!(info.params[0].1, Type::Unknown);
+        // The second parameter `b` has an annotation → should be Number.
+        assert_eq!(info.params[1].1, Type::Number);
+    }
+
+    /// Tests that types and protocols share a namespace (§A.10.2).
+    /// A collision between a type and a protocol of the same name is reported as
+    /// `DuplicateType` (the same error kind used for duplicate type names).
+    #[test]
+    fn duplicate_type_in_protocol_namespace_type_then_protocol() {
+        let src = "
+            type P { }
+            protocol P { }
+            print(0);
+        ";
+        let (_, errors) = parse_and_collect(src);
+        assert_error_kind(&errors, SemanticErrorKind::DuplicateType("P".to_string()));
+    }
+
+    #[test]
+    fn duplicate_type_in_protocol_namespace_protocol_then_type() {
+        let src = "
+            protocol P { }
+            type P { }
+            print(0);
+        ";
+        let (_, errors) = parse_and_collect(src);
+        assert_error_kind(&errors, SemanticErrorKind::DuplicateType("P".to_string()));
     }
 }
