@@ -138,10 +138,8 @@ name = "hulk-semantic"
 version = "0.1.0"
 dependencies = [
  "hulk-ast",
-]
-dev-dependencies = [
  "hulk-lexer",
- "hulk-parser",,   
+ "hulk-parser",
 ]
 
 [[package]]

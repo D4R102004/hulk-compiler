@@ -256,11 +256,11 @@ fn ancestor_chain(ty: &Type, registry: &TypeRegistry) -> Vec<Type> {
             }
             chain
         }
-        Type::Vector(inner) => {
+        Type::Vector(_inner) => {
             // Vector is a builtin type, so it inherits from Object
             vec![ty.clone(), Type::Object]
         }
-        Type::Iterable(inner) => {
+        Type::Iterable(_inner) => {
             // In practice, protocols are never used as branch types in HULK (since they 
             // cannot be instantiated). If we do encounter them, we just return [ty, Object].
             vec![ty.clone(), Type::Object]
@@ -278,5 +278,191 @@ fn ancestor_chain(ty: &Type, registry: &TypeRegistry) -> Vec<Type> {
 
 #[cfg(test)]
 mod tests {
-    //TODO: Add tests for conformance and LCA once the registry is available.
+    use super::*;
+    use crate::types::registry::seeded_registry;
+    use crate::types::registry::{MethodSignature, ParentLink, ProtocolInfo, TypeInfo};
+    use hulk_ast::SourceSpan;
+    use std::collections::HashMap;
+
+    #[test]
+    fn conforms_to_reflexivity() {
+        let registry = seeded_registry();
+        let t = Type::Number;
+        assert!(t.conforms_to(&t, &registry));
+    }
+
+    #[test]
+    fn conforms_to_object() {
+        let registry = seeded_registry();
+        let t = Type::Number;
+        assert!(t.conforms_to(&Type::Object, &registry));
+    }
+
+    #[test]
+    fn conforms_to_unknown() {
+        let registry = seeded_registry();
+        let t = Type::Unknown;
+        assert!(t.conforms_to(&Type::Number, &registry));
+        assert!(Type::Number.conforms_to(&t, &registry));
+    }
+
+    #[test]
+    fn lca_simple() {
+        let registry = seeded_registry();
+        let types = vec![Type::Number, Type::String];
+        let lca = lowest_common_ancestor(&types, &registry);
+        assert_eq!(lca, Type::Object);
+    }
+
+    #[test]
+    fn lca_with_unknown_filter() {
+        let registry = seeded_registry();
+        let types = vec![Type::Unknown, Type::Number];
+        let lca = lowest_common_ancestor(&types, &registry);
+        assert_eq!(lca, Type::Number); // Unknown filtered out
+    }
+
+    #[test]
+    fn lca_empty_returns_error() {
+        let registry = seeded_registry();
+        let types = vec![];
+        let lca = lowest_common_ancestor(&types, &registry);
+        assert_eq!(lca, Type::Error);
+    }
+
+    /// Tests structural protocol conformance: a type that implements all protocol
+    /// methods should conform to that protocol.
+    #[test]
+    fn conforms_to_protocol_structural() {
+        let mut registry = seeded_registry();
+
+        // Insert protocol P with method f(): Number.
+        let p_methods = HashMap::from([(
+            "f".to_string(),
+            MethodSignature {
+                params: Vec::new(),
+                return_type: Type::Number,
+                defined_in: "P".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        )]);
+        registry.protocols.insert(
+            "P".to_string(),
+            ProtocolInfo {
+                name: "P".to_string(),
+                extends: Vec::new(),
+                methods: p_methods.clone(),
+                flattened_methods: p_methods, // already flattened
+                span: SourceSpan::new(0, 0),
+            },
+        );
+
+        // Insert type T with method f(): Number => 42.
+        let t_methods = HashMap::from([(
+            "f".to_string(),
+            MethodSignature {
+                params: Vec::new(),
+                return_type: Type::Number,
+                defined_in: "T".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        )]);
+        registry.types.insert(
+            "T".to_string(),
+            TypeInfo {
+                name: "T".to_string(),
+                params: Vec::new(),
+                parent: None,
+                attributes: HashMap::new(),
+                methods: t_methods.clone(),
+                flattened_methods: t_methods,
+                is_builtin_value: false,
+                span: SourceSpan::new(0, 0),
+            },
+        );
+
+        // T should conform to P structurally.
+        let t = Type::Named("T".to_string());
+        let p = Type::Named("P".to_string());
+        assert!(t.conforms_to(&p, &registry));
+        // Also check that the registry's implements_protocol works.
+        assert!(registry.implements_protocol("T", "P"));
+    }
+
+    /// Tests LCA with a user-defined hierarchy where the common ancestor is not Object.
+    #[test]
+    fn lca_three_way_with_shared_grandparent() {
+        let mut registry = seeded_registry();
+
+        // A ← B, A ← C
+        for (name, parent) in [("B", "A"), ("C", "A")] {
+            registry.types.insert(
+                name.to_string(),
+                TypeInfo {
+                    name: name.to_string(),
+                    params: Vec::new(),
+                    parent: Some(ParentLink {
+                        name: parent.to_string(),
+                        args: Vec::new(),
+                    }),
+                    attributes: HashMap::new(),
+                    methods: HashMap::new(),
+                    flattened_methods: HashMap::new(),
+                    is_builtin_value: false,
+                    span: SourceSpan::new(0, 0),
+                },
+            );
+        }
+        // Insert A (root).
+        registry.types.insert(
+            "A".to_string(),
+            TypeInfo {
+                name: "A".to_string(),
+                params: Vec::new(),
+                parent: None,
+                attributes: HashMap::new(),
+                methods: HashMap::new(),
+                flattened_methods: HashMap::new(),
+                is_builtin_value: false,
+                span: SourceSpan::new(0, 0),
+            },
+        );
+
+        let types = vec![Type::Named("B".to_string()), Type::Named("C".to_string())];
+        let lca = lowest_common_ancestor(&types, &registry);
+        assert_eq!(lca, Type::Named("A".to_string()));
+    }
+
+    /// Tests that `ancestor_chain` terminates cleanly even if a type's parent
+    /// does not exist in the registry (shouldn't happen post-Pass-1, but the function
+    /// is defensive). It should return a chain ending with Object.
+    #[test]
+    fn ancestor_chain_terminates_on_missing_parent() {
+        let mut registry = seeded_registry();
+
+        // Insert type X with parent "Missing" (not in registry).
+        registry.types.insert(
+            "X".to_string(),
+            TypeInfo {
+                name: "X".to_string(),
+                params: Vec::new(),
+                parent: Some(ParentLink {
+                    name: "Missing".to_string(),
+                    args: Vec::new(),
+                }),
+                attributes: HashMap::new(),
+                methods: HashMap::new(),
+                flattened_methods: HashMap::new(),
+                is_builtin_value: false,
+                span: SourceSpan::new(0, 0),
+            },
+        );
+
+        let ty = Type::Named("X".to_string());
+        let chain = ancestor_chain(&ty, &registry);
+        // The chain should contain at least the type itself and Object.
+        assert!(chain.len() >= 2);
+        assert_eq!(chain[0], Type::Named("X".to_string()));
+        assert_eq!(chain.last(), Some(&Type::Object));
+    }
 }

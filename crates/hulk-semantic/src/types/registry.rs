@@ -84,6 +84,7 @@ pub struct ProtocolInfo {
     pub name: String,
     pub extends: Vec<String>, // names of protocols this one extends
     pub methods: HashMap<String, MethodSignature>,
+    pub flattened_methods: HashMap<String, MethodSignature>,
     pub span: SourceSpan,
 }
 
@@ -170,6 +171,7 @@ pub fn seeded_registry() -> TypeRegistry {
         name: "Iterable".to_string(),
         extends: Vec::new(),
         methods: iterable_methods,
+        flattened_methods: HashMap::new(),
         span: SourceSpan::new(0, 0),
     };
     registry.protocols.insert("Iterable".to_string(), iterable_protocol);
@@ -188,6 +190,7 @@ pub fn seeded_registry() -> TypeRegistry {
         name: "Enumerable".to_string(),
         extends: Vec::new(),
         methods: enumerable_methods,
+        flattened_methods: HashMap::new(),
         span: SourceSpan::new(0, 0),
     };
     registry.protocols.insert("Enumerable".to_string(), enumerable_protocol);
@@ -206,7 +209,26 @@ pub fn seeded_registry() -> TypeRegistry {
             args: Vec::new(),
         }),
         attributes: HashMap::new(),
-        methods: HashMap::new(),
+        methods: HashMap::from([
+            (
+                "current".to_string(),
+                MethodSignature {
+                    params: Vec::new(),
+                    return_type: Type::Number,
+                    defined_in: "Range".to_string(),
+                    span: SourceSpan::new(0, 0),
+                },
+            ),
+            (
+                "next".to_string(),
+                MethodSignature {
+                    params: Vec::new(),
+                    return_type: Type::Boolean,
+                    defined_in: "Range".to_string(),
+                    span: SourceSpan::new(0, 0),
+                },
+            ),
+        ]),
         flattened_methods: HashMap::new(),
         is_builtin_value: false,
         span: SourceSpan::new(0, 0),
@@ -296,6 +318,11 @@ impl TypeRegistry {
     /// Look up a type by name.
     pub fn lookup_type(&self, name: &str) -> Option<&TypeInfo> {
         self.types.get(name)
+    }
+
+    /// Mutable lookup for a type.
+    pub fn lookup_type_mut(&mut self, name: &str) -> Option<&mut TypeInfo> {
+        self.types.get_mut(name)
     }
 
     /// Look up a protocol by name.
@@ -413,5 +440,183 @@ impl TypeRegistry {
 
 #[cfg(test)]
 mod tests {
-    // TODO: Add tests for conformance and LCA once the registry is available.
+    use super::*;
+    use crate::types::Type;
+
+    // Helper: build a minimal registry with a protocol P (method f(): Number)
+    // and a type T with optional custom methods.
+    fn build_registry_with_protocol_and_type(
+        type_methods: HashMap<String, MethodSignature>,
+    ) -> TypeRegistry {
+        let mut registry = TypeRegistry {
+            types: HashMap::new(),
+            protocols: HashMap::new(),
+            functions: HashMap::new(),
+        };
+
+        // Protocol P: f(): Number
+        let p_methods = HashMap::from([(
+            "f".to_string(),
+            MethodSignature {
+                params: Vec::new(),
+                return_type: Type::Number,
+                defined_in: "P".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        )]);
+        registry.protocols.insert(
+            "P".to_string(),
+            ProtocolInfo {
+                name: "P".to_string(),
+                extends: Vec::new(),
+                methods: p_methods.clone(),
+                flattened_methods: p_methods,
+                span: SourceSpan::new(0, 0),
+            },
+        );
+
+        // Type T with given methods.
+        registry.types.insert(
+            "T".to_string(),
+            TypeInfo {
+                name: "T".to_string(),
+                params: Vec::new(),
+                parent: None,
+                attributes: HashMap::new(),
+                methods: type_methods.clone(),
+                flattened_methods: type_methods,
+                is_builtin_value: false,
+                span: SourceSpan::new(0, 0),
+            },
+        );
+
+        registry
+    }
+
+    #[test]
+    fn implements_protocol_missing_method() {
+        // Type T has no method `f`.
+        let registry = build_registry_with_protocol_and_type(HashMap::new());
+        assert!(!registry.implements_protocol("T", "P"));
+    }
+
+    #[test]
+    fn implements_protocol_wrong_arity() {
+        // Type T has method `f` but with one parameter, while protocol expects zero.
+        let mut methods = HashMap::new();
+        methods.insert(
+            "f".to_string(),
+            MethodSignature {
+                params: vec![("x".to_string(), Type::Number)],
+                return_type: Type::Number,
+                defined_in: "T".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        );
+        let registry = build_registry_with_protocol_and_type(methods);
+        assert!(!registry.implements_protocol("T", "P"));
+    }
+
+    #[test]
+    fn implements_protocol_contravariant_violation() {
+        // Protocol P: f() expects no parameters.
+        // Type T: f() with one parameter of type Number -> protocol param (none) <= type param (Number) is false?
+        // Actually, for contravariance, protocol param type P must conform to type param type T.
+        // Since there are no protocol params, there's nothing to check. To get a violation, we need a protocol
+        // with a parameter and a type with a parameter of a type that does NOT conform.
+        // Let's redefine: protocol P has f(x: Number), type T has f(x: String) -> String does not conform to Number.
+        let mut registry = TypeRegistry {
+            types: HashMap::new(),
+            protocols: HashMap::new(),
+            functions: HashMap::new(),
+        };
+
+        let p_methods = HashMap::from([(
+            "f".to_string(),
+            MethodSignature {
+                params: vec![("x".to_string(), Type::Number)],
+                return_type: Type::Number,
+                defined_in: "P".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        )]);
+        registry.protocols.insert(
+            "P".to_string(),
+            ProtocolInfo {
+                name: "P".to_string(),
+                extends: Vec::new(),
+                methods: p_methods.clone(),
+                flattened_methods: p_methods,
+                span: SourceSpan::new(0, 0),
+            },
+        );
+
+        let mut type_methods = HashMap::new();
+        type_methods.insert(
+            "f".to_string(),
+            MethodSignature {
+                params: vec![("x".to_string(), Type::String)],
+                return_type: Type::Number,
+                defined_in: "T".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        );
+        registry.types.insert(
+            "T".to_string(),
+            TypeInfo {
+                name: "T".to_string(),
+                params: Vec::new(),
+                parent: None,
+                attributes: HashMap::new(),
+                methods: type_methods.clone(),
+                flattened_methods: type_methods,
+                is_builtin_value: false,
+                span: SourceSpan::new(0, 0),
+            },
+        );
+
+        // Protocol param (Number) must conform to type param (String) -> false.
+        assert!(!registry.implements_protocol("T", "P"));
+    }
+
+    #[test]
+    fn implements_protocol_covariant_violation() {
+        // Protocol P: f(): Number
+        // Type T: f(): String -> String does not conform to Number.
+        let mut methods = HashMap::new();
+        methods.insert(
+            "f".to_string(),
+            MethodSignature {
+                params: Vec::new(),
+                return_type: Type::String,
+                defined_in: "T".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        );
+        let registry = build_registry_with_protocol_and_type(methods);
+        assert!(!registry.implements_protocol("T", "P"));
+    }
+
+    #[test]
+    fn is_ancestor_self_is_true() {
+        let mut registry = seeded_registry();
+        // Insert a user type T.
+        registry.types.insert(
+            "T".to_string(),
+            TypeInfo {
+                name: "T".to_string(),
+                params: Vec::new(),
+                parent: None,
+                attributes: HashMap::new(),
+                methods: HashMap::new(),
+                flattened_methods: HashMap::new(),
+                is_builtin_value: false,
+                span: SourceSpan::new(0, 0),
+            },
+        );
+        assert!(registry.is_ancestor("T", "T"));
+        // Also for builtins:
+        assert!(registry.is_ancestor("Number", "Number"));
+        assert!(registry.is_ancestor("Object", "Object"));
+    }
 }
