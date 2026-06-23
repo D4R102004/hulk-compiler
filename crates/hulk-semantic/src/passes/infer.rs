@@ -954,28 +954,24 @@ impl<'a> InferState<'a> {
     // For
     // -------------------------------------------------------------------------
 
+    /// Infers the type of a `for` loop.
+    ///
+    /// The iterable expression is inferred first. The loop variable's type is
+    /// determined by looking up the `current()` method on the iterable's type.
+    /// This uses the generic method‑table helper in the registry, which handles
+    /// `Vector<T>`, `Iterable<T>`, and any nominal type that structurally
+    /// implements the `Iterable` protocol (including `Range` and user‑defined
+    /// types). If `current()` is not found, a `NotIterable` error is reported.
+    ///
+    /// The loop variable is declared in a new scope, the body is inferred,
+    /// and the result type is the body's type.
     fn infer_for(&mut self, for_expr: &ForExpr, env: &mut Environment) -> TypedExpr {
         let iterable = self.infer_expr(&for_expr.iterable, env);
         let iterable_type = iterable.anno.clone();
 
-        // Check if iterable implements Iterable protocol or is a Vector/Iterable type.
-        let element_type = if let Type::Iterable(inner) = &iterable_type {
-            *inner.clone()
-        } else if let Type::Vector(inner) = &iterable_type {
-            *inner.clone()
-        } else if self.is_iterable(&iterable_type) {
-            // If it's a type that implements the Iterable protocol, get the covariant
-            // return type of its current() method.
-            match self.iterable_element_type(&iterable_type) {
-                Some(ty) => ty,
-                None => {
-                    self.errors.push(SemanticError::error(
-                        SemanticErrorKind::NotIterable(iterable_type.clone()),
-                        for_expr.iterable.span,
-                    ));
-                    Type::Error
-                }
-            }
+        // Determine the element type by looking up the `current()` method.
+        let element_type = if let Some(method_sig) = self.registry.lookup_method(&iterable_type, "current") {
+            method_sig.return_type
         } else {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::NotIterable(iterable_type.clone()),
@@ -993,31 +989,6 @@ impl<'a> InferState<'a> {
         let result_type = body.anno.clone();
         let for_typed = ForExpr::new(&for_expr.var, iterable, body);
         typed_expr(ExprKind::For(for_typed), result_type, for_expr.iterable.span)
-    }
-
-    // Helper: check if a type implements Iterable protocol.
-    fn is_iterable(&self, ty: &Type) -> bool {
-        match ty {
-            Type::Named(name) => self.registry.implements_protocol(name, "Iterable"),
-            _ => false,
-        }
-    }
-
-    // Helper: get the covariant element type of an iterable.
-    fn iterable_element_type(&self, ty: &Type) -> Option<Type> {
-        // For a type that implements Iterable, we need the return type of current().
-        match ty {
-            Type::Named(name) => {
-                if let Some(info) = self.registry.lookup_type(name) {
-                    if let Some(sig) = info.methods.get("current") {
-                        // Covariant: the method's return type is the element type.
-                        return Some(sig.return_type.clone());
-                    }
-                }
-                None
-            }
-            _ => None,
-        }
     }
 
     // -------------------------------------------------------------------------
@@ -1477,6 +1448,17 @@ impl<'a> InferState<'a> {
     // Vector
     // -------------------------------------------------------------------------
 
+    /// Infers the type of a vector literal or comprehension.
+    ///
+    /// For a literal, each element is inferred, and the element type is the
+    /// lowest common ancestor of all element types (or `Unknown` if empty).
+    ///
+    /// For a comprehension, the iterable is inferred, and the bound variable’s
+    /// type is determined by looking up the `current()` method on the iterable’s
+    /// type via the registry’s generic method‑table helper. This handles
+    /// `Vector<T>`, `Iterable<T>`, and any nominal type that structurally
+    /// implements the `Iterable` protocol (e.g., `Range`). If `current()` is
+    /// not found, a `NotIterable` error is reported.
     fn infer_vector(&mut self, vector: &VectorExpr, env: &mut Environment) -> TypedExpr {
         match vector {
             VectorExpr::Literal(items) => {
@@ -1491,27 +1473,20 @@ impl<'a> InferState<'a> {
                     lowest_common_ancestor(&item_types, self.registry)
                 };
                 let result_type = Type::Vector(Box::new(elem_type));
-                typed_expr(ExprKind::Vector(VectorExpr::Literal(typed_items)), result_type, items.first().map(|e| e.span).unwrap_or(SourceSpan::new(0, 0)))
+                typed_expr(
+                    ExprKind::Vector(VectorExpr::Literal(typed_items)),
+                    result_type,
+                    items.first().map(|e| e.span).unwrap_or(SourceSpan::new(0, 0)),
+                )
             }
             VectorExpr::Comprehension(comp) => {
-                // Infer iterable.
                 let typed_iterable = self.infer_expr(&comp.iterable, env);
-                // Get element type (same as for loop).
-                let elem_type = if let Type::Iterable(inner) = &typed_iterable.anno {
-                    *inner.clone()
-                } else if let Type::Vector(inner) = &typed_iterable.anno {
-                    *inner.clone()
-                } else if self.is_iterable(&typed_iterable.anno) {
-                    match self.iterable_element_type(&typed_iterable.anno) {
-                        Some(ty) => ty,
-                        None => {
-                            self.errors.push(SemanticError::error(
-                                SemanticErrorKind::NotIterable(typed_iterable.anno.clone()),
-                                comp.iterable.span,
-                            ));
-                            Type::Error
-                        }
-                    }
+
+                // Determine the element type by looking up `current()`.
+                let elem_type = if let Some(method_sig) =
+                    self.registry.lookup_method(&typed_iterable.anno, "current")
+                {
+                    method_sig.return_type
                 } else {
                     self.errors.push(SemanticError::error(
                         SemanticErrorKind::NotIterable(typed_iterable.anno.clone()),
@@ -1524,9 +1499,14 @@ impl<'a> InferState<'a> {
                 env.declare(&comp.var, elem_type.clone(), comp.iterable.span);
                 let typed_head = self.infer_expr(&comp.expr, env);
                 env.pop_scope();
+
                 let result_type = Type::Vector(Box::new(typed_head.anno.clone()));
                 let comp_typed = VectorComprehension::new(typed_head, &comp.var, typed_iterable);
-                typed_expr(ExprKind::Vector(VectorExpr::Comprehension(comp_typed)), result_type, comp.iterable.span)
+                typed_expr(
+                    ExprKind::Vector(VectorExpr::Comprehension(comp_typed)),
+                    result_type,
+                    comp.iterable.span,
+                )
             }
         }
     }
@@ -1708,27 +1688,9 @@ impl<'a> InferState<'a> {
     // Helpers
     // -----------------------------------------------------------------------------
 
-    // Helper to look up a method on a type or protocol.
-    fn lookup_method(&self, ty: &Type, method_name: &str) -> Option<&MethodSignature> {
-        match ty {
-            Type::Named(name) => {
-                // Check class types first.
-                if let Some(info) = self.registry.lookup_type(name) {
-                    // Use flattened methods.
-                    if let Some(sig) = info.flattened_methods.get(method_name) {
-                        return Some(sig);
-                    }
-                }
-                // Then check protocols.
-                if let Some(proto) = self.registry.lookup_protocol(name) {
-                    if let Some(sig) = proto.flattened_methods.get(method_name) {
-                        return Some(sig);
-                    }
-                }
-                None
-            }
-            _ => None,
-        }
+    // Helper to look up a method on a type or protocol using TypeRegistry functionality.
+    fn lookup_method(&self, ty: &Type, method_name: &str) -> Option<MethodSignature> {
+        self.registry.lookup_method(ty, method_name)
     }
 
     /// Looks up a member (attribute or method) on a type.
@@ -1746,9 +1708,17 @@ impl<'a> InferState<'a> {
                         }
                     }
                 }
-                // 2. Method lookup (on both classes and protocols).
+                // 2. Method lookup on both classes and protocols using generic-aware helper.
                 if let Some(method_sig) = self.lookup_method(ty, member_name) {
-                    return Some((Type::Named(name.clone()), method_sig.return_type.clone()));
+                    return Some((Type::Named(name.clone()), method_sig.return_type));
+                }
+                None
+            }
+            // For Vector and Iterable, only methods exist (no attributes).
+            Type::Vector(_) | Type::Iterable(_) => {
+                if let Some(method_sig) = self.lookup_method(ty, member_name) {
+                    // Owner is the type itself.
+                    return Some((ty.clone(), method_sig.return_type));
                 }
                 None
             }
@@ -2006,9 +1976,14 @@ mod tests {
 
     #[test]
     fn for_loop_over_range() {
-        let src = "for (x in range(0, 10)) print(x);";
+        let src = "
+            let sum = 0 in {
+                for (x in range(1,4)) sum := sum + x;
+                print(sum);
+            }
+        ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "for loop over range should work");
     }
 
     // ---- Inference examples from §A.9.4 ----
@@ -2051,7 +2026,7 @@ mod tests {
     fn vector_comprehension() {
         let src = "let xs = [x^2 | x in range(1,10)] in print(xs[0]);";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "vector comprehension should work");
     }
 
     #[test]
@@ -2225,5 +2200,142 @@ mod tests {
         } else {
             panic!("entry expression is not a let");
         }
+    }
+
+    // ---- Generic method lookup for Vector and Iterable ----
+
+    #[test]
+    fn vector_size_method_call() {
+        let src = "let v = [1,2,3] in print(v.size());";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "v.size() should resolve");
+    }
+
+    #[test]
+    fn vector_get_method_call() {
+        let src = "let v = [1,2,3] in print(v.get(1));";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "v.get(1) should resolve");
+    }
+
+    #[test]
+    fn vector_set_method_call() {
+        let src = "let v = [1,2,3] in v.set(1, 42);";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "v.set(1, 42) should resolve");
+    }
+
+    #[test]
+    fn vector_current_method_call() {
+        // Vector implements Iterable, so current() should be available.
+        let src = "let v = [1,2,3] in print(v.current());";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "v.current() should resolve");
+    }
+
+    #[test]
+    fn iterable_protocol_method_call() {
+        let src = "
+            type T {
+                next(): Boolean => true;
+                current(): Number => 42;
+            }
+            let it: Iterable<Number> = new T() in print(it.current());
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "it.current() should resolve with correct return type");
+    }
+
+    #[test]
+    fn for_loop_over_vector() {
+        let src = "
+            let sum = 0 in {
+                for (x in [1,2,3]) sum := sum + x;
+                print(sum);
+            }
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "for loop over vector should work");
+    }
+
+    #[test]
+    fn for_loop_over_user_iterable() {
+        let src = "
+            type MyIter {
+                next(): Boolean => true;
+                current(): Number => 42;
+            }
+            let sum = 0 in {
+                for (x in new MyIter()) sum := sum + x;
+                print(sum);
+            }
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "for loop over user-defined iterable should work");
+    }
+
+    #[test]
+    fn vector_index_assignment() {
+        let src = "let v = [1,2,3] in { v[0] := 42; print(v[0]); }";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "index assignment should work");
+    }
+
+    // ---- Error cases ----
+
+    #[test]
+    fn method_not_found_on_vector() {
+        let src = "let v = [1,2,3] in print(v.foo());";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err(), "calling unknown method should fail");
+        let errors = result.err().unwrap();
+        assert!(
+            errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::UnknownMember { .. })),
+            "expected UnknownMember error"
+        );
+    }
+
+    #[test]
+    fn current_on_non_iterable() {
+        let src = "
+            type A { }
+            let x = new A() in print(x.current());
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err(), "calling current() on non-iterable should fail");
+        let errors = result.err().unwrap();
+        assert!(
+            errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::UnknownMember { .. })),
+            "expected UnknownMember error"
+        );
+    }
+
+    #[test]
+    fn for_loop_on_non_iterable() {
+        let src = "
+            type A { }
+            for (x in new A()) print(x);
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_err(), "for loop on non-iterable should fail");
+        let errors = result.err().unwrap();
+        assert!(
+            errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::NotIterable(_))),
+            "expected NotIterable error"
+        );
+    }
+
+    #[test]
+    fn type_of_loop_variable_is_correct() {
+        // We check that the loop variable is inferred as Number by using it in a context
+        // that requires Number (e.g., addition).
+        let src = "
+            let sum = 0 in {
+                for (x in [1,2,3]) sum := sum + x;  // x must be Number
+                print(sum);
+            }
+        ";
+        let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
+        assert!(result.is_ok(), "loop variable should be Number and usable in arithmetic");
     }
 }

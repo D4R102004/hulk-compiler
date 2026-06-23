@@ -93,7 +93,13 @@ impl Type {
     ///    by `other`.
     /// 6. Protocol conformance: if `self` is `Named` and `other` is a
     ///    protocol name, delegate to `registry.implements_protocol`.
-    /// 7. Otherwise: return `false` (no implicit numeric widening in HULK).
+    /// 7. `Iterable` conformance and covariance:
+    ///    - `Named(T)` ≤ `Iterable(U)` if `T` implements `Iterable` and
+    ///      `current(): R` with `R ≤ U`.
+    ///    - `Vector(T)` ≤ `Iterable(U)` if `T ≤ U`.
+    ///    - `Iterable(T)` ≤ `Iterable(U)` if `T ≤ U`.
+    /// 8. `Vector` covariance: `Vector(T)` ≤ `Vector(U)` if `T ≤ U`.
+    /// 9. Otherwise: return `false` (no implicit numeric widening in HULK).
     pub fn conforms_to(&self, other: &Self, registry: &TypeRegistry) -> bool {
         // 1. Reflexivity
         if self == other {
@@ -138,7 +144,57 @@ impl Type {
             }
         }
 
-        // 7. Fallback: no conformance
+        // 7. Conformance to Iterable<T> (includes Iterable covariance)
+        if let Type::Iterable(expected_inner) = other {
+            return match self {
+                Type::Named(t1) => {
+                    // Primary path: use the registry's structural protocol conformance check.
+                    if registry.implements_protocol(t1, "Iterable") {
+                        if let Some(info) = registry.lookup_type(t1) {
+                            if let Some(sig) = info.flattened_methods.get("current") {
+                                if sig.return_type.conforms_to(expected_inner, registry) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    // Fallback: directly verify the type has both required methods.
+                    // This handles cases where the protocol's method table might be incomplete.
+                    if let Some(info) = registry.lookup_type(t1) {
+                        let has_next = info.flattened_methods.get("next")
+                            .map(|sig| sig.params.is_empty() && sig.return_type == Type::Boolean)
+                            .unwrap_or(false);
+                        if has_next {
+                            if let Some(sig) = info.flattened_methods.get("current") {
+                                if sig.params.is_empty() {
+                                    return sig.return_type.conforms_to(expected_inner, registry);
+                                }
+                            }
+                        }
+                    }
+                    false
+                }
+                Type::Vector(inner) => {
+                    // Vector<T> implements Iterable with current returning T.
+                    inner.conforms_to(expected_inner, registry)
+                }
+                Type::Iterable(inner) => {
+                    // Iterable<T> covariance.
+                    inner.conforms_to(expected_inner, registry)
+                }
+                _ => false,
+            };
+        }
+
+        // 8. Vector covariance: Vector<T> ≤ Vector<U> if T ≤ U
+        if let Type::Vector(expected_inner) = other {
+            if let Type::Vector(inner) = self {
+                return inner.conforms_to(expected_inner, registry);
+            }
+            return false;
+        }
+
+        // 9. Fallback: no conformance
         false
     }
 }
@@ -464,5 +520,80 @@ mod tests {
         assert!(chain.len() >= 2);
         assert_eq!(chain[0], Type::Named("X".to_string()));
         assert_eq!(chain.last(), Some(&Type::Object));
+    }
+
+    #[test]
+    fn named_conforms_to_iterable_covariant() {
+        let mut registry = seeded_registry();
+
+        // Insert a type T that implements Iterable with current(): Number.
+        use std::collections::HashMap;
+        use crate::types::registry::{MethodSignature, TypeInfo, ParentLink};
+        let mut methods = HashMap::new();
+        methods.insert(
+            "next".to_string(),
+            MethodSignature {
+                params: Vec::new(),
+                return_type: Type::Boolean,
+                defined_in: "T".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        );
+        methods.insert(
+            "current".to_string(),
+            MethodSignature {
+                params: Vec::new(),
+                return_type: Type::Number,
+                defined_in: "T".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        );
+        registry.types.insert(
+            "T".to_string(),
+            TypeInfo {
+                name: "T".to_string(),
+                params: Vec::new(),
+                parent: Some(ParentLink {
+                    name: "Object".to_string(),
+                    args: Vec::new(),
+                }),
+                attributes: HashMap::new(),
+                methods: methods.clone(),
+                flattened_methods: methods,
+                is_builtin_value: false,
+                span: SourceSpan::new(0, 0),
+            },
+        );
+
+        // T should conform to Iterable<Number>.
+        let t = Type::Named("T".to_string());
+        let iter_num = Type::Iterable(Box::new(Type::Number));
+        assert!(t.conforms_to(&iter_num, &registry));
+
+        // T should NOT conform to Iterable<String> (Number does not conform to String).
+        let iter_str = Type::Iterable(Box::new(Type::String));
+        assert!(!t.conforms_to(&iter_str, &registry));
+    }
+
+    #[test]
+    fn iterable_covariance() {
+        let registry = seeded_registry();
+        let iter_num = Type::Iterable(Box::new(Type::Number));
+        let iter_obj = Type::Iterable(Box::new(Type::Object));
+        // Iterable<Number> <= Iterable<Object> because Number <= Object.
+        assert!(iter_num.conforms_to(&iter_obj, &registry));
+        // Iterable<Object> does not conform to Iterable<Number>.
+        assert!(!iter_obj.conforms_to(&iter_num, &registry));
+    }
+
+    #[test]
+    fn vector_covariance() {
+        let registry = seeded_registry();
+        let vec_num = Type::Vector(Box::new(Type::Number));
+        let vec_obj = Type::Vector(Box::new(Type::Object));
+        // Vector<Number> <= Vector<Object> because Number <= Object.
+        assert!(vec_num.conforms_to(&vec_obj, &registry));
+        // Vector<Object> does not conform to Vector<Number>.
+        assert!(!vec_obj.conforms_to(&vec_num, &registry));
     }
 }

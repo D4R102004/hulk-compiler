@@ -147,6 +147,7 @@ pub fn seeded_registry() -> TypeRegistry {
     // ─── Builtin protocols ────────────────────────────────────────────────
 
     // Iterable protocol
+    let placeholder_t = Type::Named("T".to_string());
     let iterable_methods = HashMap::from([
         (
             "next".to_string(),
@@ -161,7 +162,7 @@ pub fn seeded_registry() -> TypeRegistry {
             "current".to_string(),
             MethodSignature {
                 params: Vec::new(),
-                return_type: Type::Object,
+                return_type: placeholder_t.clone(),
                 defined_in: "Iterable".to_string(),
                 span: SourceSpan::new(0, 0),
             },
@@ -234,6 +235,76 @@ pub fn seeded_registry() -> TypeRegistry {
         span: SourceSpan::new(0, 0),
     };
     registry.types.insert("Range".to_string(), range_type);
+
+    // ─── Builtin type: Vector ──────────────────────────────────────────────
+
+    // Vector is a generic collection. Its method signatures use a placeholder
+    // type `T` which will be substituted with the concrete element type.
+    let vector_methods = HashMap::from([
+        (
+            "size".to_string(),
+            MethodSignature {
+                params: Vec::new(),
+                return_type: Type::Number,
+                defined_in: "Vector".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        ),
+        (
+            "get".to_string(),
+            MethodSignature {
+                params: vec![("index".to_string(), Type::Number)],
+                return_type: placeholder_t.clone(),
+                defined_in: "Vector".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        ),
+        (
+            "set".to_string(),
+            MethodSignature {
+                params: vec![
+                    ("index".to_string(), Type::Number),
+                    ("value".to_string(), placeholder_t.clone()),
+                ],
+                return_type: Type::Object, // like Unit
+                defined_in: "Vector".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        ),
+        (
+            "next".to_string(),
+            MethodSignature {
+                params: Vec::new(),
+                return_type: Type::Boolean,
+                defined_in: "Vector".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        ),
+        (
+            "current".to_string(),
+            MethodSignature {
+                params: Vec::new(),
+                return_type: placeholder_t.clone(),
+                defined_in: "Vector".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        ),
+    ]);
+
+    let vector_type = TypeInfo {
+        name: "Vector".to_string(),
+        params: Vec::new(),          // Vector has no constructor params in this model
+        parent: Some(ParentLink {
+            name: "Object".to_string(),
+            args: Vec::new(),
+        }),
+        attributes: HashMap::new(),
+        methods: vector_methods,
+        flattened_methods: HashMap::new(), // will be filled later, but we can copy now
+        is_builtin_value: false,
+        span: SourceSpan::new(0, 0),
+    };
+    registry.types.insert("Vector".to_string(), vector_type);
 
     // ─── Builtin functions ────────────────────────────────────────────────
 
@@ -335,6 +406,71 @@ impl TypeRegistry {
         self.functions.get(name)
     }
 
+    /// Returns a method table (flattened) for the given type, with any
+    /// generic parameters substituted.
+    ///
+    /// For `Type::Named`, it looks up the type or protocol and returns a clone
+    /// of its flattened methods.
+    /// For `Type::Vector(inner)` and `Type::Iterable(inner)`, it retrieves the
+    /// built‑in table for "Vector" or "Iterable" and substitutes `inner` for `T`.
+    /// For other types, returns `None`.
+    pub fn method_table_for(&self, ty: &Type) -> Option<HashMap<String, MethodSignature>> {
+        match ty {
+            Type::Named(name) => {
+                // Prefer type over protocol (they share a namespace anyway).
+                if let Some(info) = self.lookup_type(name) {
+                    if !info.flattened_methods.is_empty() {
+                        return Some(info.flattened_methods.clone());
+                    }
+                    // Fallback to own methods (if flattening not yet done).
+                    if !info.methods.is_empty() {
+                        return Some(info.methods.clone());
+                    }
+                }
+                if let Some(proto) = self.lookup_protocol(name) {
+                    if !proto.flattened_methods.is_empty() {
+                        return Some(proto.flattened_methods.clone());
+                    }
+                    if !proto.methods.is_empty() {
+                        return Some(proto.methods.clone());
+                    }
+                }
+                None
+            }
+            Type::Vector(inner) => {
+                self.lookup_type("Vector")
+                    .and_then(|info| {
+                        if !info.flattened_methods.is_empty() {
+                            Some(substitute_method_table(&info.flattened_methods, inner))
+                        } else if !info.methods.is_empty() {
+                            Some(substitute_method_table(&info.methods, inner))
+                        } else {
+                            None
+                        }
+                    })
+            }
+            Type::Iterable(inner) => {
+                self.lookup_protocol("Iterable")
+                    .and_then(|proto| {
+                        if !proto.flattened_methods.is_empty() {
+                            Some(substitute_method_table(&proto.flattened_methods, inner))
+                        } else if !proto.methods.is_empty() {
+                            Some(substitute_method_table(&proto.methods, inner))
+                        } else {
+                            None
+                        }
+                    })
+            }
+            _ => None,
+        }
+    }
+
+    /// Convenience: look up a single method by name.
+    pub fn lookup_method(&self, ty: &Type, name: &str) -> Option<MethodSignature> {
+        self.method_table_for(ty)
+            .and_then(|table| table.get(name).cloned())
+    }
+
     /// Returns `true` if the given `Type` is a protocol name.
     pub fn is_protocol(&self, ty: &Type) -> bool {
         match ty {
@@ -394,7 +530,14 @@ impl TypeRegistry {
             &type_info.methods
         };
 
-        for (method_name, proto_sig) in &protocol_info.methods {
+        // Use the flattened method table of the protocol (includes inherited).
+        let proto_methods = if !protocol_info.flattened_methods.is_empty() {
+            &protocol_info.flattened_methods
+        } else {
+            &protocol_info.methods
+        };
+
+        for (method_name, proto_sig) in proto_methods {
             let type_sig = match type_methods.get(method_name) {
                 Some(sig) => sig,
                 None => return false, // missing method
@@ -492,6 +635,48 @@ impl TypeRegistry {
             Err(missing)
         }
     }
+}
+
+// -----------------------------------------------------------------------------
+// Generic substitution helpers
+// -----------------------------------------------------------------------------
+
+/// Replaces every occurrence of the formal generic parameter `param_name`
+/// with `concrete` type, recursively walking through `Type`.
+fn substitute_type(ty: &Type, param_name: &str, concrete: &Type) -> Type {
+    match ty {
+        Type::Named(name) if name == param_name => concrete.clone(),
+        Type::Vector(inner) => Type::Vector(Box::new(substitute_type(inner, param_name, concrete))),
+        Type::Iterable(inner) => Type::Iterable(Box::new(substitute_type(inner, param_name, concrete))),
+        other => other.clone(),
+    }
+}
+
+/// Substitutes the generic parameter `"T"` with `concrete` across an entire
+/// method table, producing a new table with all signatures updated.
+fn substitute_method_table(
+    table: &HashMap<String, MethodSignature>,
+    concrete: &Type,
+) -> HashMap<String, MethodSignature> {
+    let param = "T";
+    table
+        .iter()
+        .map(|(name, sig)| {
+            let substituted = MethodSignature {
+                params: sig
+                    .params
+                    .iter()
+                    .map(|(pname, pty)| {
+                        (pname.clone(), substitute_type(pty, param, concrete))
+                    })
+                    .collect(),
+                return_type: substitute_type(&sig.return_type, param, concrete),
+                defined_in: sig.defined_in.clone(),
+                span: sig.span,
+            };
+            (name.clone(), substituted)
+        })
+        .collect()
 }
 
 // -----------------------------------------------------------------------------
@@ -678,5 +863,68 @@ mod tests {
         // Also for builtins:
         assert!(registry.is_ancestor("Number", "Number"));
         assert!(registry.is_ancestor("Object", "Object"));
+    }
+
+    // ---- Generic method table substitution ----
+
+    #[test]
+    fn method_table_for_vector_substitutes_type() {
+        let registry = seeded_registry();
+        let vec_num = Type::Vector(Box::new(Type::Number));
+        let table = registry.method_table_for(&vec_num).unwrap();
+
+        let current_sig = table.get("current").expect("Vector should have current()");
+        assert_eq!(current_sig.return_type, Type::Number, "current() return type should be Number");
+
+        let get_sig = table.get("get").expect("Vector should have get()");
+        assert_eq!(get_sig.params[0].1, Type::Number, "index type should be Number");
+        assert_eq!(get_sig.return_type, Type::Number, "get() return type should be Number");
+
+        let set_sig = table.get("set").expect("Vector should have set()");
+        assert_eq!(set_sig.params[1].1, Type::Number, "value type should be Number");
+    }
+
+    #[test]
+    fn method_table_for_iterable_substitutes_type() {
+        let registry = seeded_registry();
+        let iter_str = Type::Iterable(Box::new(Type::String));
+        let table = registry.method_table_for(&iter_str).unwrap();
+
+        let current_sig = table.get("current").expect("Iterable should have current()");
+        assert_eq!(current_sig.return_type, Type::String, "current() return type should be String");
+
+        let next_sig = table.get("next").expect("Iterable should have next()");
+        assert_eq!(next_sig.return_type, Type::Boolean, "next() return type should be Boolean");
+    }
+
+    #[test]
+    fn method_table_for_named_type_returns_own_methods() {
+        let mut registry = seeded_registry();
+        // Insert a user type with a method.
+        let mut methods = HashMap::new();
+        methods.insert(
+            "foo".to_string(),
+            MethodSignature {
+                params: Vec::new(),
+                return_type: Type::Number,
+                defined_in: "User".to_string(),
+                span: SourceSpan::new(0, 0),
+            },
+        );
+        registry.types.insert(
+            "User".to_string(),
+            TypeInfo {
+                name: "User".to_string(),
+                params: Vec::new(),
+                parent: None,
+                attributes: HashMap::new(),
+                methods: methods.clone(),
+                flattened_methods: methods,
+                is_builtin_value: false,
+                span: SourceSpan::new(0, 0),
+            },
+        );
+        let table = registry.method_table_for(&Type::Named("User".to_string())).unwrap();
+        assert!(table.contains_key("foo"));
     }
 }

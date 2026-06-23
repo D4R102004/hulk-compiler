@@ -297,12 +297,6 @@ comment, which `cargo doc -p hulk-semantic --open` will render directly.
 
 ## Known limitations
 
-- **`Vector`/`Iterable` method lookup is incomplete.** `lookup_method` and
-  `lookup_member` in Pass 2 only match `Type::Named`, so a method call like
-  `v.size()` on a vector-typed expression, or `it.next()`/`it.current()` on a
-  value explicitly typed `T*`, does not currently resolve outside of the `for`-loop
-  desugaring that already exists. Indexing (`v[0]`) is unaffected — that's handled
-  separately and works today.
 - **No functors or lambda expressions.** `hulk-ast`'s `ExprKind` has no `Lambda`
   variant, and there's no `(T) -> R` arrow-type syntax in `parse_type_ref` — this is a
   cross-crate gap (the lexer already has the `Arrow`/`FatArrow` tokens; parser and AST
@@ -314,7 +308,3 @@ comment, which `cargo doc -p hulk-semantic --open` will render directly.
   intentional behavior (see the `mutual_recursion_two_functions` test) rather than a
   silent bug, but it's a real expressiveness gap relative to the spec's general
   inference intent.
-
-A detailed, ready-to-implement remediation plan for these gaps — including which parts
-are scoped entirely within this crate versus which require `hulk-ast`/`hulk-parser`
-changes — lives in `GUIDE_TO_COMPLETION.md`.
