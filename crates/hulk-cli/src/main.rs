@@ -6,12 +6,13 @@
 use std::fs;
 use std::process;
 
-use clap::Parser;
+use clap::Parser as clapParser;
 use hulk_lexer::Lexer;
 use hulk_parser::Parser;
+use hulk_semantic::analyze;
 
 /// The HULK compiler.
-#[derive(Parser)]
+#[derive(clapParser)]
 #[command(version, about = "HULK language compiler", long_about = None)]
 struct Args {
     /// Path to the .hulk source file to compile.
@@ -20,13 +21,9 @@ struct Args {
 
 fn main() {
     // Parse command line arguments.
-    // WHY: clap automatically handles --help, --version,
-    // and missing argument errors — no manual checking needed.
     let args = Args::parse();
 
-    // Read the source file into a string.
-    // WHY: we report the filename in the error so the user
-    // knows exactly which file failed to open.
+    // Read the source file.
     let source = fs::read_to_string(&args.file).unwrap_or_else(|err| {
         eprintln!("error: could not read '{}': {}", args.file, err);
         process::exit(1);
@@ -39,12 +36,27 @@ fn main() {
     });
 
     // Parse the token stream into an AST.
-    // WHY: the parser is now the second real frontend phase, so the CLI
-    // prints the AST instead of stopping at lexical debugging.
     let program = Parser::new(tokens).parse_program().unwrap_or_else(|err| {
         eprintln!("error: {}", err);
         process::exit(1);
     });
 
-    println!("{:#?}", program);
+    match analyze(&program) {
+        Err(errors) => {
+            // Print every semantic error (not just the first).
+            for error in &errors {
+                eprintln!("{}", error);
+            }
+            process::exit(1);
+        }
+        Ok(verified) => {
+            // Print warnings, if any.
+            for warning in &verified.warnings {
+                eprintln!("warning: {}", warning);
+            }
+
+            // Print the fully typed AST (each expression now carries a Type).
+            println!("{:#?}", verified.typed_program);
+        }
+    }
 }

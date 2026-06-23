@@ -672,23 +672,21 @@ impl<A> MatchExpr<A> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchCase<A = ()> {
-    pub pattern: Pattern<A>,
+    pub pattern: Pattern,
     pub body: Expr<A>,
 }
 
 impl<A> MatchCase<A> {
-    pub fn new(pattern: Pattern<A>, body: Expr<A>) -> Self {
+    pub fn new(pattern: Pattern, body: Expr<A>) -> Self {
         Self { pattern, body }
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Pattern<A = ()> {
+pub enum Pattern {
     Wildcard,
     Literal(Literal),
     Variable(String),
-    // The `Type` variant does not contain an expression, but we keep the
-    // generic parameter for uniformity and future extension.
     Type(TypeRef, Option<String>),
 }
 

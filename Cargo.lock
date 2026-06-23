@@ -115,6 +115,7 @@ dependencies = [
  "clap",
  "hulk-lexer",
  "hulk-parser",
+ "hulk-semantic",
 ]
 
 [[package]]
