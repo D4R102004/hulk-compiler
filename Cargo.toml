@@ -6,6 +6,7 @@ members = [
     "crates/hulk-parser",
     "crates/hulk-semantic",
     "crates/hulk-codegen",
+    "crates/hulk-rt",
     "crates/hulk-cli",
 ]
 
