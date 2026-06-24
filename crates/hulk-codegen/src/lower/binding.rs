@@ -1,0 +1,125 @@
+//! Lowering of variable bindings and assignments.
+//!
+//! This module handles:
+//! - Variable references (`Variable`): looking up a variable in the current
+//!   lexical scope and loading its value.
+//! - `let` expressions: introducing new variables in a fresh scope, with
+//!   sequential binding evaluation (later bindings can refer to earlier ones).
+//! - Assignment (`Assign`): storing a new value into an existing variable.
+//!
+//! The lexical scoping discipline mirrors `hulk_semantic::Environment`:
+//! - Each `let` introduces a new scope that encloses its body.
+//! - Bindings within a single `let` are processed left‑to‑right, and
+//!   subsequent bindings can refer to earlier ones.
+//! - A plain `Block` does not introduce a new scope (handled in `control.rs`).
+
+use hulk_ast::{AssignExpr, LetExpr};
+use hulk_semantic::Type;
+
+use crate::error::CodegenError;
+use crate::lower::LowerCtx;
+use super::lower_expr;
+
+/// Lowers a variable reference.
+///
+/// Looks up the variable in the current lexical scope and loads its value
+/// from the corresponding `alloca`. If the variable is not found, this
+/// returns an error (which should never happen for a semantically verified
+/// program).
+///
+/// # Parameters
+/// - `ctx`: the lowering context.
+/// - `name`: the variable name.
+///
+/// # Returns
+/// The loaded value as an LLVM `BasicValueEnum`.
+///
+/// # Errors
+/// - `CodegenError::Unsupported` if the variable is not in scope (should not
+///   occur after semantic analysis).
+pub fn lower_variable<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    name: &str,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+    ctx.load_var(name)
+}
+
+/// Lowers a `let` expression with one or more bindings.
+///
+/// This function:
+/// 1. Pushes a new lexical scope.
+/// 2. Processes each binding in order:
+///    - Lowers the initialiser expression (which may refer to previously
+///      declared bindings in the same `let`).
+///    - Allocates a stack slot (`alloca`) for the variable and stores the
+///      initial value.
+///    - Records the binding in the current scope.
+/// 3. Lowers the body expression in the same scope.
+/// 4. Pops the scope.
+/// 5. Returns the body's value as the result of the `let` expression.
+///
+/// # Parameters
+/// - `ctx`: the lowering context.
+/// - `let_expr`: the `let` AST node.
+///
+/// # Returns
+/// The value of the body expression.
+///
+/// # Errors
+/// - Propagates errors from lowering the initialisers or body.
+/// - Propagates errors from variable declaration (e.g., LLVM allocation
+///   failures).
+pub fn lower_let<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    let_expr: &LetExpr<Type>,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+    ctx.push_scope();
+    for binding in &let_expr.bindings {
+        let init = lower_expr(ctx, &binding.initializer)?;
+        ctx.declare_var(&binding.name, init)?;
+    }
+    let body_val = lower_expr(ctx, &let_expr.body)?;
+    ctx.pop_scope();
+    Ok(body_val)
+}
+
+/// Lowers an assignment expression.
+///
+/// In Phase 3, only assignments to a simple variable target are supported.
+/// For such a target:
+/// 1. The right‑hand side is lowered to a value.
+/// 2. The target variable's stack slot is looked up.
+/// 3. The value is stored into that slot.
+/// 4. The assignment expression itself returns the stored value (the same
+///    convention used in C and many other languages).
+///
+/// # Parameters
+/// - `ctx`: the lowering context.
+/// - `assign`: the assignment AST node.
+///
+/// # Returns
+/// The assigned value (the right‑hand side's value).
+///
+/// # Errors
+/// - `CodegenError::Unsupported` if the target is not a variable (deferred
+///   to later phases).
+/// - Propagates errors from lowering the right‑hand side or looking up the
+///   target variable.
+pub fn lower_assign<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    assign: &AssignExpr<Type>,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+    match &assign.target {
+        hulk_ast::AssignTarget::Variable(name) => {
+            let val = lower_expr(ctx, &assign.value)?;
+            let (ptr, _ty) = ctx.lookup_var(name)?;
+            ctx.codegen.builder
+                .build_store(ptr, val)
+                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            Ok(val)
+        }
+        _ => Err(CodegenError::Unsupported {
+            construct: "assignment to non‑variable target (deferred to Phase 5/6)".into(),
+        }),
+    }
+}
