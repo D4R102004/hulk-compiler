@@ -31,9 +31,10 @@ pub mod binding;
 pub mod control;
 pub mod literal;
 pub mod operators;
+pub mod decl;
+pub mod call;
 pub mod vector;
 pub mod object;
-pub mod call;
 
 // ─── Lowering context ────────────────────────────────────────────────────
 
@@ -153,14 +154,13 @@ pub fn lower_expr<'ctx>(
 
         ExprKind::Let(let_expr) => binding::lower_let(ctx, let_expr),
         ExprKind::Assign(assign) => binding::lower_assign(ctx, assign),
+        
+        // ─── Functions and properties calls ────────────────────────────────────
+
+        ExprKind::Call(call) => call::lower_call(ctx, call),  
 
         // ─── Deferred to later phases ────────────────────────────────────
 
-        ExprKind::Call(_) => {
-            Err(CodegenError::Unsupported {
-                construct: "calls not yet supported".into()
-            })
-        }
         ExprKind::Member(_) => {
             Err(CodegenError::Unsupported {
                 construct: "member access not yet supported".into()
@@ -660,5 +660,104 @@ mod tests {
         let ir = lower_expr_to_ir(expr);
         assert_ir_contains(&ir, "store double 0.000000e+00, ptr %while_result");
         assert_ir_contains(&ir, "load double, ptr %while_result");
+    }
+
+    // ─── Function calls ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_call_function_no_args() {
+        // Declare a function f(): Number that returns 42.
+        let context = Context::create();
+        let mut codegen = CodegenCtx::new(&context, "test");
+        let i32_type = context.i32_type();
+        let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
+        let entry_bb = context.append_basic_block(main_fn, "entry");
+        codegen.builder.position_at_end(entry_bb);
+
+        // Declare f(): Number -> Number (return type Number = f64).
+        let f64_type = context.f64_type();
+        let f_fn_type = f64_type.fn_type(&[], false);
+        let f_fn = codegen.module.add_function("f", f_fn_type, None);
+        // Define f: return 42.0.
+        let f_entry = context.append_basic_block(f_fn, "entry");
+        codegen.builder.position_at_end(f_entry);
+        let const_42 = f64_type.const_float(42.0);
+        codegen.builder.build_return(Some(&const_42)).expect("return");
+        // Reset builder to main entry.
+        codegen.builder.position_at_end(entry_bb);
+
+        codegen.functions.insert("f".to_string(), f_fn);
+
+        // Now create a call expression to f().
+        let call_expr = call(var("f", Type::Function { params: vec![], return_type: Box::new(Type::Number) }), vec![], Type::Number);
+
+        let registry = seeded_registry();
+        {
+            let mut lower_ctx = LowerCtx::new(&mut codegen, &registry);
+            let _val = lower_expr(&mut lower_ctx, &call_expr).expect("lowering failed");
+            // Store result to make it a real operand.
+            let slot = lower_ctx.codegen.builder
+                .build_alloca(f64_type, "result")
+                .expect("alloca");
+            lower_ctx.codegen.builder.build_store(slot, _val).expect("store");
+        }
+
+        // Return 0.
+        codegen.builder.build_return(Some(&i32_type.const_int(0, false))).expect("return");
+        codegen.module.verify().expect("module verification failed");
+        let ir = codegen.module.print_to_string().to_string();
+
+        // Check that the call instruction appears.
+        assert_ir_contains(&ir, "call double @f()");
+    }
+
+    #[test]
+    fn test_call_function_with_args() {
+        // Declare a function add(x: Number, y: Number): Number that returns x + y.
+        let context = Context::create();
+        let mut codegen = CodegenCtx::new(&context, "test");
+        let i32_type = context.i32_type();
+        let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
+        let entry_bb = context.append_basic_block(main_fn, "entry");
+        codegen.builder.position_at_end(entry_bb);
+
+        let f64_type = context.f64_type();
+        let add_fn_type = f64_type.fn_type(&[f64_type.into(), f64_type.into()], false);
+        let add_fn = codegen.module.add_function("add", add_fn_type, None);
+
+        codegen.functions.insert("add".to_string(), add_fn);
+        // Define add: load parameters, fadd, return.
+        let add_entry = context.append_basic_block(add_fn, "entry");
+        codegen.builder.position_at_end(add_entry);
+        let params = add_fn.get_params();
+        let x_param = params[0].into_float_value();
+        let y_param = params[1].into_float_value();
+        let sum = codegen.builder.build_float_add(x_param, y_param, "add").expect("fadd");
+        codegen.builder.build_return(Some(&sum)).expect("return");
+        codegen.builder.position_at_end(entry_bb);
+
+        // Create a call expression to add(2.0, 3.0).
+        let call_expr = call(
+            var("add", Type::Function { params: vec![Type::Number, Type::Number], return_type: Box::new(Type::Number) }),
+            vec![num(2.0), num(3.0)],
+            Type::Number,
+        );
+
+        let registry = seeded_registry();
+        {
+            let mut lower_ctx = LowerCtx::new(&mut codegen, &registry);
+            let _val = lower_expr(&mut lower_ctx, &call_expr).expect("lowering failed");
+            let slot = lower_ctx.codegen.builder
+                .build_alloca(f64_type, "result")
+                .expect("alloca");
+            lower_ctx.codegen.builder.build_store(slot, _val).expect("store");
+        }
+
+        codegen.builder.build_return(Some(&i32_type.const_int(0, false))).expect("return");
+        codegen.module.verify().expect("module verification failed");
+        let ir = codegen.module.print_to_string().to_string();
+
+        // Check that the call instruction appears with arguments.
+        assert_ir_contains(&ir, "call double @add(double 2.000000e+00, double 3.000000e+00)");
     }
 }

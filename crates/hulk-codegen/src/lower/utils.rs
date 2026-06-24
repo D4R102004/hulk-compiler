@@ -5,6 +5,7 @@ use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
+use crate::CodegenCtx;
 use crate::runtime_decls;
 
 /// Compares two floating-point values.
@@ -67,18 +68,18 @@ pub fn box_if_needed<'ctx>(
     Ok(val)
 }
 
-/// Maps a HULK type to an LLVM type (Phase 3 subset).
+/// Maps a HULK type to an LLVM type.
 pub fn llvm_type<'ctx>(
-    ctx: &mut LowerCtx<'_, 'ctx>,
+    codegen: &CodegenCtx<'ctx>,
     ty: &Type,
 ) -> Result<inkwell::types::BasicTypeEnum<'ctx>, CodegenError> {
     match ty {
-        Type::Number => Ok(ctx.codegen.context.f64_type().into()),
-        Type::Boolean => Ok(ctx.codegen.context.bool_type().into()),
-        Type::String => Ok(ctx.codegen.context.ptr_type(Default::default()).into()),
-        Type::Object => Ok(ctx.codegen.context.ptr_type(Default::default()).into()),
+        Type::Number => Ok(codegen.context.f64_type().into()),
+        Type::Boolean => Ok(codegen.context.bool_type().into()),
+        Type::String => Ok(codegen.context.ptr_type(Default::default()).into()),
+        Type::Object => Ok(codegen.context.ptr_type(Default::default()).into()),
         _ => Err(CodegenError::Unsupported {
-            construct: format!("type {} not supported in Phase 3", ty)
+            construct: format!("type {} not supported", ty)
         })
     }
 }

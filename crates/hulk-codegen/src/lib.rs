@@ -93,6 +93,11 @@ pub fn compile(
     let entry_bb = context.append_basic_block(main_fn, "entry");
     codegen.builder.position_at_end(entry_bb);
 
+    // Declare and define user‑defined functions.
+    lower::decl::declare_functions(&mut codegen, &verified.typed_program, &verified.registry)?;
+    lower::decl::define_functions(&mut codegen, &verified.typed_program, &verified.registry)?;
+    codegen.builder.position_at_end(entry_bb);
+
     // Lower the entry expression (ignore its value, but execute for side effects).
     {
         let mut lower_ctx = lower::LowerCtx::new(&mut codegen, &verified.registry);
@@ -272,6 +277,37 @@ mod tests {
         assert!(is_elf(&obj));
     }
 
+    #[test]
+    fn test_function_call() {
+        let src = "
+            function f(): Number => 42;
+            f();
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
+    }
+
+    #[test]
+    fn test_function_with_args() {
+        let src = "
+            function add(x: Number, y: Number): Number => x + y;
+            add(2, 3);
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
+    }
+
+    #[test]
+    fn test_recursive_function() {
+        let src = "
+            function fact(n: Number): Number =>
+                if (n == 0) 1 else n * fact(n - 1);
+            fact(5);
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
+    }
+
     // ─── Negative tests (semantic errors) ──────────────────────────────────
 
     #[test]
@@ -293,16 +329,6 @@ mod tests {
     }
 
     // ─── Codegen unsupported constructs (Phase 3) ──────────────────────────
-
-    #[test]
-    fn test_unsupported_function_call() {
-        let src = "
-            function f() => 42;
-            f();
-        ";
-        // Since function calls are not yet supported, codegen should fail with Unsupported.
-        expect_codegen_error(src, "calls not yet supported");
-    }
 
     #[test]
     fn test_unsupported_member_access() {
