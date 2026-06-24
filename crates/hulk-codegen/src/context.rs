@@ -19,6 +19,8 @@ pub struct CodegenCtx<'ctx> {
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     pub functions: HashMap<String, FunctionValue<'ctx>>,
+    /// Monotonically increasing id used to give every string-literal global a unique name
+    string_literal_count: u32,
 }
 
 impl<'ctx> CodegenCtx<'ctx> {
@@ -30,6 +32,13 @@ impl<'ctx> CodegenCtx<'ctx> {
             module,
             builder,
             functions: HashMap::new(),
+            string_literal_count: 0,
         }
     }
+
+    pub fn next_string_literal_id(&mut self) -> u32 {
+        let id = self.string_literal_count;
+        self.string_literal_count += 1;
+        id
+     }
 }

@@ -8,11 +8,9 @@ build = "build.rs"
 [dependencies]
 hulk-ast = { path = "../hulk-ast" }
 hulk-semantic = { path = "../hulk-semantic" }
-# Feature flag is bound to LLVM 17.x and must travel together with the LLVM
-# development files available on the build machine. See build.rs and
-# README.md in this crate for the toolchain setup this depends on.
-inkwell = { version = "0.4", features = ["llvm17-0"] }
+inkwell = { version = "0.8.0", features = ["llvm17-0"] }
 
 [dev-dependencies]
 hulk-lexer = { path = "../hulk-lexer" }
 hulk-parser = { path = "../hulk-parser" }
+tempfile = "3"
