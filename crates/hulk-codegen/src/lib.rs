@@ -18,6 +18,7 @@ pub mod context;
 pub mod emit;
 pub mod error;
 pub mod options;
+pub mod layout;
 
 use std::path::Path;
 
@@ -43,7 +44,7 @@ fn declare_smoke_runtime_fn<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx>
 /// the smoke example and unit tests can exercise it without needing a real
 /// `VerifiedProgram`.
 pub fn build_smoke_module(context: &Context) -> Result<CodegenCtx<'_>, CodegenError> {
-    let ctx = CodegenCtx::new(context, "hulk_smoke");
+    let ctx = CodegenCtx::new(context, "hulk_smoke")?;
 
     let noop = declare_smoke_runtime_fn(&ctx);
 
@@ -78,7 +79,7 @@ pub fn compile(
     opts: &options::CodegenOptions,
 ) -> Result<(), error::CodegenError> {
     let context = inkwell::context::Context::create();
-    let mut codegen = context::CodegenCtx::new(&context, "hulk_main");
+    let mut codegen = context::CodegenCtx::new(&context, "hulk_main")?;
 
     // Declare runtime functions (needed for strings, concat, etc.)
     let _alloc = runtime_decls::declare_alloc(&codegen);
@@ -93,14 +94,26 @@ pub fn compile(
     let entry_bb = context.append_basic_block(main_fn, "entry");
     codegen.builder.position_at_end(entry_bb);
 
-    // Declare and define user‑defined functions.
+    // Build type layouts
+    layout::build_layouts(&verified.registry, &mut codegen)?;
+
+    // Declare all functions (free and methods)
     lower::decl::declare_functions(&mut codegen, &verified.typed_program, &verified.registry)?;
+    lower::method::declare_methods(&mut codegen, &verified.typed_program, &verified.registry)?;
+
+    // Build vtables (requires method declarations)
+    layout::build_vtables(&mut codegen, &verified.registry)?;
+
+    // Define all functions (free and methods)
     lower::decl::define_functions(&mut codegen, &verified.typed_program, &verified.registry)?;
+    lower::method::define_methods(&mut codegen, &verified.typed_program, &verified.registry)?;
+
+    // Reset builder to main entry
     codegen.builder.position_at_end(entry_bb);
 
     // Lower the entry expression (ignore its value, but execute for side effects).
     {
-        let mut lower_ctx = lower::LowerCtx::new(&mut codegen, &verified.registry);
+        let mut lower_ctx = lower::LowerCtx::new(&mut codegen, &verified.registry, &verified.typed_program);
         match lower::lower_expr(&mut lower_ctx, &verified.typed_program.entry) {
             Ok(_) => {}
             Err(e) => return Err(e),
@@ -116,10 +129,8 @@ pub fn compile(
         .map_err(|e| error::CodegenError::LlvmVerification(e.to_string()))?;
 
     // Emit object file and link (using existing emit logic).
-    emit::init_all_targets()?;
-    let machine = emit::linux_x86_64_target_machine()?;
     let obj_path = opts.output_path.with_extension("o");
-    emit::write_object_file(&machine, &codegen.module, &obj_path)?;
+    emit::write_object_file(&codegen.target_machine, &codegen.module, &obj_path)?;
 
     // TODO: Link with hulk-rt.
 

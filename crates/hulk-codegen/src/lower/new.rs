@@ -1,0 +1,202 @@
+//! Lowering of object construction (`new T(args)`).
+
+use hulk_ast::{NewExpr, TypeDecl, TypeMemberKind};
+use hulk_semantic::{Type, TypeRegistry};
+
+use crate::error::CodegenError;
+use crate::lower::LowerCtx;
+use super::lower_expr;
+
+/// Lowers a `new T(args)` expression.
+///
+/// Steps:
+/// 1. Allocate memory for the object.
+/// 2. Initialise the object header: ref_count, gc_mark, next, vtable.
+/// 3. Evaluate attribute initializers in parent‑first order.
+/// 4. Return a pointer to the new object.
+pub fn lower_new<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    new_expr: &NewExpr<Type>,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+    let type_name = &new_expr.type_name.name;
+
+    // --- 0. Collect all needed data before borrowing ctx mutably ------------
+
+    // Compute ancestors (uses ctx.registry immutably, but returns owned data).
+    let ancestors = collect_ancestors(type_name, ctx.registry);
+
+    // Look up type info and extract params (owned).
+    let params = {
+        let info = ctx.registry.lookup_type(type_name)
+            .ok_or_else(|| CodegenError::Unsupported {
+                construct: format!("type '{}' not found", type_name),
+            })?;
+        info.params.clone()
+    };
+
+    // Look up layout and extract all needed fields into owned values.
+    let (struct_ty, size, field_offsets, vtable_global) = {
+        let layout = ctx.codegen.type_layouts.get(type_name)
+            .ok_or_else(|| CodegenError::Unsupported {
+                construct: format!("no layout for type '{}'", type_name),
+            })?;
+        (
+            layout.struct_ty,
+            layout.size,
+            layout.field_offsets.clone(),
+            layout.vtable_global,
+        )
+    };
+
+    // Now we have all needed data as owned values; we can safely mutably borrow ctx.
+
+    // --- 1. Allocate memory -------------------------------------------------
+
+    let size_val = ctx.codegen.context.i64_type().const_int(size as u64, false);
+    let alloc_fn = ctx.codegen.functions.get("hulk_rt_alloc")
+        .cloned()
+        .ok_or_else(|| CodegenError::Unsupported {
+            construct: "hulk_rt_alloc not declared".into(),
+        })?;
+
+    let call = ctx.codegen.builder.build_call(alloc_fn, &[size_val.into()], "alloc")
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+    let obj_ptr = call.try_as_basic_value()
+        .basic()
+        .ok_or_else(|| CodegenError::LlvmVerification("alloc returned void".into()))?
+        .into_pointer_value();
+
+    // --- 2. Initialise header ------------------------------------------------
+
+    // Use local `struct_ty` and other values.
+    let i32_type = ctx.codegen.context.i32_type();
+    let i64_type = ctx.codegen.context.i64_type();
+    let i1_type = ctx.codegen.context.bool_type();
+    let ptr_type = ctx.codegen.context.ptr_type(Default::default());
+
+    // Helper: GEP into the struct at field index `field_idx` (0‑based).
+    let gep_field = |field_idx: u32| -> Result<inkwell::values::PointerValue, _> {
+        unsafe {
+            ctx.codegen.builder.build_gep(
+                struct_ty,
+                obj_ptr,
+                &[i32_type.const_int(0, false), i32_type.const_int(field_idx.into(), false)],
+                "field_ptr",
+            ).map_err(|e| CodegenError::LlvmVerification(e.to_string()))
+        }
+    };
+
+    // ref_count = 1
+    let ref_count_ptr = gep_field(0)?;
+    ctx.codegen.builder.build_store(ref_count_ptr, i64_type.const_int(1, false))
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+    // gc_mark = false
+    let gc_mark_ptr = gep_field(1)?;
+    ctx.codegen.builder.build_store(gc_mark_ptr, i1_type.const_int(0, false))
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+    // next = null
+    let next_ptr = gep_field(2)?;
+    ctx.codegen.builder.build_store(next_ptr, ptr_type.const_null())
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+    // vtable = global
+    let vtable_global = vtable_global
+        .ok_or_else(|| CodegenError::Unsupported {
+            construct: format!("vtable for '{}' not built", type_name),
+        })?;
+    let vtable_ptr = vtable_global.as_pointer_value();
+    let vtable_ptr_ptr = gep_field(3)?;
+    ctx.codegen.builder.build_store(vtable_ptr_ptr, vtable_ptr)
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+    // --- 3. Bind constructor parameters --------------------------------------
+
+    ctx.push_scope();
+
+    if new_expr.args.len() != params.len() {
+        return Err(CodegenError::LlvmVerification("argument count mismatch".into()));
+    }
+    for (i, (param_name, _)) in params.iter().enumerate() {
+        let arg_val = lower_expr(ctx, &new_expr.args[i])?;
+        ctx.declare_var(param_name, arg_val)?;
+    }
+
+    // --- 4. Evaluate attribute initializers in parent‑first order ------------
+
+    // `ancestors` is already computed; use it.
+    let mut attr_inits = Vec::new();
+    for ancestor_name in &ancestors {
+        if let Some(ty_decl) = ctx.type_decls.get(ancestor_name) {
+            collect_attribute_initializers(ty_decl, &mut attr_inits);
+        }
+    }
+    if let Some(ty_decl) = ctx.type_decls.get(type_name) {
+        collect_attribute_initializers(ty_decl, &mut attr_inits);
+    }
+
+    // Now evaluate each initializer and store it at the correct offset.
+    for (attr_name, init_expr) in attr_inits {
+        let offset = *field_offsets.get(&attr_name)
+            .ok_or_else(|| CodegenError::Unsupported {
+                construct: format!("no offset for attribute '{}'", attr_name),
+            })?;
+
+        let val = lower_expr(ctx, init_expr)?;
+        let offset_val = ctx.codegen.context.i64_type().const_int(offset as u64, false);
+
+        let field_ptr = unsafe {
+            ctx.codegen.builder.build_in_bounds_gep(
+                ctx.codegen.context.i8_type(),
+                obj_ptr,
+                &[offset_val.into()],
+                "field_ptr",
+            ).map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        };
+        
+        let target_ptr_type = ctx.codegen.context.ptr_type(Default::default());
+        let typed_field_ptr = ctx
+            .codegen
+            .builder
+            .build_pointer_cast(field_ptr, target_ptr_type, "field_typed_ptr")
+            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+        ctx.codegen
+            .builder
+            .build_store(typed_field_ptr, val)
+            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+    }
+
+    // --- 5. Clean up and return ----------------------------------------------
+
+    ctx.pop_scope();
+    Ok(obj_ptr.into())
+}
+
+/// Collects all ancestors of a type (root → immediate parent).
+fn collect_ancestors(type_name: &str, registry: &TypeRegistry) -> Vec<String> {
+    let mut ancestors = Vec::new();
+    let mut current = type_name;
+    while let Some(info) = registry.lookup_type(current) {
+        if let Some(parent) = &info.parent {
+            ancestors.insert(0, parent.name.clone());
+            current = &parent.name;
+        } else {
+            break;
+        }
+    }
+    ancestors
+}
+
+/// Collects attribute initializers from a `TypeDecl` in declaration order.
+fn collect_attribute_initializers<'a>(
+    ty_decl: &'a TypeDecl<Type>,
+    out: &mut Vec<(String, &'a hulk_ast::Expr<Type>)>,
+) {
+    for member in &ty_decl.members {
+        if let TypeMemberKind::Attribute(attr) = &member.kind {
+            out.push((attr.name.clone(), &attr.initializer));
+        }
+    }
+}

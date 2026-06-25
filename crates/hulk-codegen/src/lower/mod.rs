@@ -13,10 +13,11 @@
 //! (Phase 8) later promotes these to SSA values. This avoids manual SSA
 //! bookkeeping and keeps the lowering code simple and correct.
 
+use std::collections::HashMap;
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::types::BasicTypeEnum;
 
-use hulk_ast::Expr;
+use hulk_ast::{Expr, Program, TypeDecl, DeclarationKind};
 use hulk_semantic::{Type, TypeRegistry};
 
 use crate::context::CodegenCtx;
@@ -33,6 +34,9 @@ pub mod literal;
 pub mod operators;
 pub mod decl;
 pub mod call;
+pub mod method;
+pub mod new;
+pub mod member;
 pub mod vector;
 pub mod object;
 
@@ -51,15 +55,37 @@ pub struct LowerCtx<'a, 'ctx> {
     pub scope_stack: ScopeStack<'ctx>,
     /// Read‑only registry from semantic analysis.
     pub registry: &'a TypeRegistry,
+    /// The typed program being lowered (for reference to declarations).
+    pub typed_program: &'a Program<Type>,
+    /// Map of type names to their declarations for quick lookup.
+    pub type_decls: HashMap<String, &'a TypeDecl<Type>>, 
+    /// Which type the current method belongs to (if any).
+    pub current_type: Option<String>,
+    /// The name of the current method being lowered (if any).
+    pub current_method: Option<String>,
 }
 
 impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
     /// Creates a new lowering context.
-    pub fn new(codegen: &'a mut CodegenCtx<'ctx>, registry: &'a TypeRegistry) -> Self {
+    pub fn new(
+        codegen: &'a mut CodegenCtx<'ctx>,
+        registry: &'a TypeRegistry,
+        typed_program: &'a Program<Type>,
+    ) -> Self {
+        let mut type_decls = HashMap::new();
+        for decl in &typed_program.declarations {
+            if let DeclarationKind::Type(ty_decl) = &decl.kind {
+                type_decls.insert(ty_decl.name.clone(), ty_decl);
+            }
+        }
         Self {
             codegen,
             scope_stack: ScopeStack::new(),
             registry,
+            typed_program,
+            type_decls,
+            current_type: None,
+            current_method: None,
         }
     }
 
@@ -133,7 +159,8 @@ pub fn lower_expr<'ctx>(
         // ─── Variables and special references ────────────────────────────
 
         ExprKind::Variable(name) => binding::lower_variable(ctx, name),
-        ExprKind::SelfRef | ExprKind::BaseRef => {
+        ExprKind::SelfRef => binding::lower_variable(ctx, "self"),
+        ExprKind::BaseRef => {
             Err(CodegenError::Unsupported {
                 construct: format!("{:?} not supported", expr.kind)
             })
@@ -157,20 +184,12 @@ pub fn lower_expr<'ctx>(
         
         // ─── Functions and properties calls ────────────────────────────────────
 
-        ExprKind::Call(call) => call::lower_call(ctx, call),  
+        ExprKind::Call(call) => call::lower_call(ctx, call), 
+        ExprKind::New(new_expr) => new::lower_new(ctx, new_expr), 
+        ExprKind::Member(member_expr) => member::lower_member(ctx, member_expr),
 
         // ─── Deferred to later phases ────────────────────────────────────
 
-        ExprKind::Member(_) => {
-            Err(CodegenError::Unsupported {
-                construct: "member access not yet supported".into()
-            })
-        }
-        ExprKind::New(_) => {
-            Err(CodegenError::Unsupported {
-                construct: "object construction not yet supported".into()
-            })
-        }
         ExprKind::TypeTest(_) | ExprKind::Downcast(_) => {
             Err(CodegenError::Unsupported {
                 construct: "type tests/downcasts not yet supported".into()
@@ -211,6 +230,13 @@ mod tests {
     /// Dummy span for tests.
     fn dummy_span() -> SourceSpan {
         SourceSpan::new(0, 0)
+    }
+
+    fn dummy_program(expr: Expr<Type>) -> Program<Type> {
+        Program {
+            declarations: vec![],
+            entry: expr.clone()
+        }
     }
 
     /// Helper: create a typed number literal.
@@ -371,16 +397,17 @@ mod tests {
     /// Helper: lower an expression and return the LLVM IR string.
     fn lower_expr_to_ir(expr: Expr<Type>) -> String {
         let context = Context::create();
-        let mut codegen = CodegenCtx::new(&context, "test");
+        let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
         let i32_type = context.i32_type();
         let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
         let entry_bb = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry_bb);
 
         let registry = seeded_registry();
+        let dprog  = dummy_program(expr.clone());
         // Lower the expression in a separate scope so the borrow ends.
         {
-            let mut lower_ctx = LowerCtx::new(&mut codegen, &registry);
+            let mut lower_ctx = LowerCtx::new(&mut codegen, &registry, &dprog);
             let val = lower_expr(&mut lower_ctx, &expr).expect("lowering failed");
             // Store the result so it's a real operand of a `store` instruction
             let slot = lower_ctx.codegen.builder
@@ -668,7 +695,7 @@ mod tests {
     fn test_call_function_no_args() {
         // Declare a function f(): Number that returns 42.
         let context = Context::create();
-        let mut codegen = CodegenCtx::new(&context, "test");
+        let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
         let i32_type = context.i32_type();
         let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
         let entry_bb = context.append_basic_block(main_fn, "entry");
@@ -690,10 +717,11 @@ mod tests {
 
         // Now create a call expression to f().
         let call_expr = call(var("f", Type::Function { params: vec![], return_type: Box::new(Type::Number) }), vec![], Type::Number);
+        let dprog = dummy_program(call_expr.clone());
 
         let registry = seeded_registry();
         {
-            let mut lower_ctx = LowerCtx::new(&mut codegen, &registry);
+            let mut lower_ctx = LowerCtx::new(&mut codegen, &registry, &dprog);
             let _val = lower_expr(&mut lower_ctx, &call_expr).expect("lowering failed");
             // Store result to make it a real operand.
             let slot = lower_ctx.codegen.builder
@@ -715,7 +743,7 @@ mod tests {
     fn test_call_function_with_args() {
         // Declare a function add(x: Number, y: Number): Number that returns x + y.
         let context = Context::create();
-        let mut codegen = CodegenCtx::new(&context, "test");
+        let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
         let i32_type = context.i32_type();
         let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
         let entry_bb = context.append_basic_block(main_fn, "entry");
@@ -744,8 +772,9 @@ mod tests {
         );
 
         let registry = seeded_registry();
+        let dprog = dummy_program(call_expr.clone());
         {
-            let mut lower_ctx = LowerCtx::new(&mut codegen, &registry);
+            let mut lower_ctx = LowerCtx::new(&mut codegen, &registry, &dprog);
             let _val = lower_expr(&mut lower_ctx, &call_expr).expect("lowering failed");
             let slot = lower_ctx.codegen.builder
                 .build_alloca(f64_type, "result")

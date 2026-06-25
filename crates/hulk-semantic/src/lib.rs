@@ -20,8 +20,9 @@ use crate::error::Severity;
 
 pub use error::{SemanticError, SemanticErrorKind};
 pub use environment::{Binding, Environment};
-pub use types::{Type, TypeRegistry, seeded_registry};
+pub use types::{Type, TypeRegistry, TypeInfo, seeded_registry};
 pub use typed::{TypedExpr, TypedProgram};
+pub use passes::topological_order;
 
 // -----------------------------------------------------------------------------
 // Main structure

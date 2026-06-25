@@ -69,7 +69,7 @@ pub fn define_functions(
 ) -> Result<(), CodegenError> {
     for decl in &program.declarations {
         if let DeclarationKind::Function(func) = &decl.kind {
-            define_function(ctx, func, registry)?;
+            define_function(ctx, func, registry, program)?;
         }
     }
     Ok(())
@@ -80,6 +80,7 @@ fn define_function(
     ctx: &mut CodegenCtx,
     func: &FunctionDecl<Type>,
     registry: &TypeRegistry,
+    program: &Program<Type>
 ) -> Result<(), CodegenError> {
     let fn_value = ctx
         .functions
@@ -93,7 +94,7 @@ fn define_function(
     ctx.builder.position_at_end(entry_bb);
 
     // Create a fresh LowerCtx for this function body.
-    let mut lower_ctx = LowerCtx::new(ctx, registry);
+    let mut lower_ctx = LowerCtx::new(ctx, registry, program);
     // Push a scope for the function's parameters and locals.
     lower_ctx.push_scope();
 
