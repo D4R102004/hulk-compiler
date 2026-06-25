@@ -5,12 +5,14 @@ use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
+use crate::lower::utils::resolve_attribute_with_offset;
 use super::lower_expr;
 
 /// Lowers a member access expression.
 ///
-/// This handles attribute reads (`obj.attr`). If the member is a method,
-/// it returns `Unsupported` (method references are handled in `call.rs`).
+/// If the member is an attribute, loads and returns its value.
+/// If the member is a method, produces a fat pointer `{ self_ptr, fn_ptr }`
+/// representing a function‑typed value.
 pub fn lower_member<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     member: &MemberExpr<Type>,
@@ -22,10 +24,27 @@ pub fn lower_member<'ctx>(
     // 2. Determine the static type of the object.
     let obj_type = &member.object.anno;
 
-    // 3. Resolve the attribute.
-    let (attr_type, offset) = resolve_attribute(ctx, obj_type, &member.member)?;
+    // 3. Resolve the member: attribute or method.
+    if let Ok((attr_type, offset)) = resolve_attribute_with_offset(ctx, obj_type, &member.member) {
+        return load_attribute(ctx, obj_ptr, &attr_type, offset);
+    }
 
-    // 4. Compute the field address using byte offset.
+    if resolve_method(ctx, obj_type, &member.member) {
+        return lower_method_reference(ctx, obj_ptr, obj_type, &member.member);
+    }
+
+    Err(CodegenError::Unsupported {
+        construct: format!("member '{}' not found in type '{}'", member.member, obj_type),
+    })
+}
+
+/// Loads an attribute value from the object at the given offset.
+fn load_attribute<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    obj_ptr: inkwell::values::PointerValue<'ctx>,
+    attr_type: &Type,
+    offset: usize,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     let ptr_type = ctx.codegen.context.ptr_type(Default::default());
     let obj = ctx
         .codegen
@@ -34,15 +53,14 @@ pub fn lower_member<'ctx>(
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
 
     let offset_val = ctx.codegen.context.i64_type().const_int(offset as u64, false);
-    // Use safe build_gep instead of unsafe build_in_bounds_gep.
     let field_ptr_i8 = unsafe {
         ctx.codegen
             .builder
             .build_gep(ptr_type, obj, &[offset_val.into()], "field_ptr")
             .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
     };
-    // 5. Cast to the attribute's type pointer.
-    let attr_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, &attr_type)?;
+
+    let attr_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, attr_type)?;
     let attr_ptr_type = ctx.codegen.context.ptr_type(Default::default());
     let field_ptr = ctx
         .codegen
@@ -50,7 +68,7 @@ pub fn lower_member<'ctx>(
         .build_pointer_cast(field_ptr_i8, attr_ptr_type, "field_typed_ptr")
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
 
-    // 6. Load and return the attribute value.
+    // Load and return the attribute value.
     let val = ctx
         .codegen
         .builder
@@ -60,49 +78,45 @@ pub fn lower_member<'ctx>(
     Ok(val)
 }
 
-/// Resolves an attribute access: returns the attribute's type and byte offset.
-fn resolve_attribute(
+/// Checks whether the member is a method of the given type.
+fn resolve_method(
     ctx: &LowerCtx<'_, '_>,
     obj_type: &Type,
     member_name: &str,
-) -> Result<(Type, usize), CodegenError> {
-    // The object must be a named type.
+) -> bool {
+    let type_name = match obj_type {
+        Type::Named(name) => name,
+        _ => return false,
+    };
+    ctx.registry
+        .lookup_type(type_name)
+        .map_or(false, |info| {
+            let methods = if !info.flattened_methods.is_empty() {
+                &info.flattened_methods
+            } else {
+                &info.methods
+            };
+            methods.contains_key(member_name)
+        })
+}
+
+/// Produces a fat pointer `{ self_ptr, fn_ptr }` for a bare method reference.
+fn lower_method_reference<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    obj_ptr: inkwell::values::PointerValue<'ctx>,
+    obj_type: &Type,
+    method_name: &str,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     let type_name = match obj_type {
         Type::Named(name) => name,
         _ => {
             return Err(CodegenError::Unsupported {
-                construct: format!("member access on non‑named type: {:?}", obj_type),
+                construct: format!("method reference on non‑named type: {:?}", obj_type),
             });
         }
     };
 
-    // Look up the type in the registry.
-    let info = ctx
-        .registry
-        .lookup_type(type_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("type '{}' not found", type_name),
-        })?;
-
-    // Check if the member is an attribute.
-    // The registry's `attributes` map is flattened after Pass 1, so it includes
-    // inherited attributes as well.
-    let attr_info = info
-        .attributes
-        .get(member_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("attribute '{}' not found in type '{}'", member_name, type_name),
-        })?;
-
-    let attr_type = attr_info
-        .declared_type
-        .as_ref()
-        .ok_or_else(|| {
-            CodegenError::LlvmVerification(format!("attribute '{}' has no declared type", member_name))
-        })?
-        .clone();
-
-    // Get the byte offset from the type layout.
+    // Get the type layout and method slot index.
     let layout = ctx
         .codegen
         .type_layouts
@@ -111,12 +125,88 @@ fn resolve_attribute(
             construct: format!("no layout for type '{}'", type_name),
         })?;
 
-    let offset = *layout
-        .field_offsets
-        .get(member_name)
+    let slot_idx = *layout
+        .method_slots
+        .get(method_name)
         .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("no offset for attribute '{}'", member_name),
+            construct: format!("method '{}' not found in type '{}'", method_name, type_name),
         })?;
 
-    Ok((attr_type, offset))
+    // Load the vtable pointer from the object header.
+    let i32_type = ctx.codegen.context.i32_type();
+    let ptr_type = ctx.codegen.context.ptr_type(Default::default());
+    let struct_ty = layout.struct_ty;
+
+    let vtable_ptr_ptr = unsafe {
+        ctx.codegen
+            .builder
+            .build_gep(
+                struct_ty,
+                obj_ptr,
+                &[i32_type.const_int(0, false), i32_type.const_int(3, false)],
+                "vtable_ptr_ptr",
+            )
+            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+    };
+    let vtable_ptr = ctx
+        .codegen
+        .builder
+        .build_load(ptr_type, vtable_ptr_ptr, "vtable_ptr")
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .into_pointer_value();
+
+    // Load the function pointer from the vtable at the slot index.
+    let slot_val = i32_type.const_int(slot_idx as u64, false);
+    let fn_ptr_ptr = unsafe {
+        ctx.codegen
+            .builder
+            .build_gep(ptr_type, vtable_ptr, &[slot_val.into()], "fn_ptr_ptr")
+            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+    };
+    let fn_ptr = ctx
+        .codegen
+        .builder
+        .build_load(ptr_type, fn_ptr_ptr, "fn_ptr")
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .into_pointer_value();
+
+    // Build the fat pointer struct: { self_ptr, fn_ptr }
+    let fat_ptr_ty = ctx.codegen.context.struct_type(&[ptr_type.into(), ptr_type.into()], false);
+    let fat_ptr_alloca = ctx
+        .codegen
+        .builder
+        .build_alloca(fat_ptr_ty, "fat_ptr")
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+    // Store self pointer at index 0.
+    let self_ptr_ptr = unsafe {
+        ctx.codegen
+            .builder
+            .build_gep(fat_ptr_ty, fat_ptr_alloca, &[i32_type.const_int(0, false), i32_type.const_int(0, false)], "self_ptr_ptr")
+            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+    };
+    ctx.codegen
+        .builder
+        .build_store(self_ptr_ptr, obj_ptr)
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+    // Store function pointer at index 1.
+    let fn_ptr_ptr2 = unsafe {
+        ctx.codegen
+            .builder
+            .build_gep(fat_ptr_ty, fat_ptr_alloca, &[i32_type.const_int(0, false), i32_type.const_int(1, false)], "fn_ptr_ptr2")
+            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+    };
+    ctx.codegen
+        .builder
+        .build_store(fn_ptr_ptr2, fn_ptr)
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+    // Load the fat pointer struct as the result.
+    let fat_ptr_val = ctx
+        .codegen
+        .builder
+        .build_load(fat_ptr_ty, fat_ptr_alloca, "fat_ptr_val")
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+    Ok(fat_ptr_val)
 }

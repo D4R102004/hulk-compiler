@@ -77,9 +77,63 @@ pub fn llvm_type<'ctx>(
         Type::Number => Ok(codegen.context.f64_type().into()),
         Type::Boolean => Ok(codegen.context.bool_type().into()),
         Type::String => Ok(codegen.context.ptr_type(Default::default()).into()),
+        Type::Function { .. } => {
+            // A function type is represented as a fat pointer: { ptr, ptr }
+            let ptr_type = codegen.context.ptr_type(Default::default());
+            Ok(codegen.context.struct_type(&[ptr_type.into(), ptr_type.into()], false).into())
+        }
         Type::Object => Ok(codegen.context.ptr_type(Default::default()).into()),
         _ => Err(CodegenError::Unsupported {
             construct: format!("type {} not supported", ty)
         })
     }
+}
+
+/// Returns the type and byte offset of an attribute, or an error.
+pub fn resolve_attribute_with_offset(
+    ctx: &LowerCtx<'_, '_>,
+    obj_type: &Type,
+    member_name: &str,
+) -> Result<(Type, usize), CodegenError> {
+    let type_name = match obj_type {
+        Type::Named(name) => name,
+        _ => {
+            return Err(CodegenError::Unsupported {
+                construct: format!("attribute access on non‑named type: {:?}", obj_type),
+            });
+        }
+    };
+    let info = ctx
+        .registry
+        .lookup_type(type_name)
+        .ok_or_else(|| CodegenError::Unsupported {
+            construct: format!("type '{}' not found", type_name),
+        })?;
+    let attr_info = info
+        .attributes
+        .get(member_name)
+        .ok_or_else(|| CodegenError::Unsupported {
+            construct: format!("attribute '{}' not found", member_name),
+        })?;
+    let attr_type = attr_info
+        .declared_type
+        .as_ref()
+        .ok_or_else(|| {
+            CodegenError::LlvmVerification(format!("attribute '{}' has no declared type", member_name))
+        })?
+        .clone();
+    let layout = ctx
+        .codegen
+        .type_layouts
+        .get(type_name)
+        .ok_or_else(|| CodegenError::Unsupported {
+            construct: format!("no layout for type '{}'", type_name),
+        })?;
+    let offset = *layout
+        .field_offsets
+        .get(member_name)
+        .ok_or_else(|| CodegenError::Unsupported {
+            construct: format!("no offset for attribute '{}'", member_name),
+        })?;
+    Ok((attr_type, offset))
 }

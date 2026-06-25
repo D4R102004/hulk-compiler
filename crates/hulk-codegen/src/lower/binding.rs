@@ -18,6 +18,7 @@ use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
+use crate::lower::utils::resolve_attribute_with_offset;
 use super::lower_expr;
 
 /// Lowers a variable reference.
@@ -116,6 +117,48 @@ pub fn lower_assign<'ctx>(
             ctx.codegen.builder
                 .build_store(ptr, val)
                 .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            Ok(val)
+        }
+        hulk_ast::AssignTarget::Member { object, field } => {
+            // 1. Lower the object expression to get a pointer.
+            let obj_val = lower_expr(ctx, object)?;
+            let obj_ptr = obj_val.into_pointer_value();
+
+            // 2. Determine the static type of the object and resolve the attribute.
+            let obj_type = &object.anno;
+            let (_attr_type, offset) = resolve_attribute_with_offset(ctx, obj_type, field)?;
+
+            // 3. Compute the field address using byte offset.
+            let ptr_type = ctx.codegen.context.ptr_type(Default::default());
+            let obj_i8 = ctx
+                .codegen
+                .builder
+                .build_pointer_cast(obj_ptr, ptr_type, "obj_i8")
+                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            let offset_val = ctx.codegen.context.i64_type().const_int(offset as u64, false);
+            let field_ptr_i8 = unsafe {
+                ctx.codegen
+                    .builder
+                    .build_gep(ptr_type, obj_i8, &[offset_val.into()], "field_ptr")
+                    .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            };
+
+            // 4. Cast to the attribute's type pointer.
+            let attr_ptr_type = ctx.codegen.context.ptr_type(Default::default());
+            let field_ptr = ctx
+                .codegen
+                .builder
+                .build_pointer_cast(field_ptr_i8, attr_ptr_type, "field_typed_ptr")
+                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+            // 5. Lower the value and store it.
+            let val = lower_expr(ctx, &assign.value)?;
+            ctx.codegen
+                .builder
+                .build_store(field_ptr, val)
+                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+            // 6. Assignment expression returns the value.
             Ok(val)
         }
         _ => Err(CodegenError::Unsupported {

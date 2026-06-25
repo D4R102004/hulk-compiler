@@ -1,11 +1,13 @@
 //! Lowering of function and method calls.
 
 use inkwell::values::BasicMetadataValueEnum;
+use inkwell::types::BasicType;
 use hulk_ast::{CallExpr, MemberExpr};
 use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
+use crate::lower::utils::llvm_type;
 use super::lower_expr;
 
 /// Lowers a call expression.
@@ -73,9 +75,14 @@ pub fn lower_call<'ctx>(
         _ => {}
     }
 
-    Err(CodegenError::Unsupported {
-        construct: "call to non‑function or unsupported callee".into(),
-    })
+    // Generic function‑value call (e.g., a variable holding a method reference).
+    let callee_val = lower_expr(ctx, &call.callee)?;
+    match &call.callee.anno {
+        Type::Function { .. } => lower_function_value(ctx, callee_val, &call.callee.anno, &call.args),
+        _ => Err(CodegenError::Unsupported {
+            construct: format!("unable to resolve call to type `{}`", call.callee.anno),
+        }),
+    }
 }
 
 /// Lowers a method call using vtable dispatch.
@@ -262,5 +269,80 @@ fn lower_base_call<'ctx>(
     let result = call_site
         .try_as_basic_value()
         .unwrap_basic();
+    Ok(result)
+}
+
+/// Lowers a call to a function‑typed value (fat pointer `{ self_ptr, fn_ptr }`).
+///
+/// # Parameters
+/// - `ctx`: the lowering context.
+/// - `callee_val`: the LLVM value of the callee (must be a struct of two pointers).
+/// - `callee_ty`: the static type of the callee, expected to be `Type::Function`.
+/// - `args`: the AST arguments to the call.
+///
+/// # Returns
+/// The value returned by the called function.
+fn lower_function_value<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    callee_val: inkwell::values::BasicValueEnum<'ctx>,
+    callee_ty: &Type,
+    args: &[hulk_ast::Expr<Type>],
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+    // Extract the function type details.
+    let (param_types, return_type) = match callee_ty {
+        Type::Function { params, return_type } => (params, return_type.as_ref()),
+        _ => {
+            return Err(CodegenError::Unsupported {
+                construct: "expected function type".into(),
+            });
+        }
+    };
+
+    // Ensure the callee value is a struct of two pointers (fat pointer).
+    let struct_val = callee_val.into_struct_value();
+
+    // Extract self_ptr and fn_ptr using `build_extract_value`.
+    let self_ptr = ctx
+        .codegen
+        .builder
+        .build_extract_value(struct_val, 0, "self_ptr")
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .into_pointer_value();
+    let fn_ptr = ctx
+        .codegen
+        .builder
+        .build_extract_value(struct_val, 1, "fn_ptr")
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .into_pointer_value();
+
+    // Build the function type for the indirect call.
+    let llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = param_types
+        .iter()
+        .map(|ty| llvm_type(ctx.codegen, ty).map(|t| t.into()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let llvm_return = llvm_type(ctx.codegen, return_type)?;
+    let fn_type = llvm_return.fn_type(&llvm_param_types, false);
+
+    // Cast fn_ptr to the correct function pointer type.
+    let fn_ptr_typed = ctx
+        .codegen
+        .builder
+        .build_pointer_cast(fn_ptr, ctx.codegen.context.ptr_type(Default::default()), "fn_ptr_typed") 
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+    // Prepare arguments: first self_ptr, then the rest.
+    let mut call_args = Vec::new();
+    call_args.push(self_ptr.into());
+    for arg_expr in args {
+        call_args.push(lower_expr(ctx, arg_expr)?.into());
+    }
+
+    // Build indirect call.
+    let call_site = ctx
+        .codegen
+        .builder
+        .build_indirect_call(fn_type, fn_ptr_typed, &call_args, "call_fat_ptr")
+        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+    let result = call_site.try_as_basic_value().unwrap_basic();
     Ok(result)
 }
