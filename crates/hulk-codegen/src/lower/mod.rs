@@ -37,6 +37,7 @@ pub mod call;
 pub mod method;
 pub mod new;
 pub mod member;
+pub mod type_ops;
 pub mod vector;
 pub mod object;
 
@@ -183,13 +184,12 @@ pub fn lower_expr<'ctx>(
         ExprKind::New(new_expr) => new::lower_new(ctx, new_expr), 
         ExprKind::Member(member_expr) => member::lower_member(ctx, member_expr),
 
+        // ─── Type tests and downcasts ──────────────────────────────────────────
+        ExprKind::TypeTest(type_test) => type_ops::lower_typetest(ctx, type_test),
+        ExprKind::Downcast(downcast) => type_ops::lower_downcast(ctx, downcast),
+
         // ─── Deferred to later phases ────────────────────────────────────
 
-        ExprKind::TypeTest(_) | ExprKind::Downcast(_) => {
-            Err(CodegenError::Unsupported {
-                construct: "type tests/downcasts not yet supported".into()
-            })
-        }
         ExprKind::Vector(_) => {
             Err(CodegenError::Unsupported {
                 construct: "vectors not yet supported".into()

@@ -111,6 +111,10 @@ pub fn compile(
     // Reset builder to main entry
     codegen.builder.position_at_end(entry_bb);
 
+    // Declare downcast check and fail functions (used in type tests and downcasts)
+    let _downcast_check = runtime_decls::declare_downcast_check(&codegen);
+    let _downcast_fail = runtime_decls::declare_downcast_fail(&codegen);
+
     // Lower the entry expression (ignore its value, but execute for side effects).
     {
         let mut lower_ctx = lower::LowerCtx::new(&mut codegen, &verified.registry, &verified.typed_program);

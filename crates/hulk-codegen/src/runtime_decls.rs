@@ -43,3 +43,18 @@ pub fn declare_bool_to_string<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ct
     let fn_type = ptr_type.fn_type(&[bool_type.into()], false);
     ctx.module.add_function("hulk_rt_bool_to_string", fn_type, None)
 }
+
+/// Declares `hulk_rt_downcast_check(obj: ptr, target_vtable: ptr) -> i1`.
+pub fn declare_downcast_check<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let bool_type = ctx.context.bool_type();
+    let fn_type = bool_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_downcast_check", fn_type, None)
+}
+
+/// Declares `hulk_rt_downcast_fail() -> !` (noreturn).
+pub fn declare_downcast_fail<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let void_type = ctx.context.void_type();
+    let fn_type = void_type.fn_type(&[], false);
+    ctx.module.add_function("hulk_rt_downcast_fail", fn_type, None)
+}
