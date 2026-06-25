@@ -597,7 +597,8 @@ impl<'a> InferState<'a> {
     /// a constraint is recorded so that the parameter can be inferred later.
     ///
     /// - Arithmetic operators require both operands to be `Number`.
-    /// - Comparisons (`<`, `<=`, `>`, `>=`, `==`, `!=`) require both operands `Number`.
+    /// - Equality (`==`, `!=`) accepts `Number`, `String`, or `Boolean` operands.
+    /// - Ordinal comparisons (`<`, `<=`, `>`, `>=`) require both operands `Number`.
     /// - Logical operators (`&`, `|`) require both operands `Boolean`.
     /// - Concatenation (`@`, `@@`) accepts operands of type `Number`, `String`, or `Boolean`.
     ///   No constraint is recorded because the required type is not unique.
@@ -628,8 +629,32 @@ impl<'a> InferState<'a> {
                     Type::Error
                 }
             }
-            BinaryOp::Equal | BinaryOp::NotEqual | BinaryOp::Less | BinaryOp::LessEqual
-            | BinaryOp::Greater | BinaryOp::GreaterEqual => {
+            // == and != apply to all primitive types per HULK spec §A.5;
+            // ordinal comparisons (<, <=, >, >=) are Number-only and handled below.
+            BinaryOp::Equal | BinaryOp::NotEqual => {
+                let valid_eq = |t: &Type| {
+                    matches!(t, Type::Number | Type::String | Type::Boolean | Type::Unknown)
+                };
+                if valid_eq(&left_type) && valid_eq(&right_type) {
+                    // Preserve Number constraint inference when both sides are numeric.
+                    let is_numeric = |t: &Type| matches!(t, Type::Number | Type::Unknown);
+                    if is_numeric(&left_type) && is_numeric(&right_type) {
+                        self.constrain_if_variable(&left, Type::Number);
+                        self.constrain_if_variable(&right, Type::Number);
+                    }
+                    Type::Boolean
+                } else {
+                    self.errors.push(SemanticError::error(
+                        SemanticErrorKind::InvalidOperator {
+                            op: format!("{:?}", op),
+                            operand_types: vec![left_type, right_type],
+                        },
+                        binary.left.span,
+                    ));
+                    Type::Error
+                }
+            }
+            BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
                 let left_ok = matches!(left_type, Type::Number | Type::Unknown);
                 let right_ok = matches!(right_type, Type::Number | Type::Unknown);
                 if left_ok && right_ok {
