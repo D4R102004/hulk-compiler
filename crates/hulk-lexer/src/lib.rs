@@ -155,6 +155,19 @@ pub enum LexError {
         /// Where the string literal started.
         span: Span,
     },
+
+    /// An unrecognised escape sequence was found inside a string literal.
+    ///
+    /// HULK spec §A.2.2 defines only `\"`, `\\`, `\n`, and `\t` as valid escapes.
+    ///
+    /// # Example
+    /// `"hello\qworld"` — `\q` is not a defined escape sequence.
+    InvalidEscape {
+        /// The character that followed the backslash.
+        ch: char,
+        /// Where the backslash appeared in the source.
+        span: Span,
+    },
 }
 
 /// The HULK lexer.
@@ -481,8 +494,8 @@ impl Lexer {
 
     /// Consumes a string literal after the opening `"` has been consumed.
     ///
-    /// Handles escape sequences: `\"` (quote), `\\` (backslash),
-    /// `\n` (newline), `\t` (tab).
+    /// Valid escape sequences per HULK spec §A.2.2: `\"` (quote), `\\` (backslash),
+    /// `\n` (newline), `\t` (tab). Any other `\X` sequence is a hard error.
     ///
     /// # Arguments
     /// * `open_span` - The [`Span`] of the opening `"`, used in error
@@ -490,8 +503,8 @@ impl Lexer {
     ///   not where the file ended.
     ///
     /// # Errors
-    /// Returns [`LexError::UnterminatedString`] if EOF is reached before
-    /// the closing `"`.
+    /// - [`LexError::UnterminatedString`] if EOF is reached before the closing `"`.
+    /// - [`LexError::InvalidEscape`] if a backslash is followed by an unrecognised character.
     fn lex_string(&mut self, open_span: Span) -> Result<TokenKind, LexError> {
         let mut text = String::new();
 
@@ -512,6 +525,9 @@ impl Lexer {
 
                 // Escape sequence — the next character has special meaning.
                 '\\' => {
+                    // Capture the span of the character after the backslash before consuming it,
+                    // so that InvalidEscape points at the unrecognised character, not past it.
+                    let escape_span = self.current_span();
                     let escaped = self.advance();
 
                     match escaped {
@@ -520,8 +536,9 @@ impl Lexer {
                         'n' => text.push('\n'),  // new line
                         't' => text.push('\t'),  // tab
 
-                        // Unknown escape — include as-is, lenient handling.
-                        other => text.push(other),
+                        // HULK spec §A.2.2: only \", \\, \n, \t are valid escapes.
+                        // Any other \X is a hard error — silent pass-through would hide bugs.
+                        other => return Err(LexError::InvalidEscape { ch: other, span: escape_span }),
                     }
                 }
 
