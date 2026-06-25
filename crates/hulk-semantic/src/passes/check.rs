@@ -36,7 +36,7 @@ pub fn run(
     registry: &TypeRegistry,
     errors: &mut Vec<SemanticError>,
 ) {
-    let mut checker = Checker { registry, errors };
+    let mut checker = Checker { registry, errors, current_type: None };
     checker.check_program(typed_program);
 }
 
@@ -50,6 +50,8 @@ struct Checker<'a> {
     registry: &'a TypeRegistry,
     /// Accumulator for diagnostics.
     errors: &'a mut Vec<SemanticError>,
+    /// The type currently being checked, used for class-level attribute privacy.
+    current_type: Option<Type>,
 }
 
 // -----------------------------------------------------------------------------
@@ -111,9 +113,14 @@ impl<'a> Checker<'a> {
 
     /// Checks a type declaration and all its members.
     fn check_type(&mut self, ty_decl: &TypeDecl<Type>) {
+        // Crafting Interpreters "currentClass" pattern: save/set/restore so
+        // nested types (if ever supported) would be handled correctly.
+        let previous_type = self.current_type.take();
+        self.current_type = Some(Type::Named(ty_decl.name.clone()));
         for member in &ty_decl.members {
             self.check_type_member(member, &ty_decl.name);
         }
+        self.current_type = previous_type;
     }
 
     /// Checks a type member: attribute initializer or method.
@@ -255,13 +262,21 @@ impl<'a> Checker<'a> {
                             }
                         }
                         _ => {
-                            self.errors.push(SemanticError::error(
-                                SemanticErrorKind::UnknownMember {
-                                    ty: owner_type,
-                                    member: member.member.clone(),
-                                },
-                                member.object.span,
-                            ));
+                            // WHY: HULK spec §A.7.1 says "outside the type". Java, C++, and
+                            // Kotlin allow same-type instances to access each other's private
+                            // members (access is class-level, not object-level).
+                            // Crafting Interpreters uses the same currentClass pattern.
+                            let is_same_type_access = self.current_type.as_ref()
+                                == Some(&owner_type);
+                            if !is_same_type_access {
+                                self.errors.push(SemanticError::error(
+                                    SemanticErrorKind::UnknownMember {
+                                        ty: owner_type,
+                                        member: member.member.clone(),
+                                    },
+                                    member.object.span,
+                                ));
+                            }
                         }
                     }
                 }
