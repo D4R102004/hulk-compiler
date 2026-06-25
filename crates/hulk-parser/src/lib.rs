@@ -241,7 +241,7 @@ impl Ll1Parser {
             return Ok(TypeMember::new(TypeMemberKind::Method(method), span));
         }
 
-        let name = self.consume_identifier()?;
+        let name = self.parse_name()?;
 
         if self.check(&TokenKind::LParen) {
             let method = self.parse_function_tail(name)?;
@@ -285,7 +285,7 @@ impl Ll1Parser {
                 continue;
             }
 
-            let method_name = self.consume_identifier()?;
+            let method_name = self.parse_name()?;
             let params = self.parse_param_list()?;
             self.consume(&TokenKind::Colon, "return type in protocol method")?;
             let return_type = self.parse_type_ref()?;
@@ -304,7 +304,7 @@ impl Ll1Parser {
 
         if !self.check(&TokenKind::RParen) {
             loop {
-                let name = self.consume_identifier()?;
+                let name = self.parse_name()?;
                 let type_annotation = if self.match_kind(&TokenKind::Colon) {
                     Some(self.parse_type_ref()?)
                 } else {
@@ -633,11 +633,21 @@ impl Ll1Parser {
         loop {
             if self.match_kind(&TokenKind::LParen) {
                 let span = expr.span;
+                // WHY: `base(args)` is method-delegation syntax (§A.7.4). Promote
+                // Variable("base") to BaseRef so the semantic pass handles delegation.
+                // In all other positions (e.g. `base.foo`, `let base = ...`) the
+                // Variable node remains, allowing regular variable lookup.
+                let is_base_var = matches!(&expr.kind, ExprKind::Variable(n) if n == "base");
+                let callee = if is_base_var {
+                    Expr::new(ExprKind::BaseRef, expr.span)
+                } else {
+                    expr
+                };
                 let args = self.parse_argument_list_after_lparen()?;
-                expr = Expr::call(expr, args, span);
+                expr = Expr::call(callee, args, span);
             } else if self.match_kind(&TokenKind::Dot) {
                 let span = expr.span;
-                let member = self.consume_identifier()?;
+                let member = self.parse_name()?;
                 expr = Expr::new(ExprKind::Member(MemberExpr::new(expr, member)), span);
             } else if self.match_kind(&TokenKind::LBracket) {
                 let span = expr.span;
@@ -672,7 +682,11 @@ impl Ll1Parser {
             TokenKind::False => Ok(Expr::boolean(false, span)),
             TokenKind::Ident(name) => Ok(Expr::variable(name, span)),
             TokenKind::SelfKw => Ok(Expr::new(ExprKind::SelfRef, span)),
-            TokenKind::Base => Ok(Expr::new(ExprKind::BaseRef, span)),
+            // WHY: `base` is a symbol (§A.7.4), not a keyword — it can be shadowed by a
+            // variable (like `let base: Printer = ...`). Emit Variable("base") here;
+            // parse_postfix promotes it to BaseRef only when immediately followed by `(`
+            // (the method-delegation call site).
+            TokenKind::Base => Ok(Expr::variable("base".to_string(), span)),
             TokenKind::LParen => {
                 let expr = self.parse_expression()?;
                 self.consume(&TokenKind::RParen, "`)` after expression")?;
@@ -737,7 +751,7 @@ impl Ll1Parser {
         let first = self.parse_assignment_without_or()?;
 
         if self.match_kind(&TokenKind::Or) {
-            let var = self.consume_identifier()?;
+            let var = self.parse_name()?;
             self.consume(&TokenKind::In, "`in` in vector comprehension")?;
             let iterable = self.parse_expression()?;
             self.consume(&TokenKind::RBracket, "`]` after vector comprehension")?;
@@ -769,7 +783,7 @@ impl Ll1Parser {
         let mut bindings = Vec::new();
 
         loop {
-            let name = self.consume_identifier()?;
+            let name = self.parse_name()?;
             let type_annotation = if self.match_kind(&TokenKind::Colon) {
                 Some(self.parse_type_ref()?)
             } else {
@@ -828,7 +842,7 @@ impl Ll1Parser {
 
     fn finish_for_expression(&mut self, span: SourceSpan) -> Result<Expr, ParseError> {
         self.consume(&TokenKind::LParen, "`(` before for binding")?;
-        let var = self.consume_identifier()?;
+        let var = self.parse_name()?;
         self.consume(&TokenKind::In, "`in` inside for binding")?;
         let iterable = self.parse_expression()?;
         self.consume(&TokenKind::RParen, "`)` after for binding")?;
@@ -951,6 +965,28 @@ impl Ll1Parser {
         let token = self.advance();
         match token.kind {
             TokenKind::Ident(name) => Ok(name),
+            other => Err(ParseError::new(
+                ParseErrorKind::ExpectedIdentifier {
+                    found: token_kind_name(&other),
+                },
+                token_span(token.span),
+            )),
+        }
+    }
+
+    /// Parses an identifier name, also accepting `base` as a valid identifier.
+    ///
+    /// WHY: HULK spec §A.7.1 describes `self` as "not a keyword, which means it
+    /// can be hidden by a let expression or method argument." The spec similarly
+    /// describes `base` as a "symbol", not a keyword (§A.7.4). Following the
+    /// SoulNG / C# contextual keyword pattern: the lexer emits TokenKind::Base
+    /// unconditionally, but the parser accepts it as a plain identifier name in
+    /// all positions except method-delegation calls (`base(args)`).
+    fn parse_name(&mut self) -> Result<String, ParseError> {
+        let token = self.advance();
+        match token.kind {
+            TokenKind::Ident(name) => Ok(name),
+            TokenKind::Base => Ok("base".to_string()),
             other => Err(ParseError::new(
                 ParseErrorKind::ExpectedIdentifier {
                     found: token_kind_name(&other),
