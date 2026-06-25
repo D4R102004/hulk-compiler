@@ -84,7 +84,7 @@ fn collect_function(
             let ty = p
                 .type_annotation
                 .as_ref()
-                .map(|tr| resolve_type_ref(tr))
+                .map(resolve_type_ref)
                 .unwrap_or(Type::Unknown);
             (p.name.clone(), ty)
         })
@@ -96,7 +96,7 @@ fn collect_function(
     let return_type = func
         .return_type
         .as_ref()
-        .map(|tr| resolve_type_ref(tr))
+        .map(resolve_type_ref)
         .unwrap_or(Type::Unknown);
 
     let sig = FunctionSignature {
@@ -136,7 +136,7 @@ fn collect_type(
             let ty = p
                 .type_annotation
                 .as_ref()
-                .map(|tr| resolve_type_ref(tr))
+                .map(resolve_type_ref)
                 .unwrap_or(Type::Unknown);
             (p.name.clone(), ty)
         })
@@ -167,7 +167,7 @@ fn collect_type(
                     ));
                     continue; // skip duplicate to avoid further errors
                 }
-                let declared_type = attr.type_annotation.as_ref().map(|tr| resolve_type_ref(tr));
+                let declared_type = attr.type_annotation.as_ref().map(resolve_type_ref);
                 let info = AttributeInfo {
                     declared_type,
                     span: member.span,
@@ -194,7 +194,7 @@ fn collect_type(
                         let ty = p
                             .type_annotation
                             .as_ref()
-                            .map(|tr| resolve_type_ref(tr))
+                            .map(resolve_type_ref)
                             .unwrap_or(Type::Unknown);
                         (p.name.clone(), ty)
                     })
@@ -204,7 +204,7 @@ fn collect_type(
                 let return_type = method
                     .return_type
                     .as_ref()
-                    .map(|tr| resolve_type_ref(tr))
+                    .map(resolve_type_ref)
                     .unwrap_or(Type::Unknown);
 
                 let sig = MethodSignature {
@@ -281,7 +281,7 @@ fn collect_protocol(
                 let ty = p
                     .type_annotation
                     .as_ref()
-                    .map(|tr| resolve_type_ref(tr))
+                    .map(resolve_type_ref)
                     .unwrap_or(Type::Unknown);
                 (p.name.clone(), ty)
             })
@@ -344,7 +344,7 @@ fn resolve_type_ref(tr: &TypeRef) -> Type {
                 Type::Named(tr.name.clone())
             } else {
                 // Recursively resolve arguments.
-                let args: Vec<Type> = tr.args.iter().map(|arg| resolve_type_ref(arg)).collect();
+                let args: Vec<Type> = tr.args.iter().map(resolve_type_ref).collect();
                 // Handle built‑in parametric types: `Vector<T>` and `Iterable<T>`.
                 // The parser already rewrote `T[]` → `Vector<T>` and `T*` → `Iterable<T>`.
                 match tr.name.as_str() {

@@ -5,8 +5,6 @@
 //! the later passes (checking and code generation) to work with a fully
 //! typed tree.
 
-use hulk_ast;
-
 use crate::types::Type;
 
 /// A fully typed expression: the same shape as `hulk_ast::Expr`, but with

@@ -301,7 +301,6 @@ impl<'a> InferState<'a> {
     /// arguments are reported using the span of the entire type declaration.
     fn infer_type(&mut self, ty_decl: &TypeDecl, decl_span: SourceSpan) -> TypeDecl<Type> {
         let name = ty_decl.name.clone();
-        let decl_span = decl_span; 
 
         // Infer each member.
         let mut typed_members = Vec::new();
@@ -1104,7 +1103,7 @@ impl<'a> InferState<'a> {
             let param_names: Vec<String> = (0..params.len()).map(|i| format!("arg{}", i)).collect();
             let param_types: Vec<(String, Type)> = param_names
                 .into_iter()
-                .zip(params.into_iter())
+                .zip(params)
                 .collect();
             self.check_call_arity_and_types(&typed_args, &param_types, call.callee.span);
             return typed_expr(
@@ -1149,7 +1148,7 @@ impl<'a> InferState<'a> {
             ));
             return;
         }
-        for (_idx, (arg, (param_name, param_type))) in typed_args.iter().zip(params).enumerate() {
+        for (arg, (param_name, param_type)) in typed_args.iter().zip(params) {
             // Add constraint if argument is a variable and param type is concrete.
             if let ExprKind::Variable(var_name) = &arg.kind {
                 if !matches!(param_type, Type::Unknown) {
@@ -1314,7 +1313,7 @@ impl<'a> InferState<'a> {
         }
         // Check type exists.
         let target_name = type_test.type_name.name.clone();
-        if !self.registry.lookup_type(&target_name).is_some() && !self.registry.lookup_protocol(&target_name).is_some() {
+        if self.registry.lookup_type(&target_name).is_none() && self.registry.lookup_protocol(&target_name).is_none() {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::UndefinedType(target_name),
                 span,
@@ -1359,7 +1358,7 @@ impl<'a> InferState<'a> {
         }
         let target_name = downcast.type_name.name.clone();
         let target_type = self.resolve_type_ref(&downcast.type_name);
-        if !self.registry.lookup_type(&target_name).is_some() && !self.registry.lookup_protocol(&target_name).is_some() {
+        if self.registry.lookup_type(&target_name).is_none() && self.registry.lookup_protocol(&target_name).is_none() {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::UndefinedType(target_name),
                 span,
@@ -1615,7 +1614,7 @@ impl<'a> InferState<'a> {
         }
     }
 
-    /// -----------------------------------------------------------------------------
+    // -----------------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------------
 
