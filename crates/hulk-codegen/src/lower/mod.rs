@@ -160,11 +160,6 @@ pub fn lower_expr<'ctx>(
 
         ExprKind::Variable(name) => binding::lower_variable(ctx, name),
         ExprKind::SelfRef => binding::lower_variable(ctx, "self"),
-        ExprKind::BaseRef => {
-            Err(CodegenError::Unsupported {
-                construct: format!("{:?} not supported", expr.kind)
-            })
-        }
 
         // ─── Unary and binary operators ──────────────────────────────────
 
@@ -212,7 +207,7 @@ pub fn lower_expr<'ctx>(
         }
         // ─── Catch-all for unhandled cases ───────────────────────────────
         _ => Err(CodegenError::Unsupported {
-            construct: format!("lowering of {:?} not yet implemented", expr.kind)
+            construct: format!("lowering of {:?} not yet implemented or unsupported", expr.kind)
         }),
     }
 }
