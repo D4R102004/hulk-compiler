@@ -12,13 +12,13 @@
 //! any new structures.
 
 use hulk_ast::{
-    AttributeDecl, Declaration, DeclarationKind, ExprKind, FunctionDecl, LetBinding, 
-    SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeRef,
+    AttributeDecl, Declaration, DeclarationKind, ExprKind, FunctionDecl, LetBinding, SourceSpan,
+    TypeDecl, TypeMember, TypeMemberKind, TypeRef,
 };
 
 use crate::error::{SemanticError, SemanticErrorKind};
 use crate::typed::{TypedExpr, TypedProgram};
-use crate::types::registry::{TypeRegistry};
+use crate::types::registry::TypeRegistry;
 use crate::types::Type;
 
 // -----------------------------------------------------------------------------
@@ -31,12 +31,12 @@ use crate::types::Type;
 /// * `typed_program` – The fully typed AST (`Program<Type>`).
 /// * `registry` – The registry (read‑only, used for conformance checks).
 /// * `errors` – Vector to append any type‑checking errors.
-pub fn run(
-    typed_program: &TypedProgram,
-    registry: &TypeRegistry,
-    errors: &mut Vec<SemanticError>,
-) {
-    let mut checker = Checker { registry, errors, current_type: None };
+pub fn run(typed_program: &TypedProgram, registry: &TypeRegistry, errors: &mut Vec<SemanticError>) {
+    let mut checker = Checker {
+        registry,
+        errors,
+        current_type: None,
+    };
     checker.check_program(typed_program);
 }
 
@@ -149,7 +149,10 @@ impl<'a> Checker<'a> {
                         self.check_expr(&method.body);
                     } else {
                         // Should not happen; report an internal error.
-                        panic!("internal: method signature missing for `{}` in type `{}`", method.name, type_name);
+                        panic!(
+                            "internal: method signature missing for `{}` in type `{}`",
+                            method.name, type_name
+                        );
                     }
                 } else {
                     panic!("internal: type `{}` not found in registry", type_name);
@@ -188,7 +191,10 @@ impl<'a> Checker<'a> {
 
         // Recurse into children based on the expression kind.
         match &expr.kind {
-            ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::SelfRef | ExprKind::BaseRef => {}
+            ExprKind::Literal(_)
+            | ExprKind::Variable(_)
+            | ExprKind::SelfRef
+            | ExprKind::BaseRef => {}
 
             ExprKind::Unary(unary) => self.check_expr(&unary.expr),
             ExprKind::Binary(binary) => {
@@ -246,7 +252,8 @@ impl<'a> Checker<'a> {
                 self.check_expr(&member.object);
 
                 // Attribute privacy check.
-                if let Some(owner_type) = self.attribute_owner(&member.object.anno, &member.member) {
+                if let Some(owner_type) = self.attribute_owner(&member.object.anno, &member.member)
+                {
                     // It's an attribute: only allowed if object is `self` of the exact same type.
                     match &member.object.kind {
                         ExprKind::SelfRef => {
@@ -266,8 +273,8 @@ impl<'a> Checker<'a> {
                             // Kotlin allow same-type instances to access each other's private
                             // members (access is class-level, not object-level).
                             // Crafting Interpreters uses the same currentClass pattern.
-                            let is_same_type_access = self.current_type.as_ref()
-                                == Some(&owner_type);
+                            let is_same_type_access =
+                                self.current_type.as_ref() == Some(&owner_type);
                             if !is_same_type_access {
                                 self.errors.push(SemanticError::error(
                                     SemanticErrorKind::UnknownMember {
@@ -323,7 +330,11 @@ impl<'a> Checker<'a> {
     fn check_let_binding(&mut self, binding: &LetBinding<Type>) {
         if let Some(ann) = &binding.type_annotation {
             let ann_type = self.resolve_type_ref(ann);
-            self.check_conformance(&binding.initializer.anno, &ann_type, binding.initializer.span);
+            self.check_conformance(
+                &binding.initializer.anno,
+                &ann_type,
+                binding.initializer.span,
+            );
         }
         self.check_expr(&binding.initializer);
     }
@@ -345,15 +356,10 @@ impl<'a> Checker<'a> {
     // -------------------------------------------------------------------------
 
     /// Verifies that the actual type conforms to the expected type.
-    /// If not, and expected is a protocol and actual is Named, try 
-    /// to get detailed missing list. Otherwise appends a `NotConforming` 
+    /// If not, and expected is a protocol and actual is Named, try
+    /// to get detailed missing list. Otherwise appends a `NotConforming`
     /// error at the given span.
-    fn check_conformance(
-        &mut self,
-        actual_type: &Type,
-        expected_type: &Type,
-        span: SourceSpan,
-    ) {
+    fn check_conformance(&mut self, actual_type: &Type, expected_type: &Type, span: SourceSpan) {
         if actual_type.conforms_to(expected_type, self.registry) {
             return;
         }
@@ -396,12 +402,11 @@ impl<'a> Checker<'a> {
     /// Otherwise returns `None` (the member is a method or does not exist).
     fn attribute_owner(&self, ty: &Type, member: &str) -> Option<Type> {
         match ty {
-            Type::Named(name) => {
-                self.registry
-                    .lookup_type(name)
-                    .and_then(|info| info.attributes.get(member))
-                    .map(|_| Type::Named(name.clone()))
-            }
+            Type::Named(name) => self
+                .registry
+                .lookup_type(name)
+                .and_then(|info| info.attributes.get(member))
+                .map(|_| Type::Named(name.clone())),
             _ => None,
         }
     }
@@ -441,10 +446,10 @@ impl<'a> Checker<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analyze;
+    use hulk_ast::VectorExpr;
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
-    use hulk_ast::VectorExpr;
-    use crate::analyze;
 
     #[test]
     fn annotation_mismatch() {
@@ -452,7 +457,9 @@ mod tests {
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
         assert!(result.is_err());
         let errs = result.err().unwrap();
-        assert!(errs.iter().any(|e| matches!(e.kind, SemanticErrorKind::NotConforming { .. })));
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e.kind, SemanticErrorKind::NotConforming { .. })));
     }
 
     #[test]
@@ -591,24 +598,21 @@ mod tests {
                 // For other nodes, recurse normally.
                 ExprKind::Unary(unary) => find_recursive_call(&unary.expr),
                 ExprKind::Binary(binary) => {
-                    find_recursive_call(&binary.left)
-                        .or_else(|| find_recursive_call(&binary.right))
+                    find_recursive_call(&binary.left).or_else(|| find_recursive_call(&binary.right))
                 }
-                ExprKind::If(if_expr) => {
-                    find_recursive_call(&if_expr.condition)
-                        .or_else(|| find_recursive_call(&if_expr.then_branch))
-                        .or_else(|| {
-                            for elif in &if_expr.elif_branches {
-                                if let Some(found) = find_recursive_call(&elif.condition) {
-                                    return Some(found);
-                                }
-                                if let Some(found) = find_recursive_call(&elif.body) {
-                                    return Some(found);
-                                }
+                ExprKind::If(if_expr) => find_recursive_call(&if_expr.condition)
+                    .or_else(|| find_recursive_call(&if_expr.then_branch))
+                    .or_else(|| {
+                        for elif in &if_expr.elif_branches {
+                            if let Some(found) = find_recursive_call(&elif.condition) {
+                                return Some(found);
                             }
-                            find_recursive_call(&if_expr.else_branch)
-                        })
-                }
+                            if let Some(found) = find_recursive_call(&elif.body) {
+                                return Some(found);
+                            }
+                        }
+                        find_recursive_call(&if_expr.else_branch)
+                    }),
                 ExprKind::Let(let_expr) => {
                     for binding in &let_expr.bindings {
                         if let Some(found) = find_recursive_call(&binding.initializer) {
@@ -625,14 +629,10 @@ mod tests {
                     }
                     None
                 }
-                ExprKind::While(while_expr) => {
-                    find_recursive_call(&while_expr.condition)
-                        .or_else(|| find_recursive_call(&while_expr.body))
-                }
-                ExprKind::For(for_expr) => {
-                    find_recursive_call(&for_expr.iterable)
-                        .or_else(|| find_recursive_call(&for_expr.body))
-                }
+                ExprKind::While(while_expr) => find_recursive_call(&while_expr.condition)
+                    .or_else(|| find_recursive_call(&while_expr.body)),
+                ExprKind::For(for_expr) => find_recursive_call(&for_expr.iterable)
+                    .or_else(|| find_recursive_call(&for_expr.body)),
                 ExprKind::Member(member) => find_recursive_call(&member.object),
                 ExprKind::New(new_expr) => {
                     for arg in &new_expr.args {
@@ -653,37 +653,37 @@ mod tests {
                         }
                         None
                     }
-                    VectorExpr::Comprehension(comp) => {
-                        find_recursive_call(&comp.expr)
-                            .or_else(|| find_recursive_call(&comp.iterable))
-                    }
+                    VectorExpr::Comprehension(comp) => find_recursive_call(&comp.expr)
+                        .or_else(|| find_recursive_call(&comp.iterable)),
                 },
                 ExprKind::Index(index) => {
-                    find_recursive_call(&index.object)
-                        .or_else(|| find_recursive_call(&index.index))
+                    find_recursive_call(&index.object).or_else(|| find_recursive_call(&index.index))
                 }
                 ExprKind::Match(match_expr) => {
-                    find_recursive_call(&match_expr.value)
-                        .or_else(|| {
-                            for case in &match_expr.cases {
-                                if let Some(found) = find_recursive_call(&case.body) {
-                                    return Some(found);
-                                }
+                    find_recursive_call(&match_expr.value).or_else(|| {
+                        for case in &match_expr.cases {
+                            if let Some(found) = find_recursive_call(&case.body) {
+                                return Some(found);
                             }
-                            None
-                        })
+                        }
+                        None
+                    })
                 }
                 // Leaves: Literal, Variable, SelfRef, BaseRef have no children.
                 _ => None,
             }
         }
 
-        let recursive_call = find_recursive_call(fib_body)
-            .expect("should find a recursive call to fib");
+        let recursive_call =
+            find_recursive_call(fib_body).expect("should find a recursive call to fib");
 
         // The recursive call should have its annotation resolved to Number.
-        assert_eq!(recursive_call.anno, Type::Number,
-            "recursive call annotation should be Number, got {:?}", recursive_call.anno);
+        assert_eq!(
+            recursive_call.anno,
+            Type::Number,
+            "recursive call annotation should be Number, got {:?}",
+            recursive_call.anno
+        );
     }
 
     /// Tests that a method declared on an ancestor protocol can be called through
@@ -697,7 +697,11 @@ mod tests {
             let x: Q = new T() in print(x.f() + x.g());
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "protocol ancestor method call should work: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "protocol ancestor method call should work: {:?}",
+            result.err()
+        );
     }
 
     /// Tests that attribute access through a variable typed as a protocol is rejected
@@ -711,10 +715,18 @@ mod tests {
             let x: P = new T() in print(x.attr);
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_err(), "attribute access through protocol should fail");
+        assert!(
+            result.is_err(),
+            "attribute access through protocol should fail"
+        );
         let errors = result.err().unwrap();
         // Expect an UnknownMember error (or a privacy violation).
-        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::UnknownMember { .. })),
-            "missing UnknownMember error; got errors: {:?}", errors);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::UnknownMember { .. })),
+            "missing UnknownMember error; got errors: {:?}",
+            errors
+        );
     }
 }

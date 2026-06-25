@@ -12,8 +12,8 @@ use std::collections::HashSet;
 use std::fmt;
 
 pub mod registry;
-pub use registry::TypeRegistry;
 pub use registry::seeded_registry;
+pub use registry::TypeRegistry;
 
 // -----------------------------------------------------------------------------
 // Type enum
@@ -22,7 +22,7 @@ pub use registry::seeded_registry;
 /// A fully‑resolved HULK type, as computed by the semantic analyzer.
 ///
 /// This is the synthesized attribute of every expression visit (Section 2.2
-/// of the implementation plan). It carries no lifetime or AST reference so it 
+/// of the implementation plan). It carries no lifetime or AST reference so it
 /// can be stored in maps, returned up the tree, and compared cheaply.
 ///
 /// # Invariants
@@ -57,7 +57,7 @@ pub enum Type {
     /// `Iterable<T>` — the `T*` annotation sugar (§A.11.2) and the
     /// builtin `Iterable` protocol specialized to an element type.
     Iterable(Box<Type>),
-    
+
     /// Function type: (params) -> return_type.
     /// Used for method references and future lambda expressions.
     Function {
@@ -173,7 +173,9 @@ impl Type {
                     // Fallback: directly verify the type has both required methods.
                     // This handles cases where the protocol's method table might be incomplete.
                     if let Some(info) = registry.lookup_type(t1) {
-                        let has_next = info.flattened_methods.get("next")
+                        let has_next = info
+                            .flattened_methods
+                            .get("next")
                             .map(|sig| sig.params.is_empty() && sig.return_type == Type::Boolean)
                             .unwrap_or(false);
                         if has_next {
@@ -207,11 +209,24 @@ impl Type {
         }
 
         // 9. Function types: contravariant params, covariant return.
-        if let (Type::Function { params: p1, return_type: r1 },
-                Type::Function { params: p2, return_type: r2 }) = (self, other) {
-            if p1.len() != p2.len() { return false; }
+        if let (
+            Type::Function {
+                params: p1,
+                return_type: r1,
+            },
+            Type::Function {
+                params: p2,
+                return_type: r2,
+            },
+        ) = (self, other)
+        {
+            if p1.len() != p2.len() {
+                return false;
+            }
             for (a, b) in p1.iter().zip(p2) {
-                if !b.conforms_to(a, registry) { return false; } // contravariant
+                if !b.conforms_to(a, registry) {
+                    return false;
+                } // contravariant
             }
             return r1.conforms_to(r2, registry); // covariant
         }
@@ -232,8 +247,12 @@ impl fmt::Display for Type {
             Type::Named(name) => write!(f, "{}", name),
             Type::Vector(inner) => write!(f, "Vector<{}>", inner),
             Type::Iterable(inner) => write!(f, "Iterable<{}>", inner),
-            Type::Function { params, return_type } => {
-                let param_str = params.iter()
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                let param_str = params
+                    .iter()
                     .map(|t| t.to_string())
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -273,7 +292,10 @@ pub fn lowest_common_ancestor(types: &[Type], registry: &TypeRegistry) -> Type {
     }
 
     // Filter out Unknown types; if all are Unknown, return Unknown.
-    let concrete: Vec<&Type> = types.iter().filter(|t| !matches!(t, Type::Unknown)).collect();
+    let concrete: Vec<&Type> = types
+        .iter()
+        .filter(|t| !matches!(t, Type::Unknown))
+        .collect();
     if concrete.is_empty() {
         return Type::Unknown;
     }
@@ -346,12 +368,15 @@ fn ancestor_chain(ty: &Type, registry: &TypeRegistry) -> Vec<Type> {
             vec![ty.clone(), Type::Object]
         }
 
-        // In practice never used as branch types in HULK. 
+        // In practice never used as branch types in HULK.
         // If we do encounter them, we just return [ty, Object].
         Type::Iterable(_inner) => {
             vec![ty.clone(), Type::Object]
         }
-        Type::Function { params: _params, return_type: _return_type } => {
+        Type::Function {
+            params: _params,
+            return_type: _return_type,
+        } => {
             vec![ty.clone(), Type::Object]
         }
 

@@ -7,13 +7,11 @@
 //! The goal is to make every name visible before any body is checked,
 //! solving the forward-reference problem (§A.3.1) structurally.
 
-use std::collections::HashSet;
 use indexmap::IndexMap;
+use std::collections::HashSet;
 
-use hulk_ast::{ DeclarationKind, FunctionDecl, ProtocolDecl,
-                TypeDecl, TypeMemberKind, TypeRef,
-            };
 use hulk_ast::SourceSpan;
+use hulk_ast::{DeclarationKind, FunctionDecl, ProtocolDecl, TypeDecl, TypeMemberKind, TypeRef};
 
 use crate::error::{SemanticError, SemanticErrorKind};
 use crate::types::registry::{
@@ -57,7 +55,9 @@ pub fn run(
     for decl in &program.declarations {
         match &decl.kind {
             DeclarationKind::Function(f) => collect_function(f, decl.span, registry, errors),
-            DeclarationKind::Type(t) => collect_type(t, decl.span, registry, errors, &mut user_declared_types),
+            DeclarationKind::Type(t) => {
+                collect_type(t, decl.span, registry, errors, &mut user_declared_types)
+            }
             DeclarationKind::Protocol(p) => collect_protocol(p, decl.span, registry, errors),
         }
     }
@@ -130,8 +130,7 @@ fn collect_type(
     // Duplicate check: type namespace (shared with protocols, per §A.10.2).
     if registry.types.contains_key(&ty_decl.name) {
         let existing = registry.types.get(&ty_decl.name).unwrap();
-        let is_protected = existing.is_builtin_value
-            || user_declared_types.contains(&ty_decl.name);
+        let is_protected = existing.is_builtin_value || user_declared_types.contains(&ty_decl.name);
         // WHY: mirrors Crafting Interpreters §11 — user declarations overwrite
         // the environment. Seeded non-value types (Vector, Range, Object) can
         // be shadowed. Protected value types (Number, String, Boolean) and
@@ -253,7 +252,7 @@ fn collect_type(
         attributes,
         methods,
         flattened_methods: IndexMap::new(), // filled in Pass 1
-        is_builtin_value: false,           // user types are never builtin value types
+        is_builtin_value: false,            // user types are never builtin value types
         span: decl_span,
     };
 
@@ -276,7 +275,9 @@ fn collect_protocol(
     errors: &mut Vec<SemanticError>,
 ) {
     // Duplicate check: protocols share the type namespace with classes.
-    if registry.protocols.contains_key(&protocol.name) || registry.types.contains_key(&protocol.name) {
+    if registry.protocols.contains_key(&protocol.name)
+        || registry.types.contains_key(&protocol.name)
+    {
         errors.push(SemanticError::error(
             SemanticErrorKind::DuplicateType(protocol.name.clone()),
             decl_span,
@@ -410,15 +411,15 @@ fn check_duplicate_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::passes::utils::assert_error_kind;
+    use crate::seeded_registry;
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
-    use crate::seeded_registry;
-    use crate::passes::utils::assert_error_kind;
 
     fn parse_and_collect(src: &str) -> (TypeRegistry, Vec<SemanticError>) {
         let tokens = Lexer::new(src).tokenize().expect("lex ok");
         let program = parse(tokens).expect("parse ok");
-        println!("{:#?}", program);  // Print the AST
+        println!("{:#?}", program); // Print the AST
         let mut registry = seeded_registry();
         let mut errors = Vec::new();
         run(&program, &mut registry, &mut errors);
@@ -433,7 +434,10 @@ mod tests {
             print(0);
         ";
         let (_, errors) = parse_and_collect(src);
-        assert_error_kind(&errors, SemanticErrorKind::DuplicateFunction("f".to_string()));
+        assert_error_kind(
+            &errors,
+            SemanticErrorKind::DuplicateFunction("f".to_string()),
+        );
     }
 
     #[test]
@@ -457,8 +461,12 @@ mod tests {
             print(0);
         ";
         let (_, errors) = parse_and_collect(src);
-        assert_error_kind(&errors,
-            SemanticErrorKind::DuplicateAttribute { ty: "A".to_string(), attribute: "x".to_string() }
+        assert_error_kind(
+            &errors,
+            SemanticErrorKind::DuplicateAttribute {
+                ty: "A".to_string(),
+                attribute: "x".to_string(),
+            },
         );
     }
 
@@ -472,8 +480,12 @@ mod tests {
             print(0);
         ";
         let (_, errors) = parse_and_collect(src);
-        assert_error_kind(&errors,
-            SemanticErrorKind::DuplicateMethod { ty: "A".to_string(), method: "f".to_string() }
+        assert_error_kind(
+            &errors,
+            SemanticErrorKind::DuplicateMethod {
+                ty: "A".to_string(),
+                method: "f".to_string(),
+            },
         );
     }
 
@@ -484,7 +496,10 @@ mod tests {
             print(0);
         ";
         let (_, errors) = parse_and_collect(src);
-        assert_error_kind(&errors, SemanticErrorKind::DuplicateParameter("x".to_string()));
+        assert_error_kind(
+            &errors,
+            SemanticErrorKind::DuplicateParameter("x".to_string()),
+        );
     }
 
     // ---- Extended tests ----

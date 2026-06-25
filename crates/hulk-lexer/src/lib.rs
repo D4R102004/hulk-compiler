@@ -538,7 +538,12 @@ impl Lexer {
 
                         // HULK spec §A.2.2: only \", \\, \n, \t are valid escapes.
                         // Any other \X is a hard error — silent pass-through would hide bugs.
-                        other => return Err(LexError::InvalidEscape { ch: other, span: escape_span }),
+                        other => {
+                            return Err(LexError::InvalidEscape {
+                                ch: other,
+                                span: escape_span,
+                            })
+                        }
                     }
                 }
 

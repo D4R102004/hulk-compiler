@@ -35,7 +35,10 @@ pub struct Program<A = ()> {
 
 impl<A> Program<A> {
     pub fn new(declarations: Vec<Declaration<A>>, entry: Expr<A>) -> Self {
-        Self { declarations, entry }
+        Self {
+            declarations,
+            entry,
+        }
     }
 }
 
@@ -153,7 +156,11 @@ pub struct AttributeDecl<A = ()> {
 }
 
 impl<A> AttributeDecl<A> {
-    pub fn new(name: impl Into<String>, type_annotation: Option<TypeRef>, initializer: Expr<A>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        type_annotation: Option<TypeRef>,
+        initializer: Expr<A>,
+    ) -> Self {
         Self {
             name: name.into(),
             type_annotation,
@@ -269,7 +276,11 @@ pub struct Expr<A = ()> {
 impl Expr {
     /// Creates a new expression node with `anno = ()`.
     pub fn new(kind: ExprKind, span: SourceSpan) -> Self {
-        Self { kind, anno: (), span }
+        Self {
+            kind,
+            anno: (),
+            span,
+        }
     }
 
     pub fn literal(literal: Literal, span: SourceSpan) -> Self {
@@ -427,7 +438,11 @@ pub struct LetBinding<A = ()> {
 }
 
 impl<A> LetBinding<A> {
-    pub fn new(name: impl Into<String>, type_annotation: Option<TypeRef>, initializer: Expr<A>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        type_annotation: Option<TypeRef>,
+        initializer: Expr<A>,
+    ) -> Self {
         Self {
             name: name.into(),
             type_annotation,
@@ -456,8 +471,14 @@ impl<A> AssignExpr<A> {
 #[derive(Debug, Clone, PartialEq)]
 pub enum AssignTarget<A = ()> {
     Variable(String),
-    Member { object: Box<Expr<A>>, field: String },
-    Index { object: Box<Expr<A>>, index: Box<Expr<A>> },
+    Member {
+        object: Box<Expr<A>>,
+        field: String,
+    },
+    Index {
+        object: Box<Expr<A>>,
+        index: Box<Expr<A>>,
+    },
 }
 
 /// Expression block: `{ expr1; expr2; ... }`.

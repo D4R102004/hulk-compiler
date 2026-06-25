@@ -76,7 +76,6 @@ impl SemanticError {
 #[derive(Debug, Clone, PartialEq)]
 pub enum SemanticErrorKind {
     // ─── Name resolution ──────────────────────────────────────────────────
-
     /// An undefined variable name was used.
     UndefinedVariable(String),
     /// An undefined function (or builtin) was called.
@@ -97,7 +96,6 @@ pub enum SemanticErrorKind {
     },
 
     // ─── Redeclaration ──────────────────────────────────────────────────
-
     /// A function was defined more than once (global namespace).
     DuplicateFunction(String),
     /// A method was defined more than once within the same type.
@@ -120,7 +118,6 @@ pub enum SemanticErrorKind {
     DuplicateParameter(String),
 
     // ─── Inheritance ──────────────────────────────────────────────────────
-
     /// Attempt to inherit from a builtin value type (`Number`, `String`, `Boolean`).
     InheritFromBuiltinValueType(String),
     /// Attempt to inherit from a type that does not exist.
@@ -143,7 +140,6 @@ pub enum SemanticErrorKind {
     },
 
     // ─── Protocols & Annotations ──────────────────────────────────────
-
     /// A type annotation is required but missing (e.g., protocol method parameter).
     MissingTypeAnnotation {
         /// The name of the symbol that lacks a type.
@@ -169,7 +165,6 @@ pub enum SemanticErrorKind {
     },
 
     // ─── Typing ──────────────────────────────────────────────────────────
-
     /// The inferred type does not match the declared annotation.
     TypeMismatch {
         /// The type expected by the annotation.
@@ -219,19 +214,18 @@ pub enum SemanticErrorKind {
     SelfIsNotAssignable,
     /// `base` was used outside an overriding method.
     BaseOutsideOverridingMethod,
-    /// A call was made on a value that is not a function. 
-    CallOnNonFunction { 
+    /// A call was made on a value that is not a function.
+    CallOnNonFunction {
         /// The type of the value being called.
-        ty: Type 
+        ty: Type,
     },
     /// An assignment was made to a method (e.g., `obj.method = ...`).
-    AssignToMethod { 
+    AssignToMethod {
         /// The name of the method being assigned to.
-        method: String 
+        method: String,
     },
 
     // ─── Inference ──────────────────────────────────────────────────────
-
     /// A symbol's type could not be inferred (needs an explicit annotation).
     CannotInferType {
         /// The name of the symbol that could not be inferred.
@@ -246,7 +240,6 @@ pub enum SemanticErrorKind {
     },
 
     // ─── Non‑blocking warnings (quality‑of‑life) ──────────────────────
-
     /// A downcast (`as`) can never succeed because the types are unrelated.
     UnreachableDowncast {
         /// The source type of the downcast.
@@ -271,10 +264,7 @@ impl fmt::Display for SemanticError {
         write!(
             f,
             "{} at line {}, col {}: {}",
-            prefix,
-            self.span.line,
-            self.span.col,
-            self.kind
+            prefix, self.span.line, self.span.col, self.kind
         )
     }
 }
@@ -287,7 +277,11 @@ impl fmt::Display for SemanticErrorKind {
                 write!(f, "undefined variable `{}`", name)
             }
             Self::UndefinedFunction { name, arity } => {
-                write!(f, "undefined function `{}` with {} argument(s)", name, arity)
+                write!(
+                    f,
+                    "undefined function `{}` with {} argument(s)",
+                    name, arity
+                )
             }
             Self::UndefinedType(name) => {
                 write!(f, "undefined type `{}`", name)
@@ -301,7 +295,7 @@ impl fmt::Display for SemanticErrorKind {
                 write!(f, "duplicate function `{}`", name)
             }
             Self::DuplicateMethod { ty, method } => {
-            write!(f, "duplicate method `{}` in type `{}`", method, ty)
+                write!(f, "duplicate method `{}` in type `{}`", method, ty)
             }
             Self::DuplicateType(name) => {
                 write!(f, "duplicate type `{}`", name)
@@ -323,7 +317,12 @@ impl fmt::Display for SemanticErrorKind {
             Self::InheritanceCycle(cycle) => {
                 write!(f, "inheritance cycle detected: {}", cycle.join(" -> "))
             }
-            Self::InvalidOverride { method, in_type, expected, found } => {
+            Self::InvalidOverride {
+                method,
+                in_type,
+                expected,
+                found,
+            } => {
                 write!(
                     f,
                     "invalid override of method `{}` in type `{}`: expected `{}`, found `{}`",
@@ -335,7 +334,11 @@ impl fmt::Display for SemanticErrorKind {
             Self::MissingTypeAnnotation { symbol, context } => {
                 write!(f, "missing type annotation for `{}` in {}", symbol, context)
             }
-            Self::ProtocolNotImplemented { ty, protocol, missing } => {
+            Self::ProtocolNotImplemented {
+                ty,
+                protocol,
+                missing,
+            } => {
                 let missing_list = missing.join(", ");
                 write!(
                     f,
@@ -349,7 +352,11 @@ impl fmt::Display for SemanticErrorKind {
 
             // Typing
             Self::TypeMismatch { expected, found } => {
-                write!(f, "type mismatch: expected `{}`, found `{}`", expected, found)
+                write!(
+                    f,
+                    "type mismatch: expected `{}`, found `{}`",
+                    expected, found
+                )
             }
             Self::NotConforming { found, expected } => {
                 write!(f, "type `{}` does not conform to `{}`", found, expected)
@@ -359,7 +366,12 @@ impl fmt::Display for SemanticErrorKind {
             }
             Self::InvalidOperator { op, operand_types } => {
                 let types: Vec<String> = operand_types.iter().map(|t| t.to_string()).collect();
-                write!(f, "invalid operator `{}` for types {}", op, types.join(", "))
+                write!(
+                    f,
+                    "invalid operator `{}` for types {}",
+                    op,
+                    types.join(", ")
+                )
             }
             Self::NonBooleanCondition(ty) => {
                 write!(f, "non‑boolean condition of type `{}`", ty)
@@ -388,7 +400,11 @@ impl fmt::Display for SemanticErrorKind {
 
             // Inference
             Self::CannotInferType { symbol } => {
-                write!(f, "cannot infer type for `{}`; add an explicit annotation", symbol)
+                write!(
+                    f,
+                    "cannot infer type for `{}`; add an explicit annotation",
+                    symbol
+                )
             }
             Self::AmbiguousInference { symbol, candidates } => {
                 let types: Vec<String> = candidates.iter().map(|t| t.to_string()).collect();
@@ -402,7 +418,11 @@ impl fmt::Display for SemanticErrorKind {
 
             // Non‑blocking warnings
             Self::UnreachableDowncast { from, to } => {
-                write!(f, "unreachable downcast: `{}` as `{}` can never succeed", from, to)
+                write!(
+                    f,
+                    "unreachable downcast: `{}` as `{}` can never succeed",
+                    from, to
+                )
             }
             Self::NonExhaustiveMatch => {
                 write!(f, "non‑exhaustive match: no catch‑all pattern")
@@ -599,23 +619,26 @@ mod tests {
 
         for (kind, expected) in cases {
             let rendered = kind.to_string();
-            assert_eq!(rendered, expected, "rendered: `{}`, expected: `{}`", rendered, expected);
+            assert_eq!(
+                rendered, expected,
+                "rendered: `{}`, expected: `{}`",
+                rendered, expected
+            );
         }
     }
 
     #[test]
     fn severity_prefix_in_full_error_display() {
         let span = dummy_span();
-        let error = SemanticError::error(
-            SemanticErrorKind::UndefinedVariable("x".to_string()),
-            span,
-        );
-        assert!(error.to_string().starts_with("semantic error at line 1, col 1: undefined variable `x`"));
+        let error =
+            SemanticError::error(SemanticErrorKind::UndefinedVariable("x".to_string()), span);
+        assert!(error
+            .to_string()
+            .starts_with("semantic error at line 1, col 1: undefined variable `x`"));
 
-        let warning = SemanticError::warning(
-            SemanticErrorKind::NonExhaustiveMatch,
-            span,
-        );
-        assert!(warning.to_string().starts_with("semantic warning at line 1, col 1: non‑exhaustive match: no catch‑all pattern"));
+        let warning = SemanticError::warning(SemanticErrorKind::NonExhaustiveMatch, span);
+        assert!(warning.to_string().starts_with(
+            "semantic warning at line 1, col 1: non‑exhaustive match: no catch‑all pattern"
+        ));
     }
 }
