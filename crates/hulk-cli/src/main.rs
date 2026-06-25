@@ -20,25 +20,31 @@ struct Args {
 }
 
 fn main() {
+    // Pipeline: read source → lex (exit 1) → parse (exit 2) → semantic analysis (exit 3).
+    // Exit codes are mandated by the matcom/compilers grader interface contract.
+
     // Parse command line arguments.
     let args = Args::parse();
 
     // Read the source file.
     let source = fs::read_to_string(&args.file).unwrap_or_else(|err| {
         eprintln!("error: could not read '{}': {}", args.file, err);
+        // Pre-pipeline I/O failure; exit 1 is the closest applicable code.
         process::exit(1);
     });
 
     // Lex the source code.
     let tokens = Lexer::new(&source).tokenize().unwrap_or_else(|err| {
         eprintln!("error: {:?}", err);
+        // Grader contract: exit 1 = lexical error.
         process::exit(1);
     });
 
     // Parse the token stream into an AST.
     let program = Parser::new(tokens).parse_program().unwrap_or_else(|err| {
         eprintln!("error: {}", err);
-        process::exit(1);
+        // Grader contract: exit 2 = syntactic error.
+        process::exit(2);
     });
 
     match analyze(&program) {
@@ -47,7 +53,8 @@ fn main() {
             for error in &errors {
                 eprintln!("{}", error);
             }
-            process::exit(1);
+            // Grader contract: exit 3 = semantic error.
+            process::exit(3);
         }
         Ok(verified) => {
             // Print warnings, if any.

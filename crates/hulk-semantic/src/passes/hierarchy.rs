@@ -12,14 +12,14 @@
 //! 5. Protocol extension variance (contravariant params, covariant return)
 //! 6. Flatten attribute/method tables (parent‑to‑child) — skipped if cycle
 
-use std::collections::HashSet;
 use indexmap::IndexMap;
+use std::collections::HashSet;
 
 use hulk_ast::SourceSpan;
 
 use crate::error::{SemanticError, SemanticErrorKind};
-use crate::types::registry::{TypeRegistry, MethodSignature};
 use crate::passes::utils::topological_order;
+use crate::types::registry::{MethodSignature, TypeRegistry};
 
 // -----------------------------------------------------------------------------
 // Public entry point
@@ -63,7 +63,7 @@ pub fn run(registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
     }
 
     // Step 5: Check protocol extension variance (always, because independent).
-    flatten_protocols(registry, errors);  // Flatten protocol method tables so variance check sees inherited methods
+    flatten_protocols(registry, errors); // Flatten protocol method tables so variance check sees inherited methods
     check_protocol_variance(registry, errors);
 
     // Step 6: Flatten attribute and method tables.
@@ -82,7 +82,11 @@ pub fn run(registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
 fn resolve_parent_links(registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
     let type_names: Vec<String> = registry.types.keys().cloned().collect();
     for name in type_names {
-        let parent_name = match registry.types.get(&name).and_then(|info| info.parent.as_ref()) {
+        let parent_name = match registry
+            .types
+            .get(&name)
+            .and_then(|info| info.parent.as_ref())
+        {
             Some(parent) => &parent.name,
             None => continue,
         };
@@ -108,7 +112,11 @@ fn check_builtin_inheritance(registry: &mut TypeRegistry, errors: &mut Vec<Seman
     let builtin_value_types = ["Number", "String", "Boolean"];
     let type_names: Vec<String> = registry.types.keys().cloned().collect();
     for name in type_names {
-        let parent_name = match registry.types.get(&name).and_then(|info| info.parent.as_ref()) {
+        let parent_name = match registry
+            .types
+            .get(&name)
+            .and_then(|info| info.parent.as_ref())
+        {
             Some(parent) => &parent.name,
             None => continue,
         };
@@ -203,7 +211,11 @@ fn dfs_cycle(
 fn check_overrides(registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
     let type_names: Vec<String> = registry.types.keys().cloned().collect();
     for name in type_names {
-        let parent_name = match registry.types.get(&name).and_then(|info| info.parent.as_ref()) {
+        let parent_name = match registry
+            .types
+            .get(&name)
+            .and_then(|info| info.parent.as_ref())
+        {
             Some(parent) => &parent.name,
             None => continue,
         };
@@ -245,7 +257,8 @@ fn check_overrides(registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>)
                     );
                 } else {
                     // Check each parameter type and return type for equality.
-                    for ((_, p_type), (_, o_type)) in parent_sig.params.iter().zip(&own_sig.params) {
+                    for ((_, p_type), (_, o_type)) in parent_sig.params.iter().zip(&own_sig.params)
+                    {
                         if p_type != o_type {
                             mismatch = true;
                             break;
@@ -315,7 +328,7 @@ fn check_protocol_variance(registry: &mut TypeRegistry, errors: &mut Vec<Semanti
                 continue;
             }
             let parent_methods = &registry.protocols[parent_name].methods;
-            let child_methods = &registry.protocols[&name].flattened_methods;   
+            let child_methods = &registry.protocols[&name].flattened_methods;
 
             // A protocol extension may not remove a method.
             for (method_name, parent_sig) in parent_methods {
@@ -337,18 +350,30 @@ fn check_protocol_variance(registry: &mut TypeRegistry, errors: &mut Vec<Semanti
                 let mut reason = String::new();
                 let mut ok = true;
                 if own_sig.params.len() != parent_sig.params.len() {
-                    reason = format!("parameter count mismatch: expected {}, found {}", parent_sig.params.len(), own_sig.params.len());
+                    reason = format!(
+                        "parameter count mismatch: expected {}, found {}",
+                        parent_sig.params.len(),
+                        own_sig.params.len()
+                    );
                     ok = false;
                 } else {
-                    for ((_, p_type), (_, o_type)) in parent_sig.params.iter().zip(&own_sig.params) {
+                    for ((_, p_type), (_, o_type)) in parent_sig.params.iter().zip(&own_sig.params)
+                    {
                         if !p_type.conforms_to(o_type, registry) {
                             reason = format!("parameter type mismatch: expected {} (or supertype) for parameter of type {}, but got {}", p_type, p_type, o_type);
                             ok = false;
                             break;
                         }
                     }
-                    if ok && !own_sig.return_type.conforms_to(&parent_sig.return_type, registry) {
-                        reason = format!("return type mismatch: expected {} (or subtype) but got {}", parent_sig.return_type, own_sig.return_type);
+                    if ok
+                        && !own_sig
+                            .return_type
+                            .conforms_to(&parent_sig.return_type, registry)
+                    {
+                        reason = format!(
+                            "return type mismatch: expected {} (or subtype) but got {}",
+                            parent_sig.return_type, own_sig.return_type
+                        );
                         ok = false;
                     }
                 }
@@ -421,7 +446,9 @@ fn flatten_tables(registry: &mut TypeRegistry, _errors: &mut Vec<SemanticError>)
 
     for name in order {
         // Clone parent members if the type has a parent.
-        let parent_name = registry.types.get(&name)
+        let parent_name = registry
+            .types
+            .get(&name)
             .and_then(|info| info.parent.as_ref())
             .map(|p| p.name.clone());
 
@@ -451,7 +478,6 @@ fn flatten_tables(registry: &mut TypeRegistry, _errors: &mut Vec<SemanticError>)
     }
 }
 
-
 // -----------------------------------------------------------------------------
 // Tests
 // -----------------------------------------------------------------------------
@@ -459,14 +485,14 @@ fn flatten_tables(registry: &mut TypeRegistry, _errors: &mut Vec<SemanticError>)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::analyze;
+    use crate::error::Severity;
+    use crate::passes::utils::assert_error_kind;
+    use crate::passes::{collect, hierarchy};
+    use crate::seeded_registry;
+    use crate::types::{Type, TypeRegistry};
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
-    use crate::{seeded_registry};
-    use crate::passes::{collect, hierarchy};
-    use crate::passes::utils::assert_error_kind;
-    use crate::error::Severity;
-    use crate::types::{Type, TypeRegistry};
-    use crate::analyze;
 
     fn parse_and_hierarchy(src: &str) -> (TypeRegistry, Vec<SemanticError>) {
         let tokens = Lexer::new(src).tokenize().expect("lex ok");
@@ -507,14 +533,19 @@ mod tests {
             print(0);
         ";
         let (_, errors) = parse_and_hierarchy(src);
-        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::InheritanceCycle(_))));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e.kind, SemanticErrorKind::InheritanceCycle(_))));
     }
 
     #[test]
     fn inherit_from_builtin_value_type() {
         let src = "type A inherits Number { } print(0);";
         let (_, errors) = parse_and_hierarchy(src);
-        assert_error_kind(&errors, SemanticErrorKind::InheritFromBuiltinValueType("Number".to_string()));
+        assert_error_kind(
+            &errors,
+            SemanticErrorKind::InheritFromBuiltinValueType("Number".to_string()),
+        );
     }
 
     #[test]
@@ -526,7 +557,9 @@ mod tests {
         ";
         let (_, errors) = parse_and_hierarchy(src);
         // Expected: return type mismatch (Number vs String)
-        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::InvalidOverride { .. })));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e.kind, SemanticErrorKind::InvalidOverride { .. })));
     }
 
     #[test]
@@ -559,14 +592,23 @@ mod tests {
             print(new C(42));
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "constructor resolution through two inheritance levels failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "constructor resolution through two inheritance levels failed: {:?}",
+            result.err()
+        );
 
         let registry = &result.unwrap().registry;
         // Check that all three types have their `x` parameter resolved to Number.
         for type_name in ["A", "B", "C"] {
             let info = registry.lookup_type(type_name).expect("type should exist");
-            assert_eq!(info.params[0].1, Type::Number,
-                "type {} parameter should be Number, got {:?}", type_name, info.params[0].1);
+            assert_eq!(
+                info.params[0].1,
+                Type::Number,
+                "type {} parameter should be Number, got {:?}",
+                type_name,
+                info.params[0].1
+            );
         }
     }
 
@@ -587,8 +629,12 @@ mod tests {
         assert!(result.is_err(), "expected ambiguity error");
         let errors = result.err().unwrap();
         // Expect at least one AmbiguousInference error for parameter `x` in `Base`.
-        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::AmbiguousInference { .. })),
-            "missing AmbiguousInference error");
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::AmbiguousInference { .. })),
+            "missing AmbiguousInference error"
+        );
     }
 
     /// Tests that flattened method tables correctly resolve to the most derived signature
@@ -610,7 +656,11 @@ mod tests {
             print(new C().f());
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "three-level flattening failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "three-level flattening failed: {:?}",
+            result.err()
+        );
 
         let registry = &result.unwrap().registry;
         let c_info = registry.lookup_type("C").expect("type C should exist");

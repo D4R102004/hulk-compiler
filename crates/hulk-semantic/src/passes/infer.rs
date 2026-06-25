@@ -7,24 +7,24 @@
 //!
 //! The inference is **bounded**: we do not implement a general fixed‑point
 //! solver. Instead, we use a simple constraint‑collection strategy for
-//! unannotated parameters and a one‑pass‑with‑placeholder algorithm for 
+//! unannotated parameters and a one‑pass‑with‑placeholder algorithm for
 //! recursive functions.
 
 use std::collections::{HashMap, HashSet};
 
 use hulk_ast::{
-    AssignExpr, AssignTarget, AttributeDecl, BinaryExpr, BinaryOp, BlockExpr, CallExpr, Declaration,
-    DeclarationKind, DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl, IfExpr,
-    IndexExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr,
-    Pattern, Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, VectorExpr, WhileExpr,
-    TypeParent, TypeRef, TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, 
+    AssignExpr, AssignTarget, AttributeDecl, BinaryExpr, BinaryOp, BlockExpr, CallExpr,
+    Declaration, DeclarationKind, DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl,
+    IfExpr, IndexExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr,
+    Pattern, Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeParent, TypeRef,
+    TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
 };
 
 use crate::environment::Environment;
-use crate::error::{SemanticError, SemanticErrorKind, };
+use crate::error::{SemanticError, SemanticErrorKind};
 use crate::typed::{TypedExpr, TypedProgram};
 use crate::types::registry::{MethodSignature, TypeRegistry};
-use crate::types::{Type, lowest_common_ancestor};
+use crate::types::{lowest_common_ancestor, Type};
 
 // -----------------------------------------------------------------------------
 // Public entry point
@@ -188,7 +188,9 @@ impl<'a> InferState<'a> {
                     let unique_types: Vec<Type> = unique.into_iter().collect();
                     if unique_types.is_empty() {
                         self.errors.push(SemanticError::error(
-                            SemanticErrorKind::CannotInferType { symbol: p.name.clone() },
+                            SemanticErrorKind::CannotInferType {
+                                symbol: p.name.clone(),
+                            },
                             func.body.span,
                         ));
                         ty = Type::Error;
@@ -223,7 +225,9 @@ impl<'a> InferState<'a> {
             let body_type = typed_body.anno.clone();
             if matches!(body_type, Type::Unknown | Type::Error) {
                 self.errors.push(SemanticError::error(
-                    SemanticErrorKind::CannotInferType { symbol: name.clone() },
+                    SemanticErrorKind::CannotInferType {
+                        symbol: name.clone(),
+                    },
                     func.body.span,
                 ));
                 Type::Error
@@ -281,7 +285,12 @@ impl<'a> InferState<'a> {
         patch_unknowns(&mut patched_body, &param_map, &name, &resolved_return_type);
 
         // Preserve original syntactic annotations in the typed AST.
-        FunctionDecl::new(name, func.params.clone(), func.return_type.clone(), patched_body)
+        FunctionDecl::new(
+            name,
+            func.params.clone(),
+            func.return_type.clone(),
+            patched_body,
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -301,7 +310,6 @@ impl<'a> InferState<'a> {
     /// arguments are reported using the span of the entire type declaration.
     fn infer_type(&mut self, ty_decl: &TypeDecl, decl_span: SourceSpan) -> TypeDecl<Type> {
         let name = ty_decl.name.clone();
-        let decl_span = decl_span; 
 
         // Infer each member.
         let mut typed_members = Vec::new();
@@ -376,7 +384,10 @@ impl<'a> InferState<'a> {
                 }
                 let typed_init = self.infer_expr(&attr.initializer, &mut env);
                 // Check annotation if present.
-                let annotated = attr.type_annotation.as_ref().map(|tr| self.resolve_type_ref(tr));
+                let annotated = attr
+                    .type_annotation
+                    .as_ref()
+                    .map(|tr| self.resolve_type_ref(tr));
                 if let Some(ann) = &annotated {
                     if !typed_init.anno.conforms_to(ann, self.registry) {
                         self.errors.push(SemanticError::error(
@@ -395,7 +406,8 @@ impl<'a> InferState<'a> {
                     }
                 }
                 // Keep the original TypeRef annotation in the typed AST.
-                let attr_typed = AttributeDecl::new(&attr.name, attr.type_annotation.clone(), typed_init);
+                let attr_typed =
+                    AttributeDecl::new(&attr.name, attr.type_annotation.clone(), typed_init);
                 TypeMember::new(TypeMemberKind::Attribute(attr_typed), span)
             }
             TypeMemberKind::Method(method) => {
@@ -468,9 +480,9 @@ impl<'a> InferState<'a> {
 
     /// Looks up a variable name in the current environment.
     ///
-    /// Returns the variable's resolved type if found. If not found, checks the 
-    /// registry for a zero‑arity function (global constant). Otherwise, reports 
-    /// `UndefinedVariable`. 
+    /// Returns the variable's resolved type if found. If not found, checks the
+    /// registry for a zero‑arity function (global constant). Otherwise, reports
+    /// `UndefinedVariable`.
     fn infer_variable(&mut self, name: &str, span: SourceSpan, env: &Environment) -> TypedExpr {
         if let Some(binding) = env.lookup(name) {
             let ty = binding.ty.clone();
@@ -509,7 +521,9 @@ impl<'a> InferState<'a> {
     /// a parent method of the same name. Otherwise, reports
     /// `BaseOutsideOverridingMethod` and returns `Type::Error`.
     fn infer_base_ref(&mut self, span: SourceSpan, _env: &Environment) -> TypedExpr {
-        if let (Some(owner), Some(method_name)) = (&self.current_type_owner, &self.current_method_name) {
+        if let (Some(owner), Some(method_name)) =
+            (&self.current_type_owner, &self.current_method_name)
+        {
             if let Some(info) = self.registry.lookup_type(owner) {
                 if let Some(parent) = &info.parent {
                     if let Some(parent_info) = self.registry.lookup_type(&parent.name) {
@@ -598,7 +612,8 @@ impl<'a> InferState<'a> {
     /// a constraint is recorded so that the parameter can be inferred later.
     ///
     /// - Arithmetic operators require both operands to be `Number`.
-    /// - Comparisons (`<`, `<=`, `>`, `>=`, `==`, `!=`) require both operands `Number`.
+    /// - Equality (`==`, `!=`) accepts `Number`, `String`, or `Boolean` operands.
+    /// - Ordinal comparisons (`<`, `<=`, `>`, `>=`) require both operands `Number`.
     /// - Logical operators (`&`, `|`) require both operands `Boolean`.
     /// - Concatenation (`@`, `@@`) accepts operands of type `Number`, `String`, or `Boolean`.
     ///   No constraint is recorded because the required type is not unique.
@@ -610,8 +625,12 @@ impl<'a> InferState<'a> {
 
         let op = binary.op;
         let result_type = match op {
-            BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply | BinaryOp::Divide
-            | BinaryOp::Modulo | BinaryOp::Power => {
+            BinaryOp::Add
+            | BinaryOp::Subtract
+            | BinaryOp::Multiply
+            | BinaryOp::Divide
+            | BinaryOp::Modulo
+            | BinaryOp::Power => {
                 let left_ok = matches!(left_type, Type::Number | Type::Unknown);
                 let right_ok = matches!(right_type, Type::Number | Type::Unknown);
                 if left_ok && right_ok {
@@ -629,8 +648,35 @@ impl<'a> InferState<'a> {
                     Type::Error
                 }
             }
-            BinaryOp::Equal | BinaryOp::NotEqual | BinaryOp::Less | BinaryOp::LessEqual
-            | BinaryOp::Greater | BinaryOp::GreaterEqual => {
+            // == and != apply to all primitive types per HULK spec §A.5;
+            // ordinal comparisons (<, <=, >, >=) are Number-only and handled below.
+            BinaryOp::Equal | BinaryOp::NotEqual => {
+                let valid_eq = |t: &Type| {
+                    matches!(
+                        t,
+                        Type::Number | Type::String | Type::Boolean | Type::Unknown
+                    )
+                };
+                if valid_eq(&left_type) && valid_eq(&right_type) {
+                    // Preserve Number constraint inference when both sides are numeric.
+                    let is_numeric = |t: &Type| matches!(t, Type::Number | Type::Unknown);
+                    if is_numeric(&left_type) && is_numeric(&right_type) {
+                        self.constrain_if_variable(&left, Type::Number);
+                        self.constrain_if_variable(&right, Type::Number);
+                    }
+                    Type::Boolean
+                } else {
+                    self.errors.push(SemanticError::error(
+                        SemanticErrorKind::InvalidOperator {
+                            op: format!("{:?}", op),
+                            operand_types: vec![left_type, right_type],
+                        },
+                        binary.left.span,
+                    ));
+                    Type::Error
+                }
+            }
+            BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
                 let left_ok = matches!(left_type, Type::Number | Type::Unknown);
                 let right_ok = matches!(right_type, Type::Number | Type::Unknown);
                 if left_ok && right_ok {
@@ -667,12 +713,21 @@ impl<'a> InferState<'a> {
                 }
             }
             BinaryOp::Concat | BinaryOp::ConcatSpace => {
-                let allowed = |t: &Type| matches!(t, Type::Number | Type::String | Type::Boolean | Type::Unknown);
+                let allowed = |t: &Type| {
+                    matches!(
+                        t,
+                        Type::Number | Type::String | Type::Boolean | Type::Unknown
+                    )
+                };
                 if allowed(&left_type) && allowed(&right_type) {
                     // No constraint: the required type is not unique (could be Number, String, or Boolean).
                     Type::String
                 } else {
-                    let op_str = if matches!(op, BinaryOp::Concat) { "@" } else { "@@" };
+                    let op_str = if matches!(op, BinaryOp::Concat) {
+                        "@"
+                    } else {
+                        "@@"
+                    };
                     self.errors.push(SemanticError::error(
                         SemanticErrorKind::InvalidOperator {
                             op: op_str.to_string(),
@@ -739,10 +794,18 @@ impl<'a> InferState<'a> {
             };
 
             // 2c. Declare the binding in the current (new) scope.
-            env.declare(&binding.name, declared_type.clone(), binding.initializer.span);
+            env.declare(
+                &binding.name,
+                declared_type.clone(),
+                binding.initializer.span,
+            );
 
             // 2d. Store the typed binding.
-            typed_bindings.push(LetBinding::new(&binding.name, binding.type_annotation.clone(), typed_init));
+            typed_bindings.push(LetBinding::new(
+                &binding.name,
+                binding.type_annotation.clone(),
+                typed_init,
+            ));
         }
 
         // 3. Infer the body in the same scope (all bindings are now visible).
@@ -775,7 +838,8 @@ impl<'a> InferState<'a> {
         let value_type = typed_value.anno.clone();
 
         // Resolve target, passing the value's span as a fallback for target errors.
-        let (target_ty, typed_target) = self.infer_assign_target(&assign.target, env, assign.value.span);
+        let (target_ty, typed_target) =
+            self.infer_assign_target(&assign.target, env, assign.value.span);
 
         if !value_type.conforms_to(&target_ty, self.registry) {
             self.errors.push(SemanticError::error(
@@ -788,7 +852,11 @@ impl<'a> InferState<'a> {
         }
 
         let typed_assign = AssignExpr::new(typed_target, typed_value);
-        typed_expr(ExprKind::Assign(typed_assign), value_type, assign.value.span)
+        typed_expr(
+            ExprKind::Assign(typed_assign),
+            value_type,
+            assign.value.span,
+        )
     }
 
     /// Resolves the target of an assignment and returns its type and a typed target.
@@ -840,22 +908,46 @@ impl<'a> InferState<'a> {
             }
             AssignTarget::Member { object, field } => {
                 let typed_obj = self.infer_expr(object, env);
-                if let Some((_owner_type, member_type)) = self.lookup_member(&typed_obj.anno, field) {
+                if let Some((_owner_type, member_type)) = self.lookup_member(&typed_obj.anno, field)
+                {
                     if matches!(member_type, Type::Function { .. }) {
                         self.errors.push(SemanticError::error(
-                            SemanticErrorKind::AssignToMethod { method: field.clone() },
+                            SemanticErrorKind::AssignToMethod {
+                                method: field.clone(),
+                            },
                             object.span,
                         ));
-                        (Type::Error, AssignTarget::Member { object: Box::new(typed_obj), field: field.clone() })
+                        (
+                            Type::Error,
+                            AssignTarget::Member {
+                                object: Box::new(typed_obj),
+                                field: field.clone(),
+                            },
+                        )
                     } else {
-                        (member_type, AssignTarget::Member { object: Box::new(typed_obj), field: field.clone() })
+                        (
+                            member_type,
+                            AssignTarget::Member {
+                                object: Box::new(typed_obj),
+                                field: field.clone(),
+                            },
+                        )
                     }
                 } else {
                     self.errors.push(SemanticError::error(
-                        SemanticErrorKind::UnknownMember { ty: typed_obj.anno.clone(), member: field.clone() },
+                        SemanticErrorKind::UnknownMember {
+                            ty: typed_obj.anno.clone(),
+                            member: field.clone(),
+                        },
                         object.span,
                     ));
-                    (Type::Error, AssignTarget::Member { object: Box::new(typed_obj), field: field.clone() })
+                    (
+                        Type::Error,
+                        AssignTarget::Member {
+                            object: Box::new(typed_obj),
+                            field: field.clone(),
+                        },
+                    )
                 }
             }
             AssignTarget::Index { object, index } => {
@@ -864,7 +956,13 @@ impl<'a> InferState<'a> {
                 if let Type::Vector(inner) = &typed_obj.anno {
                     if matches!(typed_idx.anno, Type::Number) {
                         let elem_type = *inner.clone();
-                        (elem_type, AssignTarget::Index { object: Box::new(typed_obj), index: Box::new(typed_idx) })
+                        (
+                            elem_type,
+                            AssignTarget::Index {
+                                object: Box::new(typed_obj),
+                                index: Box::new(typed_idx),
+                            },
+                        )
                     } else {
                         self.errors.push(SemanticError::error(
                             SemanticErrorKind::TypeMismatch {
@@ -873,14 +971,26 @@ impl<'a> InferState<'a> {
                             },
                             index.span,
                         ));
-                        (Type::Error, AssignTarget::Index { object: Box::new(typed_obj), index: Box::new(typed_idx) })
+                        (
+                            Type::Error,
+                            AssignTarget::Index {
+                                object: Box::new(typed_obj),
+                                index: Box::new(typed_idx),
+                            },
+                        )
                     }
                 } else {
                     self.errors.push(SemanticError::error(
                         SemanticErrorKind::IndexOnNonVector(typed_obj.anno.clone()),
                         object.span,
                     ));
-                    (Type::Error, AssignTarget::Index { object: Box::new(typed_obj), index: Box::new(typed_idx) })
+                    (
+                        Type::Error,
+                        AssignTarget::Index {
+                            object: Box::new(typed_obj),
+                            index: Box::new(typed_idx),
+                        },
+                    )
                 }
             }
         }
@@ -898,7 +1008,15 @@ impl<'a> InferState<'a> {
             last_type = typed.anno.clone();
             typed_exprs.push(typed);
         }
-        typed_expr(ExprKind::Block(BlockExpr::new(typed_exprs)), last_type, block.expressions.first().map(|e| e.span).unwrap_or(SourceSpan::new(0, 0)))
+        typed_expr(
+            ExprKind::Block(BlockExpr::new(typed_exprs)),
+            last_type,
+            block
+                .expressions
+                .first()
+                .map(|e| e.span)
+                .unwrap_or(SourceSpan::new(0, 0)),
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -955,7 +1073,11 @@ impl<'a> InferState<'a> {
         let body = self.infer_expr(&while_expr.body, env);
         let result_type = body.anno.clone();
         let while_typed = WhileExpr::new(cond, body);
-        typed_expr(ExprKind::While(while_typed), result_type, while_expr.condition.span)
+        typed_expr(
+            ExprKind::While(while_typed),
+            result_type,
+            while_expr.condition.span,
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -978,15 +1100,16 @@ impl<'a> InferState<'a> {
         let iterable_type = iterable.anno.clone();
 
         // Determine the element type by looking up the `current()` method.
-        let element_type = if let Some(method_sig) = self.registry.lookup_method(&iterable_type, "current") {
-            method_sig.return_type
-        } else {
-            self.errors.push(SemanticError::error(
-                SemanticErrorKind::NotIterable(iterable_type.clone()),
-                for_expr.iterable.span,
-            ));
-            Type::Error
-        };
+        let element_type =
+            if let Some(method_sig) = self.registry.lookup_method(&iterable_type, "current") {
+                method_sig.return_type
+            } else {
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::NotIterable(iterable_type.clone()),
+                    for_expr.iterable.span,
+                ));
+                Type::Error
+            };
 
         // Push scope, declare loop variable.
         env.push_scope();
@@ -996,7 +1119,11 @@ impl<'a> InferState<'a> {
 
         let result_type = body.anno.clone();
         let for_typed = ForExpr::new(&for_expr.var, iterable, body);
-        typed_expr(ExprKind::For(for_typed), result_type, for_expr.iterable.span)
+        typed_expr(
+            ExprKind::For(for_typed),
+            result_type,
+            for_expr.iterable.span,
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -1011,11 +1138,12 @@ impl<'a> InferState<'a> {
     /// type is `Type::Function`, it is called with the provided arguments.
     /// Reports arity and type mismatches.
     fn infer_call(&mut self, call: &CallExpr, env: &mut Environment) -> TypedExpr {
-
         // ─── Special case: base() call ──────────────────────────────────────
-        
+
         if let ExprKind::BaseRef = &call.callee.kind {
-            if let (Some(owner), Some(method_name)) = (&self.current_type_owner, &self.current_method_name) {
+            if let (Some(owner), Some(method_name)) =
+                (&self.current_type_owner, &self.current_method_name)
+            {
                 if let Some(info) = self.registry.lookup_type(owner) {
                     if let Some(parent) = &info.parent {
                         if let Some(parent_info) = self.registry.lookup_type(&parent.name) {
@@ -1033,9 +1161,16 @@ impl<'a> InferState<'a> {
                                 for arg in &call.args {
                                     typed_args.push(self.infer_expr(arg, env));
                                 }
-                                self.check_call_arity_and_types(&typed_args, &params, call.callee.span);
+                                self.check_call_arity_and_types(
+                                    &typed_args,
+                                    &params,
+                                    call.callee.span,
+                                );
                                 return typed_expr(
-                                    ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
+                                    ExprKind::Call(CallExpr {
+                                        callee: Box::new(typed_callee),
+                                        args: typed_args,
+                                    }),
                                     return_type,
                                     call.callee.span,
                                 );
@@ -1064,7 +1199,7 @@ impl<'a> InferState<'a> {
 
         // ─── Special case: global function call ─────────────────────────────
 
-        // Global functions (like `print`) are not values; they are only callable, and their 
+        // Global functions (like `print`) are not values; they are only callable, and their
         // return type is known from the registry, not from a `Type::Function` annotation.
         if let ExprKind::Variable(name) = &call.callee.kind {
             if let Some(sig) = self.registry.lookup_function(name) {
@@ -1082,7 +1217,10 @@ impl<'a> InferState<'a> {
                 }
                 self.check_call_arity_and_types(&typed_args, &params, call.callee.span);
                 return typed_expr(
-                    ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
+                    ExprKind::Call(CallExpr {
+                        callee: Box::new(typed_callee),
+                        args: typed_args,
+                    }),
                     return_type,
                     call.callee.span,
                 );
@@ -1095,20 +1233,24 @@ impl<'a> InferState<'a> {
 
         // ─── Generic callable: callee has Function type ─────────────────────
 
-        if let Type::Function { params, return_type } = typed_callee.anno.clone() {
+        if let Type::Function {
+            params,
+            return_type,
+        } = typed_callee.anno.clone()
+        {
             let mut typed_args = Vec::new();
             for arg in &call.args {
                 typed_args.push(self.infer_expr(arg, env));
             }
             // Convert params to (String, Type) for arity/type checking.
             let param_names: Vec<String> = (0..params.len()).map(|i| format!("arg{}", i)).collect();
-            let param_types: Vec<(String, Type)> = param_names
-                .into_iter()
-                .zip(params.into_iter())
-                .collect();
+            let param_types: Vec<(String, Type)> = param_names.into_iter().zip(params).collect();
             self.check_call_arity_and_types(&typed_args, &param_types, call.callee.span);
             return typed_expr(
-                ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
+                ExprKind::Call(CallExpr {
+                    callee: Box::new(typed_callee),
+                    args: typed_args,
+                }),
                 *return_type,
                 call.callee.span,
             );
@@ -1117,7 +1259,9 @@ impl<'a> InferState<'a> {
         // ─── Fallback: not callable ─────────────────────────────────────────
 
         self.errors.push(SemanticError::error(
-            SemanticErrorKind::CallOnNonFunction { ty: typed_callee.anno.clone() },
+            SemanticErrorKind::CallOnNonFunction {
+                ty: typed_callee.anno.clone(),
+            },
             call.callee.span,
         ));
         let mut typed_args = Vec::new();
@@ -1125,7 +1269,10 @@ impl<'a> InferState<'a> {
             typed_args.push(self.infer_expr(arg, env));
         }
         typed_expr(
-            ExprKind::Call(CallExpr { callee: Box::new(typed_callee), args: typed_args }),
+            ExprKind::Call(CallExpr {
+                callee: Box::new(typed_callee),
+                args: typed_args,
+            }),
             Type::Error,
             call.callee.span,
         )
@@ -1149,7 +1296,7 @@ impl<'a> InferState<'a> {
             ));
             return;
         }
-        for (_idx, (arg, (param_name, param_type))) in typed_args.iter().zip(params).enumerate() {
+        for (arg, (param_name, param_type)) in typed_args.iter().zip(params) {
             // Add constraint if argument is a variable and param type is concrete.
             if let ExprKind::Variable(var_name) = &arg.kind {
                 if !matches!(param_type, Type::Unknown) {
@@ -1157,7 +1304,9 @@ impl<'a> InferState<'a> {
                 }
             }
             // If param is Unknown and argument is concrete, add constraint.
-            if matches!(param_type, Type::Unknown) && !matches!(arg.anno, Type::Unknown | Type::Error) {
+            if matches!(param_type, Type::Unknown)
+                && !matches!(arg.anno, Type::Unknown | Type::Error)
+            {
                 self.add_constraint_if_parameter(param_name, arg.anno.clone());
             }
             // Conformance check.
@@ -1195,20 +1344,27 @@ impl<'a> InferState<'a> {
                 self.constrain_if_variable(&typed_obj, owner_type);
             }
             let typed_member = MemberExpr::new(typed_obj, &member.member);
-            typed_expr(ExprKind::Member(typed_member), member_type, member.object.span)
+            typed_expr(
+                ExprKind::Member(typed_member),
+                member_type,
+                member.object.span,
+            )
         } else {
             self.errors.push(SemanticError::error(
-                SemanticErrorKind::UnknownMember { ty: obj_type, member: member.member.clone() },
+                SemanticErrorKind::UnknownMember {
+                    ty: obj_type,
+                    member: member.member.clone(),
+                },
                 member.object.span,
             ));
             typed_expr(
-                        ExprKind::Member(MemberExpr {
-                            object: Box::new(typed_obj),
-                            member: member.member.clone(),
-                        }),
-                        Type::Error,
-                        member.object.span,
-                    )
+                ExprKind::Member(MemberExpr {
+                    object: Box::new(typed_obj),
+                    member: member.member.clone(),
+                }),
+                Type::Error,
+                member.object.span,
+            )
         }
     }
 
@@ -1225,7 +1381,12 @@ impl<'a> InferState<'a> {
     /// the resolved `Named` type.
     ///
     /// Errors are reported using the `span` of the `new` expression itself.
-    fn infer_new(&mut self, new_expr: &NewExpr, span: SourceSpan, env: &mut Environment) -> TypedExpr {
+    fn infer_new(
+        &mut self,
+        new_expr: &NewExpr,
+        span: SourceSpan,
+        env: &mut Environment,
+    ) -> TypedExpr {
         let type_name = new_expr.type_name.name.clone();
 
         // Look up the type in the registry; clone needed data before mutating self.
@@ -1296,7 +1457,12 @@ impl<'a> InferState<'a> {
     ///
     /// The `span` parameter is the span of the entire `is` expression, used for
     /// error reporting when the target type is undefined.
-    fn infer_type_test(&mut self, type_test: &TypeTestExpr, span: SourceSpan, env: &mut Environment) -> TypedExpr {
+    fn infer_type_test(
+        &mut self,
+        type_test: &TypeTestExpr,
+        span: SourceSpan,
+        env: &mut Environment,
+    ) -> TypedExpr {
         let type_infered_expr = self.infer_expr(&type_test.expr, env);
         let expr_type = type_infered_expr.anno.clone();
         // Check receiver is Object-rooted (not builtin value).
@@ -1314,19 +1480,28 @@ impl<'a> InferState<'a> {
         }
         // Check type exists.
         let target_name = type_test.type_name.name.clone();
-        if !self.registry.lookup_type(&target_name).is_some() && !self.registry.lookup_protocol(&target_name).is_some() {
+        if self.registry.lookup_type(&target_name).is_none()
+            && self.registry.lookup_protocol(&target_name).is_none()
+        {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::UndefinedType(target_name),
                 span,
             ));
         }
-        typed_expr(ExprKind::TypeTest(TypeTestExpr::new(type_infered_expr, type_test.type_name.clone())), Type::Boolean, type_test.expr.span)
+        typed_expr(
+            ExprKind::TypeTest(TypeTestExpr::new(
+                type_infered_expr,
+                type_test.type_name.clone(),
+            )),
+            Type::Boolean,
+            type_test.expr.span,
+        )
     }
 
     // -------------------------------------------------------------------------
     // Downcast (as)
     // -------------------------------------------------------------------------
-    
+
     /// Infers the type of an `as` downcast expression.
     ///
     /// The receiver expression is inferred first. Like `is`, if the receiver type
@@ -1341,7 +1516,12 @@ impl<'a> InferState<'a> {
     ///
     /// The `span` parameter is the span of the entire `as` expression, used for
     /// error reporting when the target type is undefined.
-    fn infer_downcast(&mut self, downcast: &DowncastExpr, span: SourceSpan, env: &mut Environment) -> TypedExpr {
+    fn infer_downcast(
+        &mut self,
+        downcast: &DowncastExpr,
+        span: SourceSpan,
+        env: &mut Environment,
+    ) -> TypedExpr {
         let type_infered_expr = self.infer_expr(&downcast.expr, env);
         let expr_type = type_infered_expr.anno.clone();
         // Receiver must be Object-rooted.
@@ -1359,20 +1539,34 @@ impl<'a> InferState<'a> {
         }
         let target_name = downcast.type_name.name.clone();
         let target_type = self.resolve_type_ref(&downcast.type_name);
-        if !self.registry.lookup_type(&target_name).is_some() && !self.registry.lookup_protocol(&target_name).is_some() {
+        if self.registry.lookup_type(&target_name).is_none()
+            && self.registry.lookup_protocol(&target_name).is_none()
+        {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::UndefinedType(target_name),
                 span,
             ));
         }
         // Optional warning: unreachable downcast.
-        if !expr_type.conforms_to(&target_type, self.registry) && !target_type.conforms_to(&expr_type, self.registry) {
+        if !expr_type.conforms_to(&target_type, self.registry)
+            && !target_type.conforms_to(&expr_type, self.registry)
+        {
             self.errors.push(SemanticError::warning(
-                SemanticErrorKind::UnreachableDowncast { from: expr_type.clone(), to: target_type.clone() },
+                SemanticErrorKind::UnreachableDowncast {
+                    from: expr_type.clone(),
+                    to: target_type.clone(),
+                },
                 downcast.expr.span,
             ));
         }
-        typed_expr(ExprKind::Downcast(DowncastExpr::new(type_infered_expr, downcast.type_name.clone())), target_type, downcast.expr.span)
+        typed_expr(
+            ExprKind::Downcast(DowncastExpr::new(
+                type_infered_expr,
+                downcast.type_name.clone(),
+            )),
+            target_type,
+            downcast.expr.span,
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -1407,7 +1601,10 @@ impl<'a> InferState<'a> {
                 typed_expr(
                     ExprKind::Vector(VectorExpr::Literal(typed_items)),
                     result_type,
-                    items.first().map(|e| e.span).unwrap_or(SourceSpan::new(0, 0)),
+                    items
+                        .first()
+                        .map(|e| e.span)
+                        .unwrap_or(SourceSpan::new(0, 0)),
                 )
             }
             VectorExpr::Comprehension(comp) => {
@@ -1455,7 +1652,11 @@ impl<'a> InferState<'a> {
         if let Type::Vector(inner) = &obj_type {
             if matches!(idx_type, Type::Number) {
                 let result_type = *inner.clone();
-                typed_expr(ExprKind::Index(IndexExpr::new(typed_obj, typed_idx)), result_type, index.object.span)
+                typed_expr(
+                    ExprKind::Index(IndexExpr::new(typed_obj, typed_idx)),
+                    result_type,
+                    index.object.span,
+                )
             } else {
                 self.errors.push(SemanticError::error(
                     SemanticErrorKind::TypeMismatch {
@@ -1464,14 +1665,22 @@ impl<'a> InferState<'a> {
                     },
                     index.index.span,
                 ));
-                typed_expr(ExprKind::Index(IndexExpr::new(typed_obj, typed_idx)), Type::Error, index.object.span)
+                typed_expr(
+                    ExprKind::Index(IndexExpr::new(typed_obj, typed_idx)),
+                    Type::Error,
+                    index.object.span,
+                )
             }
         } else {
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::IndexOnNonVector(obj_type),
                 index.object.span,
             ));
-            typed_expr(ExprKind::Index(IndexExpr::new(typed_obj, typed_idx)), Type::Error, index.object.span)
+            typed_expr(
+                ExprKind::Index(IndexExpr::new(typed_obj, typed_idx)),
+                Type::Error,
+                index.object.span,
+            )
         }
     }
 
@@ -1517,7 +1726,11 @@ impl<'a> InferState<'a> {
 
         let result_type = lowest_common_ancestor(&case_types, self.registry);
         let match_typed = MatchExpr::new(typed_value, typed_cases);
-        typed_expr(ExprKind::Match(match_typed), result_type, match_expr.value.span)
+        typed_expr(
+            ExprKind::Match(match_typed),
+            result_type,
+            match_expr.value.span,
+        )
     }
 
     /// Checks a pattern against the scrutinee type and produces a typed pattern,
@@ -1604,7 +1817,11 @@ impl<'a> InferState<'a> {
                 if tr.args.is_empty() {
                     Type::Named(tr.name.clone())
                 } else {
-                    let args: Vec<Type> = tr.args.iter().map(|arg| self.resolve_type_ref(arg)).collect();
+                    let args: Vec<Type> = tr
+                        .args
+                        .iter()
+                        .map(|arg| self.resolve_type_ref(arg))
+                        .collect();
                     match tr.name.as_str() {
                         "Vector" if !args.is_empty() => Type::Vector(Box::new(args[0].clone())),
                         "Iterable" if !args.is_empty() => Type::Iterable(Box::new(args[0].clone())),
@@ -1615,7 +1832,7 @@ impl<'a> InferState<'a> {
         }
     }
 
-    /// -----------------------------------------------------------------------------
+    // -----------------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------------
 
@@ -1641,9 +1858,8 @@ impl<'a> InferState<'a> {
                 }
                 // 2. Method lookup -> return Function type.
                 if let Some(method_sig) = self.lookup_method(ty, member_name) {
-                    let param_types: Vec<Type> = method_sig.params.iter()
-                        .map(|(_, t)| t.clone())
-                        .collect();
+                    let param_types: Vec<Type> =
+                        method_sig.params.iter().map(|(_, t)| t.clone()).collect();
                     let return_type = method_sig.return_type.clone();
                     let func_type = Type::Function {
                         params: param_types,
@@ -1656,9 +1872,8 @@ impl<'a> InferState<'a> {
             // For Vector and Iterable, we still need method lookup (no attributes).
             Type::Vector(_) | Type::Iterable(_) => {
                 if let Some(method_sig) = self.lookup_method(ty, member_name) {
-                    let param_types: Vec<Type> = method_sig.params.iter()
-                        .map(|(_, t)| t.clone())
-                        .collect();
+                    let param_types: Vec<Type> =
+                        method_sig.params.iter().map(|(_, t)| t.clone()).collect();
                     let return_type = method_sig.return_type.clone();
                     let func_type = Type::Function {
                         params: param_types,
@@ -1741,16 +1956,36 @@ fn patch_unknowns(
         }
         ExprKind::Binary(binary) => {
             patch_unknowns(&mut binary.left, param_types, current_function, return_type);
-            patch_unknowns(&mut binary.right, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut binary.right,
+                param_types,
+                current_function,
+                return_type,
+            );
         }
         ExprKind::Let(let_expr) => {
             for binding in &mut let_expr.bindings {
-                patch_unknowns(&mut binding.initializer, param_types, current_function, return_type);
+                patch_unknowns(
+                    &mut binding.initializer,
+                    param_types,
+                    current_function,
+                    return_type,
+                );
             }
-            patch_unknowns(&mut let_expr.body, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut let_expr.body,
+                param_types,
+                current_function,
+                return_type,
+            );
         }
         ExprKind::Assign(assign) => {
-            patch_unknowns(&mut assign.value, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut assign.value,
+                param_types,
+                current_function,
+                return_type,
+            );
             // Target contains expressions; patch them.
             match &mut assign.target {
                 AssignTarget::Variable(_) => {}
@@ -1769,21 +2004,61 @@ fn patch_unknowns(
             }
         }
         ExprKind::If(if_expr) => {
-            patch_unknowns(&mut if_expr.condition, param_types, current_function, return_type);
-            patch_unknowns(&mut if_expr.then_branch, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut if_expr.condition,
+                param_types,
+                current_function,
+                return_type,
+            );
+            patch_unknowns(
+                &mut if_expr.then_branch,
+                param_types,
+                current_function,
+                return_type,
+            );
             for elif in &mut if_expr.elif_branches {
-                patch_unknowns(&mut elif.condition, param_types, current_function, return_type);
+                patch_unknowns(
+                    &mut elif.condition,
+                    param_types,
+                    current_function,
+                    return_type,
+                );
                 patch_unknowns(&mut elif.body, param_types, current_function, return_type);
             }
-            patch_unknowns(&mut if_expr.else_branch, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut if_expr.else_branch,
+                param_types,
+                current_function,
+                return_type,
+            );
         }
         ExprKind::While(while_expr) => {
-            patch_unknowns(&mut while_expr.condition, param_types, current_function, return_type);
-            patch_unknowns(&mut while_expr.body, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut while_expr.condition,
+                param_types,
+                current_function,
+                return_type,
+            );
+            patch_unknowns(
+                &mut while_expr.body,
+                param_types,
+                current_function,
+                return_type,
+            );
         }
         ExprKind::For(for_expr) => {
-            patch_unknowns(&mut for_expr.iterable, param_types, current_function, return_type);
-            patch_unknowns(&mut for_expr.body, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut for_expr.iterable,
+                param_types,
+                current_function,
+                return_type,
+            );
+            patch_unknowns(
+                &mut for_expr.body,
+                param_types,
+                current_function,
+                return_type,
+            );
         }
         ExprKind::Call(call) => {
             // We already handled Call in the earlier match; this is a catch‑all for safety.
@@ -1793,7 +2068,12 @@ fn patch_unknowns(
             }
         }
         ExprKind::Member(member) => {
-            patch_unknowns(&mut member.object, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut member.object,
+                param_types,
+                current_function,
+                return_type,
+            );
         }
         ExprKind::New(new_expr) => {
             for arg in &mut new_expr.args {
@@ -1801,10 +2081,20 @@ fn patch_unknowns(
             }
         }
         ExprKind::TypeTest(type_test) => {
-            patch_unknowns(&mut type_test.expr, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut type_test.expr,
+                param_types,
+                current_function,
+                return_type,
+            );
         }
         ExprKind::Downcast(downcast) => {
-            patch_unknowns(&mut downcast.expr, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut downcast.expr,
+                param_types,
+                current_function,
+                return_type,
+            );
         }
         ExprKind::Vector(vector) => match vector {
             VectorExpr::Literal(items) => {
@@ -1814,15 +2104,30 @@ fn patch_unknowns(
             }
             VectorExpr::Comprehension(comp) => {
                 patch_unknowns(&mut comp.expr, param_types, current_function, return_type);
-                patch_unknowns(&mut comp.iterable, param_types, current_function, return_type);
+                patch_unknowns(
+                    &mut comp.iterable,
+                    param_types,
+                    current_function,
+                    return_type,
+                );
             }
         },
         ExprKind::Index(index) => {
-            patch_unknowns(&mut index.object, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut index.object,
+                param_types,
+                current_function,
+                return_type,
+            );
             patch_unknowns(&mut index.index, param_types, current_function, return_type);
         }
         ExprKind::Match(match_expr) => {
-            patch_unknowns(&mut match_expr.value, param_types, current_function, return_type);
+            patch_unknowns(
+                &mut match_expr.value,
+                param_types,
+                current_function,
+                return_type,
+            );
             for case in &mut match_expr.cases {
                 patch_unknowns(&mut case.body, param_types, current_function, return_type);
             }
@@ -1835,12 +2140,12 @@ fn patch_unknowns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hulk_lexer::Lexer;
-    use hulk_parser::parse;
-    use crate::seeded_registry;
+    use crate::analyze;
     use crate::error::Severity;
     use crate::passes::{collect, hierarchy, infer};
-    use crate::analyze;
+    use crate::seeded_registry;
+    use hulk_lexer::Lexer;
+    use hulk_parser::parse;
 
     fn parse_and_infer(src: &str) -> (TypeRegistry, Vec<SemanticError>) {
         let tokens = Lexer::new(src).tokenize().expect("lex ok");
@@ -1848,9 +2153,13 @@ mod tests {
         let mut registry = seeded_registry();
         let mut errors = Vec::new();
         collect::run(&program, &mut registry, &mut errors);
-        if errors.iter().any(|e| e.severity == Severity::Error) { return (registry, errors); }
+        if errors.iter().any(|e| e.severity == Severity::Error) {
+            return (registry, errors);
+        }
         hierarchy::run(&mut registry, &mut errors);
-        if errors.iter().any(|e| e.severity == Severity::Error) { return (registry, errors); }
+        if errors.iter().any(|e| e.severity == Severity::Error) {
+            return (registry, errors);
+        }
         let _ = infer::run(&program, &mut registry, &mut errors);
         (registry, errors)
     }
@@ -1860,14 +2169,20 @@ mod tests {
     fn undefined_variable() {
         let src = "print(x);";
         let (_, errors) = parse_and_infer(src);
-        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::UndefinedVariable(ref name) if name == "x")));
+        assert!(errors.iter().any(
+            |e| matches!(e.kind, SemanticErrorKind::UndefinedVariable(ref name) if name == "x")
+        ));
     }
 
     #[test]
     fn self_ref_inside_method() {
         let src = "type A { f() => self; } print (0);";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "self reference should work: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "self reference should work: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1899,7 +2214,9 @@ mod tests {
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
         assert!(result.is_err());
         let errs = result.err().unwrap();
-        assert!(errs.iter().any(|e| matches!(e.kind, SemanticErrorKind::InvalidOperator { .. })));
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e.kind, SemanticErrorKind::InvalidOperator { .. })));
     }
 
     // ---- Control flow ----
@@ -1916,7 +2233,9 @@ mod tests {
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
         assert!(result.is_err());
         let errs = result.err().unwrap();
-        assert!(errs.iter().any(|e| matches!(e.kind, SemanticErrorKind::NonBooleanCondition(Type::Number))));
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e.kind, SemanticErrorKind::NonBooleanCondition(Type::Number))));
     }
 
     #[test]
@@ -1980,7 +2299,9 @@ mod tests {
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
         assert!(result.is_err());
         let errs = result.err().unwrap();
-        assert!(errs.iter().any(|e| matches!(e.kind, SemanticErrorKind::IndexOnNonVector(Type::Number))));
+        assert!(errs
+            .iter()
+            .any(|e| matches!(e.kind, SemanticErrorKind::IndexOnNonVector(Type::Number))));
     }
 
     // ---- is/as/match ----
@@ -2018,7 +2339,9 @@ mod tests {
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
         assert!(result.is_ok());
         let warnings = result.unwrap().warnings;
-        assert!(warnings.iter().any(|e| matches!(e.kind, SemanticErrorKind::NonExhaustiveMatch)));
+        assert!(warnings
+            .iter()
+            .any(|e| matches!(e.kind, SemanticErrorKind::NonExhaustiveMatch)));
     }
 
     // ---- Recursive unresolvable ----
@@ -2029,7 +2352,9 @@ mod tests {
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
         assert!(result.is_err());
         let errs = result.err().unwrap();
-        assert!(errs.iter().any(|e| matches!(&e.kind, SemanticErrorKind::CannotInferType { symbol } if symbol == "loop")));
+        assert!(errs.iter().any(
+            |e| matches!(&e.kind, SemanticErrorKind::CannotInferType { symbol } if symbol == "loop")
+        ));
     }
 
     // ---- Extended tests ----
@@ -2046,7 +2371,11 @@ mod tests {
             let c = new Counter(5) in print(c.tick());
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "recursive self‑call via self should work: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "recursive self‑call via self should work: {:?}",
+            result.err()
+        );
     }
 
     /// Tests that mutual recursion between two functions without explicit return types
@@ -2060,11 +2389,18 @@ mod tests {
             print(isEven(4));
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_err(), "mutual recursion should fail with CannotInferType");
+        assert!(
+            result.is_err(),
+            "mutual recursion should fail with CannotInferType"
+        );
         let errors = result.err().unwrap();
         // At least one of the functions should have a CannotInferType error.
-        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::CannotInferType { .. })),
-            "expected CannotInferType for mutual recursion");
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::CannotInferType { .. })),
+            "expected CannotInferType for mutual recursion"
+        );
     }
 
     /// Tests that an unannotated function parameter used in two incompatible contexts
@@ -2082,10 +2418,15 @@ mod tests {
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
         assert!(result.is_err(), "expected ambiguity error");
         let errors = result.err().unwrap();
-        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::AmbiguousInference { .. })),
-            "missing AmbiguousInference error; got errors: {:?}", errors);
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::AmbiguousInference { .. })),
+            "missing AmbiguousInference error; got errors: {:?}",
+            errors
+        );
     }
-    
+
     /// Tests that `patch_unknowns` correctly handles deep member‑access chains.
     /// A method that returns `self` and is called multiple times creates nested `Member`
     /// expressions; all of them must be patched without panicking or leaving `Unknown`.
@@ -2099,7 +2440,11 @@ mod tests {
             let x = new A().f().f().g() in print(x);
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "deep member chain should type‑check: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "deep member chain should type‑check: {:?}",
+            result.err()
+        );
     }
 
     /// Tests that vector literals containing instances of a type whose constructor
@@ -2118,7 +2463,11 @@ mod tests {
         if let Err(errs) = &result {
             println!("Errors: {:#?}", errs);
         }
-        assert!(result.is_ok(), "vector of unresolved constructor types should work: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "vector of unresolved constructor types should work: {:?}",
+            result.err()
+        );
 
         // Verify that the vector's element type is `Named("Person")`.
         let typed_program = result.unwrap().typed_program;
@@ -2134,7 +2483,10 @@ mod tests {
                         if let Type::Vector(inner) = &binding.initializer.anno {
                             assert_eq!(**inner, Type::Named("Person".to_string()));
                         } else {
-                            panic!("vector type should be Vector, got {:?}", binding.initializer.anno);
+                            panic!(
+                                "vector type should be Vector, got {:?}",
+                                binding.initializer.anno
+                            );
                         }
                     }
                     _ => panic!("expected vector literal"),
@@ -2188,7 +2540,10 @@ mod tests {
             let it: Iterable<Number> = new T() in print(it.current());
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "it.current() should resolve with correct return type");
+        assert!(
+            result.is_ok(),
+            "it.current() should resolve with correct return type"
+        );
     }
 
     #[test]
@@ -2216,7 +2571,10 @@ mod tests {
             }
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "for loop over user-defined iterable should work");
+        assert!(
+            result.is_ok(),
+            "for loop over user-defined iterable should work"
+        );
     }
 
     #[test]
@@ -2235,7 +2593,9 @@ mod tests {
         assert!(result.is_err(), "calling unknown method should fail");
         let errors = result.err().unwrap();
         assert!(
-            errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::UnknownMember { .. })),
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::UnknownMember { .. })),
             "expected UnknownMember error"
         );
     }
@@ -2247,10 +2607,15 @@ mod tests {
             let x = new A() in print(x.current());
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_err(), "calling current() on non-iterable should fail");
+        assert!(
+            result.is_err(),
+            "calling current() on non-iterable should fail"
+        );
         let errors = result.err().unwrap();
         assert!(
-            errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::UnknownMember { .. })),
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::UnknownMember { .. })),
             "expected UnknownMember error"
         );
     }
@@ -2265,7 +2630,9 @@ mod tests {
         assert!(result.is_err(), "for loop on non-iterable should fail");
         let errors = result.err().unwrap();
         assert!(
-            errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::NotIterable(_))),
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::NotIterable(_))),
             "expected NotIterable error"
         );
     }
@@ -2281,7 +2648,10 @@ mod tests {
             }
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "loop variable should be Number and usable in arithmetic");
+        assert!(
+            result.is_ok(),
+            "loop variable should be Number and usable in arithmetic"
+        );
     }
 
     // ─── Function type / method reference tests ────────────────────────────
@@ -2300,7 +2670,11 @@ mod tests {
             }
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "method reference should work: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "method reference should work: {:?}",
+            result.err()
+        );
     }
 
     /// Tests that a method reference can be called with arguments.
@@ -2316,7 +2690,11 @@ mod tests {
             }
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "method reference with args should work: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "method reference with args should work: {:?}",
+            result.err()
+        );
     }
 
     /// Tests that assigning to a method is rejected.
@@ -2336,8 +2714,11 @@ mod tests {
         assert!(result.is_err(), "assignment to method should fail");
         let errors = result.err().unwrap();
         assert!(
-            errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::AssignToMethod { .. })),
-            "expected AssignToMethod error; got: {:?}", errors
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::AssignToMethod { .. })),
+            "expected AssignToMethod error; got: {:?}",
+            errors
         );
     }
 
@@ -2352,8 +2733,11 @@ mod tests {
         assert!(result.is_err(), "calling a non‑function should fail");
         let errors = result.err().unwrap();
         assert!(
-            errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::CallOnNonFunction { .. })),
-            "expected CallOnNonFunction error; got: {:?}", errors
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::CallOnNonFunction { .. })),
+            "expected CallOnNonFunction error; got: {:?}",
+            errors
         );
     }
 
@@ -2372,6 +2756,10 @@ mod tests {
             }
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
-        assert!(result.is_ok(), "method reference with function type annotation should work: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "method reference with function type annotation should work: {:?}",
+            result.err()
+        );
     }
 }

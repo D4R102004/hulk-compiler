@@ -7,13 +7,11 @@
 //! The goal is to make every name visible before any body is checked,
 //! solving the forward-reference problem (§A.3.1) structurally.
 
-use std::collections::HashSet;
 use indexmap::IndexMap;
+use std::collections::HashSet;
 
-use hulk_ast::{ DeclarationKind, FunctionDecl, ProtocolDecl,
-                TypeDecl, TypeMemberKind, TypeRef,
-            };
 use hulk_ast::SourceSpan;
+use hulk_ast::{DeclarationKind, FunctionDecl, ProtocolDecl, TypeDecl, TypeMemberKind, TypeRef};
 
 use crate::error::{SemanticError, SemanticErrorKind};
 use crate::types::registry::{
@@ -47,10 +45,19 @@ pub fn run(
     registry: &mut TypeRegistry,
     errors: &mut Vec<SemanticError>,
 ) {
+    // Tracks type names declared by the user in this pass.
+    // WHY: seeded_registry() pre-populates non-value types (Vector, Range)
+    // that the user may legitimately shadow. We must distinguish those from
+    // real duplicate declarations. Pattern from Crafting Interpreters §11:
+    // user declarations simply overwrite the environment — no flags needed.
+    let mut user_declared_types: HashSet<String> = HashSet::new();
+
     for decl in &program.declarations {
         match &decl.kind {
             DeclarationKind::Function(f) => collect_function(f, decl.span, registry, errors),
-            DeclarationKind::Type(t) => collect_type(t, decl.span, registry, errors),
+            DeclarationKind::Type(t) => {
+                collect_type(t, decl.span, registry, errors, &mut user_declared_types)
+            }
             DeclarationKind::Protocol(p) => collect_protocol(p, decl.span, registry, errors),
         }
     }
@@ -84,7 +91,7 @@ fn collect_function(
             let ty = p
                 .type_annotation
                 .as_ref()
-                .map(|tr| resolve_type_ref(tr))
+                .map(resolve_type_ref)
                 .unwrap_or(Type::Unknown);
             (p.name.clone(), ty)
         })
@@ -96,7 +103,7 @@ fn collect_function(
     let return_type = func
         .return_type
         .as_ref()
-        .map(|tr| resolve_type_ref(tr))
+        .map(resolve_type_ref)
         .unwrap_or(Type::Unknown);
 
     let sig = FunctionSignature {
@@ -118,15 +125,34 @@ fn collect_type(
     decl_span: SourceSpan,
     registry: &mut TypeRegistry,
     errors: &mut Vec<SemanticError>,
+    user_declared_types: &mut HashSet<String>,
 ) {
     // Duplicate check: type namespace (shared with protocols, per §A.10.2).
-    if registry.types.contains_key(&ty_decl.name) || registry.protocols.contains_key(&ty_decl.name) {
+    if registry.types.contains_key(&ty_decl.name) {
+        let existing = registry.types.get(&ty_decl.name).unwrap();
+        let is_protected = existing.is_builtin_value || user_declared_types.contains(&ty_decl.name);
+        // WHY: mirrors Crafting Interpreters §11 — user declarations overwrite
+        // the environment. Seeded non-value types (Vector, Range, Object) can
+        // be shadowed. Protected value types (Number, String, Boolean) and
+        // previously user-declared types may never be redeclared (§A.7.3).
+        if is_protected {
+            errors.push(SemanticError::error(
+                SemanticErrorKind::DuplicateType(ty_decl.name.clone()),
+                decl_span,
+            ));
+            return;
+        }
+        // Shadow the seeded type: remove it so the user type replaces it.
+        registry.types.shift_remove(&ty_decl.name);
+    }
+    if registry.protocols.contains_key(&ty_decl.name) {
         errors.push(SemanticError::error(
             SemanticErrorKind::DuplicateType(ty_decl.name.clone()),
             decl_span,
         ));
         return;
     }
+    // Register this name as user-declared before inserting into registry.
 
     // Constructor parameters.
     let params: Vec<(String, Type)> = ty_decl
@@ -136,7 +162,7 @@ fn collect_type(
             let ty = p
                 .type_annotation
                 .as_ref()
-                .map(|tr| resolve_type_ref(tr))
+                .map(resolve_type_ref)
                 .unwrap_or(Type::Unknown);
             (p.name.clone(), ty)
         })
@@ -167,7 +193,7 @@ fn collect_type(
                     ));
                     continue; // skip duplicate to avoid further errors
                 }
-                let declared_type = attr.type_annotation.as_ref().map(|tr| resolve_type_ref(tr));
+                let declared_type = attr.type_annotation.as_ref().map(resolve_type_ref);
                 let info = AttributeInfo {
                     declared_type,
                     span: member.span,
@@ -194,7 +220,7 @@ fn collect_type(
                         let ty = p
                             .type_annotation
                             .as_ref()
-                            .map(|tr| resolve_type_ref(tr))
+                            .map(resolve_type_ref)
                             .unwrap_or(Type::Unknown);
                         (p.name.clone(), ty)
                     })
@@ -204,7 +230,7 @@ fn collect_type(
                 let return_type = method
                     .return_type
                     .as_ref()
-                    .map(|tr| resolve_type_ref(tr))
+                    .map(resolve_type_ref)
                     .unwrap_or(Type::Unknown);
 
                 let sig = MethodSignature {
@@ -226,10 +252,11 @@ fn collect_type(
         attributes,
         methods,
         flattened_methods: IndexMap::new(), // filled in Pass 1
-        is_builtin_value: false,           // user types are never builtin value types
+        is_builtin_value: false,            // user types are never builtin value types
         span: decl_span,
     };
 
+    user_declared_types.insert(ty_decl.name.clone());
     registry.types.insert(ty_decl.name.clone(), info);
 }
 
@@ -248,7 +275,9 @@ fn collect_protocol(
     errors: &mut Vec<SemanticError>,
 ) {
     // Duplicate check: protocols share the type namespace with classes.
-    if registry.protocols.contains_key(&protocol.name) || registry.types.contains_key(&protocol.name) {
+    if registry.protocols.contains_key(&protocol.name)
+        || registry.types.contains_key(&protocol.name)
+    {
         errors.push(SemanticError::error(
             SemanticErrorKind::DuplicateType(protocol.name.clone()),
             decl_span,
@@ -281,7 +310,7 @@ fn collect_protocol(
                 let ty = p
                     .type_annotation
                     .as_ref()
-                    .map(|tr| resolve_type_ref(tr))
+                    .map(resolve_type_ref)
                     .unwrap_or(Type::Unknown);
                 (p.name.clone(), ty)
             })
@@ -344,7 +373,7 @@ fn resolve_type_ref(tr: &TypeRef) -> Type {
                 Type::Named(tr.name.clone())
             } else {
                 // Recursively resolve arguments.
-                let args: Vec<Type> = tr.args.iter().map(|arg| resolve_type_ref(arg)).collect();
+                let args: Vec<Type> = tr.args.iter().map(resolve_type_ref).collect();
                 // Handle built‑in parametric types: `Vector<T>` and `Iterable<T>`.
                 // The parser already rewrote `T[]` → `Vector<T>` and `T*` → `Iterable<T>`.
                 match tr.name.as_str() {
@@ -382,15 +411,15 @@ fn check_duplicate_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::passes::utils::assert_error_kind;
+    use crate::seeded_registry;
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
-    use crate::seeded_registry;
-    use crate::passes::utils::assert_error_kind;
 
     fn parse_and_collect(src: &str) -> (TypeRegistry, Vec<SemanticError>) {
         let tokens = Lexer::new(src).tokenize().expect("lex ok");
         let program = parse(tokens).expect("parse ok");
-        println!("{:#?}", program);  // Print the AST
+        println!("{:#?}", program); // Print the AST
         let mut registry = seeded_registry();
         let mut errors = Vec::new();
         run(&program, &mut registry, &mut errors);
@@ -405,7 +434,10 @@ mod tests {
             print(0);
         ";
         let (_, errors) = parse_and_collect(src);
-        assert_error_kind(&errors, SemanticErrorKind::DuplicateFunction("f".to_string()));
+        assert_error_kind(
+            &errors,
+            SemanticErrorKind::DuplicateFunction("f".to_string()),
+        );
     }
 
     #[test]
@@ -429,8 +461,12 @@ mod tests {
             print(0);
         ";
         let (_, errors) = parse_and_collect(src);
-        assert_error_kind(&errors,
-            SemanticErrorKind::DuplicateAttribute { ty: "A".to_string(), attribute: "x".to_string() }
+        assert_error_kind(
+            &errors,
+            SemanticErrorKind::DuplicateAttribute {
+                ty: "A".to_string(),
+                attribute: "x".to_string(),
+            },
         );
     }
 
@@ -444,8 +480,12 @@ mod tests {
             print(0);
         ";
         let (_, errors) = parse_and_collect(src);
-        assert_error_kind(&errors,
-            SemanticErrorKind::DuplicateMethod { ty: "A".to_string(), method: "f".to_string() }
+        assert_error_kind(
+            &errors,
+            SemanticErrorKind::DuplicateMethod {
+                ty: "A".to_string(),
+                method: "f".to_string(),
+            },
         );
     }
 
@@ -456,7 +496,10 @@ mod tests {
             print(0);
         ";
         let (_, errors) = parse_and_collect(src);
-        assert_error_kind(&errors, SemanticErrorKind::DuplicateParameter("x".to_string()));
+        assert_error_kind(
+            &errors,
+            SemanticErrorKind::DuplicateParameter("x".to_string()),
+        );
     }
 
     // ---- Extended tests ----
