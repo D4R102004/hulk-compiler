@@ -321,7 +321,12 @@ fn lower_function_value<'ctx>(
         .map(|ty| llvm_type(ctx.codegen, ty).map(|t| t.into()))
         .collect::<Result<Vec<_>, _>>()?;
     let llvm_return = llvm_type(ctx.codegen, return_type)?;
-    let fn_type = llvm_return.fn_type(&llvm_param_types, false);
+
+    // Method function pointers expect `self` as the first parameter.
+    let self_ptr_type = ctx.codegen.context.ptr_type(Default::default());
+    let mut all_param_types = vec![self_ptr_type.into()];
+    all_param_types.extend(llvm_param_types);
+    let fn_type = llvm_return.fn_type(&all_param_types, false);
 
     // Cast fn_ptr to the correct function pointer type.
     let fn_ptr_typed = ctx

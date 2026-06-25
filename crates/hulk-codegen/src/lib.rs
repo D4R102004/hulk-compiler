@@ -81,12 +81,8 @@ pub fn compile(
     let context = inkwell::context::Context::create();
     let mut codegen = context::CodegenCtx::new(&context, "hulk_main")?;
 
-    // Declare runtime functions (needed for strings, concat, etc.)
-    let _alloc = runtime_decls::declare_alloc(&codegen);
-    let _concat = runtime_decls::declare_string_concat(&codegen);
-    let _concat_space = runtime_decls::declare_string_concat_space(&codegen);
-    let _num_to_str = runtime_decls::declare_number_to_string(&codegen);
-    let _bool_to_str = runtime_decls::declare_bool_to_string(&codegen);
+    // Declare runtime functions
+    runtime_decls::declare_all(&mut codegen);
 
     // Create main function that returns i32.
     let i32_type = context.i32_type();
@@ -186,26 +182,6 @@ mod tests {
         let mut header = [0u8; 4];
         file.read_exact(&mut header).unwrap();
         header == [0x7f, b'E', b'L', b'F']
-    }
-
-    /// Tries to compile a source string and expects a specific `CodegenError` kind.
-    /// For Phase 3, we only check that unsupported constructs cause an error.
-    fn expect_codegen_error(src: &str, expected_msg: &str) {
-        let tokens = Lexer::new(src).tokenize().expect("lex failed");
-        let program = parse(tokens).expect("parse failed");
-        let verified = analyze(&program).expect("semantic analysis should succeed");
-        let temp_dir = tempdir().expect("create temp dir");
-        let output_path = temp_dir.path().join("output");
-        let opts = CodegenOptions::with_output_path(output_path);
-        let result = compile(&verified, &opts);
-        let err = result.expect_err("expected codegen error");
-        let err_str = err.to_string();
-        assert!(
-            err_str.contains(expected_msg),
-            "expected error message containing '{}', got: {}",
-            expected_msg,
-            err_str
-        );
     }
 
     // ─── Positive tests ──────────────────────────────────────────────────────
@@ -343,19 +319,22 @@ mod tests {
         assert!(result.is_err(), "expected semantic error");
     }
 
-    // ─── Codegen unsupported constructs (Phase 3) ──────────────────────────
+        // ─── Codegen unsupported constructs ────────────────────────────────────
 
-    #[test]
-    fn test_unsupported_member_access() {
-        let src = "
-            type A {
-                f(): Number => 0;
-            }
-            let x = new A() in x.f;
-        ";
-        // Member access is not supported in Phase 3.
-        expect_codegen_error(src, "object construction not yet supported");
-    }
+        #[test]
+        fn test_unsupported_vector() {
+            let src = "let v = [1,2,3] in v;";
+            let tokens = Lexer::new(src).tokenize().unwrap();
+            let program = parse(tokens).unwrap();
+            let verified = analyze(&program).expect("semantic analysis should succeed");
+            let temp_dir = tempdir().expect("create temp dir");
+            let output_path = temp_dir.path().join("output");
+            let opts = CodegenOptions::with_output_path(output_path);
+            let result = compile(&verified, &opts);
+            assert!(result.is_err(), "expected codegen error for vector");
+            let err = result.unwrap_err();
+            assert!(err.to_string().contains("vectors not yet supported"));
+        }
 
     // ─── Additional check: object file is valid ELF ─────────────────────────
 
@@ -374,5 +353,115 @@ mod tests {
         let ctx = build_smoke_module(&context).expect("smoke module should build and verify");
         assert!(ctx.module.get_function("main").is_some());
         assert!(ctx.module.get_function("hulk_rt_noop").is_some());
+    }
+
+    // ─── Object‑oriented features (classes, methods, inheritance) ────────
+
+    #[test]
+    fn test_class_with_method() {
+        let src = "
+            type A {
+                f(): Number => 42;
+            }
+            let a = new A() in a.f();
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
+    }
+
+    #[test]
+    fn test_class_with_attribute_via_method() {
+        let src = "
+            type A {
+                x = 10;
+                getX(): Number => self.x;
+            }
+            let a = new A() in a.getX();
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
+    }
+
+    #[test]
+    fn test_inheritance_method_override() {
+        let src = "
+            type A {
+                f(): Number => 1;
+            }
+            type B inherits A {
+                f(): Number => 2;
+            }
+            let b = new B() in b.f();
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
+    }
+
+    #[test]
+    fn test_base_call() {
+        let src = "
+            type A {
+                f(): Number => 1;
+            }
+            type B inherits A {
+                f(): Number => base();
+            }
+            let b = new B() in b.f();
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
+    }
+
+    #[test]
+    fn test_type_test() {
+        let src = "
+            type A { }
+            type B inherits A { }
+            let b = new B() in b is A;
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
+    }
+
+    #[test]
+    fn test_downcast() {
+        let src = "
+            type A { }
+            type B inherits A { }
+            let x: A = new B() in x as B;
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
+    }
+
+    #[test]
+    fn test_bare_method_reference() {
+        let src = "
+            type A {
+                f(): Number => 42;
+            }
+            let a = new A() in
+            let g = a.f in
+            g();
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
+    }
+
+    #[test]
+    fn test_assign_member() {
+        let src = "
+            type A {
+                x = 0;
+                setX(v: Number) => self.x := v;
+                getX(): Number => self.x;
+            }
+            let a = new A() in {
+                a.setX(42);
+                a.getX();
+            }
+        ";
+        let (_tmp_dir, obj) = compile_source_to_obj(src);
+        assert!(is_elf(&obj));
     }
 }

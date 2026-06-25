@@ -215,6 +215,10 @@ pub fn lower_expr<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{layout, lower, runtime_decls};
+    use hulk_lexer::Lexer;
+    use hulk_parser::parse;
+    use hulk_semantic::analyze;
     use hulk_ast::{
         AssignExpr, AssignTarget, BinaryExpr, BinaryOp, BlockExpr, ElifBranch, Expr, ExprKind,
         IfExpr, LetBinding, LetExpr, Literal, SourceSpan, UnaryExpr, UnaryOp, WhileExpr,
@@ -368,15 +372,6 @@ mod tests {
         }
     }
 
-    /// Helper: create a typed self reference.
-    fn self_ref(ty: Type) -> Expr<Type> {
-        Expr {
-            kind: ExprKind::SelfRef,
-            anno: ty,
-            span: dummy_span(),
-        }
-    }
-
     /// Helper: create a typed call.
     fn call(callee: Expr<Type>, args: Vec<Expr<Type>>, ty: Type) -> Expr<Type> {
         Expr {
@@ -416,6 +411,66 @@ mod tests {
             .builder
             .build_return(Some(&i32_type.const_int(0, false)))
             .expect("return failed");
+        codegen.module.verify().expect("module verification failed");
+        codegen.module.print_to_string().to_string()
+    }
+
+    /// Lower a HULK source string to LLVM IR.
+    ///
+    /// This runs lexing, parsing, semantic analysis, and then code generation
+    /// up to IR emission (without object emission or linking).
+    fn lower_source_to_ir(src: &str) -> String {
+        // 1. Lex and parse.
+        let tokens = Lexer::new(src).tokenize().expect("lex failed");
+        let program = parse(tokens).expect("parse failed");
+
+        // 2. Semantic analysis.
+        let verified = analyze(&program).expect("semantic analysis failed");
+
+        // 3. Set up LLVM context and module.
+        let context = Context::create();
+        let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
+
+        // 4. Create main function (entry point).
+        let i32_type = context.i32_type();
+        let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
+        let entry_bb = context.append_basic_block(main_fn, "entry");
+        codegen.builder.position_at_end(entry_bb);
+
+        // 5. Build layouts for user‑defined types.
+        layout::build_layouts(&verified.registry, &mut codegen).expect("build layouts");
+
+        // 6. Declare free functions and methods.
+        lower::decl::declare_functions(&mut codegen, &verified.typed_program, &verified.registry)
+            .expect("declare functions");
+        lower::method::declare_methods(&mut codegen, &verified.typed_program, &verified.registry)
+            .expect("declare methods");
+
+        // 7. Build vtables.
+        layout::build_vtables(&mut codegen, &verified.registry).expect("build vtables");
+
+        // 8. Define free functions and methods.
+        lower::decl::define_functions(&mut codegen, &verified.typed_program, &verified.registry)
+            .expect("define functions");
+        lower::method::define_methods(&mut codegen, &verified.typed_program, &verified.registry)
+            .expect("define methods");
+
+        // 9. Reset builder to main entry.
+        codegen.builder.position_at_end(entry_bb);
+
+        // 10. Declare runtime functions needed for the lowered code.
+        runtime_decls::declare_all(&mut codegen);
+
+        // 11. Lower the entry expression.
+        let mut lower_ctx = lower::LowerCtx::new(&mut codegen, &verified.registry, &verified.typed_program);
+        let _val = lower::lower_expr(&mut lower_ctx, &verified.typed_program.entry)
+            .expect("lowering failed");
+
+        // 12. Return 0 from main.
+        codegen.builder.build_return(Some(&i32_type.const_int(0, false)))
+            .expect("return failed");
+
+        // 13. Verify and print the module.
         codegen.module.verify().expect("module verification failed");
         codegen.module.print_to_string().to_string()
     }
@@ -647,22 +702,10 @@ mod tests {
     // ─── Unsupported constructs ──────────────────────────────────────────
 
     #[test]
-    fn test_unsupported_self_ref() {
-        let expr = self_ref(Type::Object);
-        let result = std::panic::catch_unwind(|| {
-            let _ir = lower_expr_to_ir(expr);
-        });
-        assert!(result.is_err(), "SelfRef should panic or return Unsupported");
-    }
-
-    #[test]
-    fn test_unsupported_call() {
-        let callee = var("print", Type::Object);
-        let call_expr = call(callee, vec![num(42.0)], Type::Object);
-        let result = std::panic::catch_unwind(|| {
-            let _ir = lower_expr_to_ir(call_expr);
-        });
-        assert!(result.is_err(), "Call should be unsupported in Phase 3");
+    fn test_unsupported_vector() {
+        let src = "let v = [1,2,3] in v;";
+        let result = std::panic::catch_unwind(|| lower_source_to_ir(src));
+        assert!(result.is_err(), "vectors should be unsupported");
     }
 
     // ─── Edge cases ──────────────────────────────────────────────────────
@@ -783,5 +826,145 @@ mod tests {
 
         // Check that the call instruction appears with arguments.
         assert_ir_contains(&ir, "call double @add(double 2.000000e+00, double 3.000000e+00)");
+    }
+
+    // ─── Object-oriented features ─────────────────────────────────────────
+
+    #[test]
+    fn test_new_object() {
+        let src = "
+            type A { }
+            let x = new A() in x;
+        ";
+        let ir = lower_source_to_ir(src);
+        assert_ir_contains(&ir, "call ptr @hulk_rt_alloc(i64");
+        assert_ir_contains(&ir, "store ptr @A__vtable, ptr");
+    }
+
+    #[test]
+    fn test_attribute_read() {
+        let src = "
+            type A {
+                x = 42;
+                getX(): Number => self.x;
+            }
+            let a = new A() in a.getX();
+        ";
+        let ir = lower_source_to_ir(src);
+        assert_ir_contains(&ir, "load double, ptr");
+    }
+
+    #[test]
+    fn test_method_call() {
+        let src = "
+            type A {
+                f(): Number => 42;
+            }
+            let a = new A() in a.f();
+        ";
+        let ir = lower_source_to_ir(src);
+        assert_ir_contains(&ir, "load ptr, ptr");  // load vtable
+        assert_ir_contains(&ir, "load ptr, ptr");  // load function pointer
+        // Check that the IR contains an indirect call with the correct return type.
+        assert_ir_contains(&ir, "call double");
+        // Also ensure the vtable is loaded.
+        assert_ir_contains(&ir, "load ptr");
+    }
+
+    #[test]
+    fn test_inheritance_method_call() {
+        let src = "
+            type A {
+                f(): Number => 1;
+            }
+            type B inherits A {
+                f(): Number => 2;
+            }
+            let x: A = new B() in x.f();
+        ";
+        let ir = lower_source_to_ir(src);
+        // Should call B::f (vtable dispatch)
+        assert_ir_contains(&ir, "B::f");
+    }
+
+    #[test]
+    fn test_base_call() {
+        let src = "
+            type A {
+                f(): Number => 1;
+            }
+            type B inherits A {
+                f(): Number => base();
+            }
+            let b = new B() in b.f();
+        ";
+        let ir = lower_source_to_ir(src);
+        // Should call A::f directly (not via vtable)
+        assert!(ir.contains("call double"));
+        assert!(ir.contains("A::f"));
+    }
+
+    #[test]
+    fn test_bare_method_reference() {
+        let src = "
+            type A {
+                f(): Number => 42;
+            }
+            let a = new A() in
+            let g = a.f in
+            g();
+        ";
+        let ir = lower_source_to_ir(src);
+        // Should produce fat pointer and indirect call
+        assert_ir_contains(&ir, "store ptr");
+        assert_ir_contains(&ir, "store ptr");
+        assert_ir_contains(&ir, "call");
+        assert_ir_contains(&ir, "%a");
+    }
+
+    #[test]
+    fn test_assign_member() {
+        let src = "
+            type A {
+                x = 0;
+                setX(v: Number) => self.x := v;
+                getX(): Number => self.x;
+            }
+            let a = new A() in {
+                a.setX(42);
+                a.getX();
+            }
+        ";
+        let ir = lower_source_to_ir(src);
+        assert_ir_contains(&ir, "store double");
+        assert!(ir.contains("4.200000e+01") || ir.contains("4.2") || ir.contains("42.0"));
+        assert_ir_contains(&ir, "load double, ptr");
+    }
+
+    #[test]
+    fn test_typetest() {
+        let src = "
+            type A { }
+            type B inherits A { }
+            let x = new B() in x is A;
+        ";
+        let ir = lower_source_to_ir(src);
+        assert_ir_contains(&ir, "call i1 @hulk_rt_downcast_check");
+    }
+
+    #[test]
+    fn test_downcast() {
+        let src = "
+            type A { }
+            type B inherits A { }
+            let x: A = new B() in x as B;
+        ";
+        let ir = lower_source_to_ir(src);
+        // Should contain downcast check and branch
+        assert_ir_contains(&ir, "call i1 @hulk_rt_downcast_check");
+        assert_ir_contains(&ir, "br i1");
+        assert_ir_contains(&ir, "downcast_ok:");
+        assert_ir_contains(&ir, "downcast_trap:");
+        assert_ir_contains(&ir, "call void @hulk_rt_downcast_fail");
     }
 }
