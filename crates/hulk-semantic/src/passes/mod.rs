@@ -12,6 +12,7 @@ mod hierarchy;
 mod infer;
 mod resolve_constructor_params;
 mod utils;
+mod infer_utils;
 
 pub use check::run as check;
 pub use collect::run as collect;
