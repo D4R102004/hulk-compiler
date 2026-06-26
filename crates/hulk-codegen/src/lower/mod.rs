@@ -38,8 +38,8 @@ pub mod method;
 pub mod new;
 pub mod member;
 pub mod type_ops;
-pub mod vector;
-pub mod object;
+// pub mod vector;
+// pub mod object;
 
 // ─── Lowering context ────────────────────────────────────────────────────
 

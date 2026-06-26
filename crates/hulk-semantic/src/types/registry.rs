@@ -38,6 +38,7 @@ pub struct TypeRegistry {
 /// Information about a user‑defined `type` declaration.
 #[derive(Debug, Clone)]
 pub struct TypeInfo {
+    /// The name of the type (as declared in source).
     pub name: String,
     /// Constructor parameters (type arguments) of the type.
     pub params: Vec<(String, Type)>,
@@ -52,6 +53,7 @@ pub struct TypeInfo {
     /// Flag to mark builtin value types (`Number`, `String`, `Boolean`)
     /// so that inheritance from them can be rejected.
     pub is_builtin_value: bool,
+    /// The source span of the `type` declaration.
     pub span: SourceSpan,
 }
 

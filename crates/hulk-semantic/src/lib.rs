@@ -21,7 +21,8 @@ use crate::error::Severity;
 pub use environment::{Binding, Environment};
 pub use error::{SemanticError, SemanticErrorKind};
 pub use typed::{TypedExpr, TypedProgram};
-pub use types::{seeded_registry, Type, TypeRegistry};
+pub use types::{seeded_registry, Type, TypeInfo, TypeRegistry};
+pub use passes::topological_order;
 
 // -----------------------------------------------------------------------------
 // Main structure
