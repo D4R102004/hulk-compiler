@@ -6,7 +6,7 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::targets::TargetMachine;
-use inkwell::values::FunctionValue;
+use inkwell::values::{FunctionValue, GlobalValue};
 
 use crate::error::CodegenError;
 use crate::layout::TypeLayout;
@@ -32,6 +32,8 @@ pub struct CodegenCtx<'ctx> {
     /// `write_object_file` call always agree on exactly the same data layout — there's 
     /// only ever one `TargetMachine` per compilation.
     pub target_machine: TargetMachine,
+    /// Itable globals: (type_name, protocol_name) -> GlobalValue
+    pub itables: HashMap<(String, String), GlobalValue<'ctx>>,
 }
 
 impl<'ctx> CodegenCtx<'ctx> {
@@ -50,6 +52,7 @@ impl<'ctx> CodegenCtx<'ctx> {
             string_literal_count: 0,
             type_layouts: HashMap::new(),
             target_machine,
+            itables: HashMap::new(),
         })
     }
 

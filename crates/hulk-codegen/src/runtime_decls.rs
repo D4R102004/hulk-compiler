@@ -59,6 +59,66 @@ pub fn declare_downcast_fail<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx
     ctx.module.add_function("hulk_rt_downcast_fail", fn_type, None)
 }
 
+// ─── Vector builtin methods ───────────────────────────────────────────────
+
+/// Declares `hulk_rt_vector_size(vec: ptr) -> i64`.
+pub fn declare_vector_size<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let i64_type = ctx.context.i64_type();
+    let fn_type = i64_type.fn_type(&[ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_vector_size", fn_type, None)
+}
+
+/// Declares `hulk_rt_vector_get(vec: ptr, index: i64) -> ptr`.
+pub fn declare_vector_get<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let i64_type = ctx.context.i64_type();
+    let fn_type = ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+    ctx.module.add_function("hulk_rt_vector_get", fn_type, None)
+}
+
+/// Declares `hulk_rt_vector_set(vec: ptr, index: i64, value: ptr) -> void`.
+pub fn declare_vector_set<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let i64_type = ctx.context.i64_type();
+    let void_type = ctx.context.void_type();
+    let fn_type = void_type.fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_vector_set", fn_type, None)
+}
+
+/// Declares `hulk_rt_vector_next(vec: ptr) -> i1`.
+pub fn declare_vector_next<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let bool_type = ctx.context.bool_type();
+    let fn_type = bool_type.fn_type(&[ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_vector_next", fn_type, None)
+}
+
+/// Declares `hulk_rt_vector_current(vec: ptr) -> ptr`.
+pub fn declare_vector_current<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let fn_type = ptr_type.fn_type(&[ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_vector_current", fn_type, None)
+}
+
+// ─── Range builtin methods ────────────────────────────────────────────────
+
+/// Declares `hulk_rt_range_next(rng: ptr) -> i1`.
+pub fn declare_range_next<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let bool_type = ctx.context.bool_type();
+    let fn_type = bool_type.fn_type(&[ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_range_next", fn_type, None)
+}
+
+/// Declares `hulk_rt_range_current(rng: ptr) -> f64`.
+pub fn declare_range_current<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let f64_type = ctx.context.f64_type();
+    let fn_type = f64_type.fn_type(&[ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_range_current", fn_type, None)
+}
+
 /// Declares all standard runtime functions and inserts them into `ctx.functions`.
 pub fn declare_all(ctx: &mut CodegenCtx) {
     let alloc = declare_alloc(ctx);
@@ -75,4 +135,22 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
     ctx.functions.insert("hulk_rt_downcast_check".to_string(), downcast_check);
     let downcast_fail = declare_downcast_fail(ctx);
     ctx.functions.insert("hulk_rt_downcast_fail".to_string(), downcast_fail);
+    
+    // Vector methods
+    let vec_size = declare_vector_size(ctx);
+    ctx.functions.insert("Vector::size".to_string(), vec_size);
+    let vec_get = declare_vector_get(ctx);
+    ctx.functions.insert("Vector::get".to_string(), vec_get);
+    let vec_set = declare_vector_set(ctx);
+    ctx.functions.insert("Vector::set".to_string(), vec_set);
+    let vec_next = declare_vector_next(ctx);
+    ctx.functions.insert("Vector::next".to_string(), vec_next);
+    let vec_current = declare_vector_current(ctx);
+    ctx.functions.insert("Vector::current".to_string(), vec_current);
+
+    // Range methods
+    let range_next = declare_range_next(ctx);
+    ctx.functions.insert("Range::next".to_string(), range_next);
+    let range_current = declare_range_current(ctx);
+    ctx.functions.insert("Range::current".to_string(), range_current);
 }

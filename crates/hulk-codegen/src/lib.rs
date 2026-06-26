@@ -19,6 +19,9 @@ pub mod emit;
 pub mod error;
 pub mod options;
 pub mod layout;
+pub mod itables;
+pub mod lower;
+pub mod runtime_decls;
 
 use std::path::Path;
 
@@ -28,8 +31,6 @@ use inkwell::values::FunctionValue;
 pub use context::CodegenCtx;
 pub use error::CodegenError;
 pub use options::{CodegenOptions, OptLevel};
-pub mod lower;
-pub mod runtime_decls;
 
 /// Declares `hulk_rt_noop` as an external symbol so generated IR can call
 /// it. Stands in for the `runtime_decls` module that later phases will use
@@ -99,6 +100,9 @@ pub fn compile(
 
     // Build vtables (requires method declarations)
     layout::build_vtables(&mut codegen, &verified.registry)?;
+        
+    // Build itables for used protocols.
+    itables::build_itables(&mut codegen, &verified.registry, &verified.typed_program)?;
 
     // Define all functions (free and methods)
     lower::decl::define_functions(&mut codegen, &verified.typed_program, &verified.registry)?;
