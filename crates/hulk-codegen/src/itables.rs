@@ -41,6 +41,20 @@ pub fn build_itables(
     Ok(())
 }
 
+/// Returns the slot index of a method in a protocol's flattened method table.
+///
+/// The slot index is the position of the method in the protocol's flattened
+/// method table iteration order. This is used to index into the itable array.
+pub fn protocol_method_slot(
+    registry: &TypeRegistry,
+    protocol_name: &str,
+    method_name: &str,
+) -> Option<usize> {
+    registry
+        .lookup_protocol(protocol_name)
+        .and_then(|info| info.flattened_methods.get_index_of(method_name))
+}
+
 /// Collects all `(type, protocol)` pairs that are actually used in the program.
 ///
 /// A pair is recorded whenever a value of a concrete type is implicitly or explicitly

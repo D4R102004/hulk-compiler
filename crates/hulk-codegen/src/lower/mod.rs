@@ -17,12 +17,12 @@ use std::collections::HashMap;
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::types::BasicTypeEnum;
 
-use hulk_ast::{Expr, Program, TypeDecl, DeclarationKind};
+use hulk_ast::{Expr, Program, TypeDecl, DeclarationKind, VectorExpr};
 use hulk_semantic::{Type, TypeRegistry};
 
 use crate::context::CodegenCtx;
 use crate::error::CodegenError;
-use crate::lower::scope::ScopeStack; 
+use crate::lower::scope::ScopeStack;
 
 // ─── Submodules ───────────────────────────────────────────────────────────
 
@@ -38,6 +38,7 @@ pub mod method;
 pub mod new;
 pub mod member;
 pub mod type_ops;
+pub mod for_loop;
 // pub mod vector;
 // pub mod object;
 
@@ -161,6 +162,14 @@ pub fn lower_expr<'ctx>(
 
         ExprKind::Variable(name) => binding::lower_variable(ctx, name),
         ExprKind::SelfRef => binding::lower_variable(ctx, "self"),
+        ExprKind::Vector(vector) => match vector {
+            VectorExpr::Comprehension(comp) => for_loop::lower_vector_comprehension(ctx, comp),
+            VectorExpr::Literal(_) => {
+                Err(CodegenError::Unsupported {
+                    construct: "vector literals not yet implemented".into(),
+                })
+            }
+        },
 
         // ─── Unary and binary operators ──────────────────────────────────
 
@@ -172,6 +181,7 @@ pub fn lower_expr<'ctx>(
         ExprKind::Block(block) => control::lower_block(ctx, block),
         ExprKind::If(if_expr) => control::lower_if(ctx, if_expr, &expr.anno),
         ExprKind::While(while_expr) => control::lower_while(ctx, while_expr, &expr.anno),
+        ExprKind::For(for_expr) => for_loop::lower_for(ctx, for_expr),
 
         // ─── Bindings and assignments ────────────────────────────────────
 
@@ -190,11 +200,6 @@ pub fn lower_expr<'ctx>(
 
         // ─── Deferred to later phases ────────────────────────────────────
 
-        ExprKind::Vector(_) => {
-            Err(CodegenError::Unsupported {
-                construct: "vectors not yet supported".into()
-            })
-        }
         ExprKind::Index(_) => {
             Err(CodegenError::Unsupported {
                 construct: "indexing not yet supported".into()
