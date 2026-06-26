@@ -175,7 +175,9 @@ pub fn seeded_registry() -> TypeRegistry {
         flattened_methods: IndexMap::new(),
         span: SourceSpan::new(0, 0),
     };
-    registry.protocols.insert("Iterable".to_string(), iterable_protocol);
+    registry
+        .protocols
+        .insert("Iterable".to_string(), iterable_protocol);
 
     // Enumerable protocol
     let enumerable_methods = IndexMap::from([(
@@ -194,7 +196,9 @@ pub fn seeded_registry() -> TypeRegistry {
         flattened_methods: IndexMap::new(),
         span: SourceSpan::new(0, 0),
     };
-    registry.protocols.insert("Enumerable".to_string(), enumerable_protocol);
+    registry
+        .protocols
+        .insert("Enumerable".to_string(), enumerable_protocol);
 
     // ─── Builtin type: Range ──────────────────────────────────────────────
 
@@ -293,7 +297,7 @@ pub fn seeded_registry() -> TypeRegistry {
 
     let vector_type = TypeInfo {
         name: "Vector".to_string(),
-        params: Vec::new(),          // Vector has no constructor params in this model
+        params: Vec::new(), // Vector has no constructor params in this model
         parent: Some(ParentLink {
             name: "Object".to_string(),
             args: Vec::new(),
@@ -437,30 +441,24 @@ impl TypeRegistry {
                 }
                 None
             }
-            Type::Vector(inner) => {
-                self.lookup_type("Vector")
-                    .and_then(|info| {
-                        if !info.flattened_methods.is_empty() {
-                            Some(substitute_method_table(&info.flattened_methods, inner))
-                        } else if !info.methods.is_empty() {
-                            Some(substitute_method_table(&info.methods, inner))
-                        } else {
-                            None
-                        }
-                    })
-            }
-            Type::Iterable(inner) => {
-                self.lookup_protocol("Iterable")
-                    .and_then(|proto| {
-                        if !proto.flattened_methods.is_empty() {
-                            Some(substitute_method_table(&proto.flattened_methods, inner))
-                        } else if !proto.methods.is_empty() {
-                            Some(substitute_method_table(&proto.methods, inner))
-                        } else {
-                            None
-                        }
-                    })
-            }
+            Type::Vector(inner) => self.lookup_type("Vector").and_then(|info| {
+                if !info.flattened_methods.is_empty() {
+                    Some(substitute_method_table(&info.flattened_methods, inner))
+                } else if !info.methods.is_empty() {
+                    Some(substitute_method_table(&info.methods, inner))
+                } else {
+                    None
+                }
+            }),
+            Type::Iterable(inner) => self.lookup_protocol("Iterable").and_then(|proto| {
+                if !proto.flattened_methods.is_empty() {
+                    Some(substitute_method_table(&proto.flattened_methods, inner))
+                } else if !proto.methods.is_empty() {
+                    Some(substitute_method_table(&proto.methods, inner))
+                } else {
+                    None
+                }
+            }),
             _ => None,
         }
     }
@@ -560,7 +558,10 @@ impl TypeRegistry {
             // Check covariance of return type:
             // type return type R must conform to protocol return type P
             // i.e. R <= P
-            if !type_sig.return_type.conforms_to(&proto_sig.return_type, self) {
+            if !type_sig
+                .return_type
+                .conforms_to(&proto_sig.return_type, self)
+            {
                 return false;
             }
         }
@@ -575,7 +576,7 @@ impl TypeRegistry {
             .and_then(|info| info.parent.as_ref())
             .map(|parent| parent.name.clone())
     }
-    
+
     /// Returns `Ok(())` if `type_name` structurally implements `protocol_name`.
     /// Returns `Err(missing)` where `missing` is a list of method names that are
     /// either missing from the type or have incompatible signatures (arity, variance).
@@ -620,7 +621,10 @@ impl TypeRegistry {
                     continue;
                 }
                 // Check covariance of return: type return <= protocol return.
-                if !type_sig.return_type.conforms_to(&proto_sig.return_type, self) {
+                if !type_sig
+                    .return_type
+                    .conforms_to(&proto_sig.return_type, self)
+                {
                     missing.push(method_name.clone());
                     continue;
                 }
@@ -647,7 +651,9 @@ fn substitute_type(ty: &Type, param_name: &str, concrete: &Type) -> Type {
     match ty {
         Type::Named(name) if name == param_name => concrete.clone(),
         Type::Vector(inner) => Type::Vector(Box::new(substitute_type(inner, param_name, concrete))),
-        Type::Iterable(inner) => Type::Iterable(Box::new(substitute_type(inner, param_name, concrete))),
+        Type::Iterable(inner) => {
+            Type::Iterable(Box::new(substitute_type(inner, param_name, concrete)))
+        }
         other => other.clone(),
     }
 }
@@ -666,9 +672,7 @@ fn substitute_method_table(
                 params: sig
                     .params
                     .iter()
-                    .map(|(pname, pty)| {
-                        (pname.clone(), substitute_type(pty, param, concrete))
-                    })
+                    .map(|(pname, pty)| (pname.clone(), substitute_type(pty, param, concrete)))
                     .collect(),
                 return_type: substitute_type(&sig.return_type, param, concrete),
                 defined_in: sig.defined_in.clone(),
@@ -874,14 +878,30 @@ mod tests {
         let table = registry.method_table_for(&vec_num).unwrap();
 
         let current_sig = table.get("current").expect("Vector should have current()");
-        assert_eq!(current_sig.return_type, Type::Number, "current() return type should be Number");
+        assert_eq!(
+            current_sig.return_type,
+            Type::Number,
+            "current() return type should be Number"
+        );
 
         let get_sig = table.get("get").expect("Vector should have get()");
-        assert_eq!(get_sig.params[0].1, Type::Number, "index type should be Number");
-        assert_eq!(get_sig.return_type, Type::Number, "get() return type should be Number");
+        assert_eq!(
+            get_sig.params[0].1,
+            Type::Number,
+            "index type should be Number"
+        );
+        assert_eq!(
+            get_sig.return_type,
+            Type::Number,
+            "get() return type should be Number"
+        );
 
         let set_sig = table.get("set").expect("Vector should have set()");
-        assert_eq!(set_sig.params[1].1, Type::Number, "value type should be Number");
+        assert_eq!(
+            set_sig.params[1].1,
+            Type::Number,
+            "value type should be Number"
+        );
     }
 
     #[test]
@@ -890,11 +910,21 @@ mod tests {
         let iter_str = Type::Iterable(Box::new(Type::String));
         let table = registry.method_table_for(&iter_str).unwrap();
 
-        let current_sig = table.get("current").expect("Iterable should have current()");
-        assert_eq!(current_sig.return_type, Type::String, "current() return type should be String");
+        let current_sig = table
+            .get("current")
+            .expect("Iterable should have current()");
+        assert_eq!(
+            current_sig.return_type,
+            Type::String,
+            "current() return type should be String"
+        );
 
         let next_sig = table.get("next").expect("Iterable should have next()");
-        assert_eq!(next_sig.return_type, Type::Boolean, "next() return type should be Boolean");
+        assert_eq!(
+            next_sig.return_type,
+            Type::Boolean,
+            "next() return type should be Boolean"
+        );
     }
 
     #[test]
@@ -924,7 +954,9 @@ mod tests {
                 span: SourceSpan::new(0, 0),
             },
         );
-        let table = registry.method_table_for(&Type::Named("User".to_string())).unwrap();
+        let table = registry
+            .method_table_for(&Type::Named("User".to_string()))
+            .unwrap();
         assert!(table.contains_key("foo"));
     }
 }

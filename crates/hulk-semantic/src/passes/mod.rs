@@ -6,15 +6,15 @@
 //! - `infer`: type inference (Pass 2)
 //! - `check`: type checking (Pass 3)
 
+mod check;
 mod collect;
 mod hierarchy;
-mod resolve_constructor_params;
 mod infer;
-mod check;
+mod resolve_constructor_params;
 mod utils;
 
+pub use check::run as check;
 pub use collect::run as collect;
 pub use hierarchy::run as hierarchy;
-pub use resolve_constructor_params::run as resolve_constructor_params;
 pub use infer::run as infer;
-pub use check::run as check;
+pub use resolve_constructor_params::run as resolve_constructor_params;

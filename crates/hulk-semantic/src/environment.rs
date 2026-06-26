@@ -34,7 +34,11 @@ pub struct Binding {
 impl Binding {
     /// Creates a new binding with `is_self = false`.
     pub fn new(ty: Type, span: SourceSpan) -> Self {
-        Self { ty, span, is_self: false }
+        Self {
+            ty,
+            span,
+            is_self: false,
+        }
     }
 
     /// Creates a new binding with a custom `is_self` flag.
@@ -96,18 +100,18 @@ impl Environment {
     ///
     /// If a binding with the same name already exists in that scope, it is
     /// overwritten (rebinding). This is intentional and matches HULK's
-    /// rule that `let a = 7, a = 7*6 in ...` is valid. This function does not 
+    /// rule that `let a = 7, a = 7*6 in ...` is valid. This function does not
     /// check for duplicates.
     pub fn declare(&mut self, name: &str, ty: Type, span: SourceSpan) {
         self.declare_with_self(name, ty, span, false);
     }
 
-    /// Declares a variable in the innermost scope, allowing to specify whether 
+    /// Declares a variable in the innermost scope, allowing to specify whether
     /// it is the original `self` for `Binding` creation.
     ///
     /// If a binding with the same name already exists in that scope, it is
     /// overwritten (rebinding). This is intentional and matches HULK's
-    /// rule that `let a = 7, a = 7*6 in ...` is valid. This function does not 
+    /// rule that `let a = 7, a = 7*6 in ...` is valid. This function does not
     /// check for duplicates.
     pub fn declare_with_self(&mut self, name: &str, ty: Type, span: SourceSpan, is_self: bool) {
         let scope = self.scopes.last_mut().expect("at least one scope exists");

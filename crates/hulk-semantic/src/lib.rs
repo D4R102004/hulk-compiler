@@ -6,11 +6,11 @@
 
 #![deny(missing_docs)]
 
-mod error;
 mod environment;
+mod error;
+mod passes;
 mod typed;
 mod types;
-mod passes;
 
 use crate::error::Severity;
 
@@ -18,11 +18,10 @@ use crate::error::Severity;
 // Public API re-exports
 // -----------------------------------------------------------------------------
 
-pub use error::{SemanticError, SemanticErrorKind};
 pub use environment::{Binding, Environment};
-pub use types::{Type, TypeRegistry, TypeInfo, seeded_registry};
+pub use error::{SemanticError, SemanticErrorKind};
 pub use typed::{TypedExpr, TypedProgram};
-pub use passes::topological_order;
+pub use types::{seeded_registry, Type, TypeRegistry};
 
 // -----------------------------------------------------------------------------
 // Main structure
@@ -99,9 +98,9 @@ pub fn analyze(program: &hulk_ast::Program) -> Result<VerifiedProgram, Vec<Seman
 #[cfg(test)]
 mod integration_tests {
     use super::*;
+    use crate::types::lowest_common_ancestor;
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
-    use crate::types::lowest_common_ancestor;
 
     #[test]
     fn multi_error_reporting_no_cascade() {
@@ -121,12 +120,21 @@ mod integration_tests {
         let errors = result.err().unwrap();
         // Expect at least: NotConforming (x annotation), UndefinedVariable (y), and possibly others.
         // But no spurious TypeMismatch on the `x + 1` because x is already Error, so that part should not cascade.
-        let not_conforming = errors.iter().filter(|e| matches!(e.kind, SemanticErrorKind::NotConforming { .. })).count();
-        let undefined = errors.iter().filter(|e| matches!(e.kind, SemanticErrorKind::UndefinedVariable(_))).count();
+        let not_conforming = errors
+            .iter()
+            .filter(|e| matches!(e.kind, SemanticErrorKind::NotConforming { .. }))
+            .count();
+        let undefined = errors
+            .iter()
+            .filter(|e| matches!(e.kind, SemanticErrorKind::UndefinedVariable(_)))
+            .count();
         assert!(not_conforming >= 1);
         assert!(undefined >= 1);
         // There should be no TypeMismatch on `x + 1` because x is Error -> cascade suppression.
-        let type_mismatches = errors.iter().filter(|e| matches!(e.kind, SemanticErrorKind::TypeMismatch { .. })).count();
+        let type_mismatches = errors
+            .iter()
+            .filter(|e| matches!(e.kind, SemanticErrorKind::TypeMismatch { .. }))
+            .count();
         // It could have at most the NotConforming from the let, but not an extra one for the addition.
         // We'll just assert that if there is a TypeMismatch, it's only from the let.
         // The addition should be typed as Error and not produce a new error.
@@ -148,9 +156,17 @@ mod integration_tests {
         let result = analyze(&program);
         assert!(result.is_ok(), "should succeed with warnings");
         let verified = result.unwrap();
-        assert!(!verified.warnings.is_empty(), "warnings should not be empty");
-        assert!(verified.warnings.iter().any(|e| matches!(e.kind, SemanticErrorKind::NonExhaustiveMatch)),
-            "expected NonExhaustiveMatch warning");
+        assert!(
+            !verified.warnings.is_empty(),
+            "warnings should not be empty"
+        );
+        assert!(
+            verified
+                .warnings
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::NonExhaustiveMatch)),
+            "expected NonExhaustiveMatch warning"
+        );
     }
 
     /// Tests that a hierarchy‑level hard error triggers the early‑return in `analyze`
@@ -169,8 +185,12 @@ mod integration_tests {
         let result = analyze(&program);
         assert!(result.is_err(), "should return Err with hierarchy error");
         let errors = result.err().unwrap();
-        assert!(errors.iter().any(|e| matches!(e.kind, SemanticErrorKind::InheritanceCycle(_))),
-            "expected InheritanceCycle error");
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e.kind, SemanticErrorKind::InheritanceCycle(_))),
+            "expected InheritanceCycle error"
+        );
     }
 
     /// Tests that the LCA of two user‑defined types with a shared grandparent correctly

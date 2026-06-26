@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use crate::types::registry::{TypeRegistry};
+use crate::types::registry::TypeRegistry;
 
 /// Returns a topological order of types (parents before children) using Kahn's algorithm.
 pub fn topological_order(registry: &TypeRegistry) -> Vec<String> {
@@ -17,7 +17,10 @@ pub fn topological_order(registry: &TypeRegistry) -> Vec<String> {
     for (name, info) in &registry.types {
         if let Some(parent) = &info.parent {
             if registry.types.contains_key(&parent.name) {
-                graph.entry(parent.name.clone()).or_default().push(name.clone());
+                graph
+                    .entry(parent.name.clone())
+                    .or_default()
+                    .push(name.clone());
                 *in_degree.entry(name.clone()).or_insert(0) += 1;
             }
         }
@@ -55,6 +58,9 @@ use crate::error::{SemanticError, SemanticErrorKind};
 
 #[cfg(test)]
 pub fn assert_error_kind(errors: &[SemanticError], expected: SemanticErrorKind) {
-    assert!(errors.iter().any(|e| e.kind == expected),
-        "expected error {:?} not found", expected);
+    assert!(
+        errors.iter().any(|e| e.kind == expected),
+        "expected error {:?} not found",
+        expected
+    );
 }

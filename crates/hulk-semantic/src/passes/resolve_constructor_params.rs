@@ -9,9 +9,9 @@ use std::collections::{HashMap, HashSet};
 use hulk_ast::{DeclarationKind, Expr, ExprKind, Literal, Program, TypeMemberKind};
 
 use crate::error::{SemanticError, SemanticErrorKind};
-use crate::types::registry::{TypeRegistry};
-use crate::types::Type;
 use crate::passes::utils::topological_order;
+use crate::types::registry::TypeRegistry;
+use crate::types::Type;
 
 /// Runs the constructor parameter resolution pass.
 ///
@@ -19,11 +19,7 @@ use crate::passes::utils::topological_order;
 /// * `program` – The untyped AST.
 /// * `registry` – The registry (mutated: `TypeInfo.params` are updated).
 /// * `errors` – Vector to append any inference errors.
-pub fn run(
-    program: &Program,
-    registry: &mut TypeRegistry,
-    errors: &mut Vec<SemanticError>,
-) {
+pub fn run(program: &Program, registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
     // Step 1: Collect constraints from all `new` expressions.
     let mut constraints: HashMap<(String, usize), Vec<Type>> = HashMap::new();
     collect_new_constraints(program, registry, &mut constraints);
@@ -108,7 +104,9 @@ fn resolve_type_params(
             let unique_types: Vec<Type> = unique.into_iter().collect();
             if unique_types.is_empty() {
                 errors.push(SemanticError::error(
-                    SemanticErrorKind::CannotInferType { symbol: name.clone() },
+                    SemanticErrorKind::CannotInferType {
+                        symbol: name.clone(),
+                    },
                     info.span,
                 ));
                 *ty = Type::Error;
