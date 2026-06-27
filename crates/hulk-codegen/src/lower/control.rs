@@ -80,7 +80,7 @@ pub fn lower_if<'ctx>(
 
     ctx.codegen.builder.position_at_end(then_bb);
     let then_val = lower_expr(ctx, &if_expr.then_branch)?;
-    let then_boxed = utils::box_if_needed(ctx, then_val, &if_expr.then_branch.anno, result_type)?;
+    let then_boxed = utils::ensure_boxed(ctx, then_val, &if_expr.then_branch.anno, result_type)?;
     ctx.codegen.builder.build_store(result_alloca, then_boxed)
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
     ctx.codegen.builder.build_unconditional_branch(merge_bb)
@@ -104,7 +104,7 @@ pub fn lower_if<'ctx>(
         // Elif body.
         ctx.codegen.builder.position_at_end(elif_then_bb);
         let elif_val = lower_expr(ctx, &elif.body)?;
-        let elif_boxed = utils::box_if_needed(ctx, elif_val, &elif.body.anno, result_type)?;
+        let elif_boxed = utils::ensure_boxed(ctx, elif_val, &elif.body.anno, result_type)?;
         ctx.codegen.builder.build_store(result_alloca, elif_boxed)
             .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
         ctx.codegen.builder.build_unconditional_branch(merge_bb)
@@ -117,7 +117,7 @@ pub fn lower_if<'ctx>(
 
     ctx.codegen.builder.position_at_end(current_else_bb);
     let else_val = lower_expr(ctx, &if_expr.else_branch)?;
-    let else_boxed = utils::box_if_needed(ctx, else_val, &if_expr.else_branch.anno, result_type)?;
+    let else_boxed = utils::ensure_boxed(ctx, else_val, &if_expr.else_branch.anno, result_type)?;
     ctx.codegen.builder.build_store(result_alloca, else_boxed)
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
     ctx.codegen.builder.build_unconditional_branch(merge_bb)
@@ -189,7 +189,7 @@ pub fn lower_while<'ctx>(
 
     ctx.codegen.builder.position_at_end(body_bb);
     let body_val = lower_expr(ctx, &while_expr.body)?;
-    let body_boxed = utils::box_if_needed(ctx, body_val, &while_expr.body.anno, result_type)?;
+    let body_boxed = utils::ensure_boxed(ctx, body_val, &while_expr.body.anno, result_type)?;
     ctx.codegen.builder.build_store(result_alloca, body_boxed)
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
     ctx.codegen.builder.build_unconditional_branch(cond_bb)

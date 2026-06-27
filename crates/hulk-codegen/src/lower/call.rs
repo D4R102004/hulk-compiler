@@ -1,6 +1,6 @@
 //! Lowering of function and method calls.
 
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicValueEnum, BasicMetadataValueEnum};
 use inkwell::types::BasicType;
 use hulk_ast::{CallExpr, SourceSpan};
 use hulk_semantic::{Type, TypedExpr, TypeRegistry};
@@ -46,21 +46,14 @@ pub fn lower_call<'ctx>(
                     })?;
 
                 // Lower and box arguments if needed.
-                let mut args = Vec::new();
-                for (arg_expr, (_, param_ty)) in call.args.iter().zip(&sig.params) {
-                    let mut arg_val = lower_expr(ctx, arg_expr)?;
-                    // If parameter type is Object, ensure argument is boxed.
-                    if matches!(param_ty, Type::Object) {
-                        arg_val = crate::lower::utils::ensure_boxed(ctx, arg_val, &arg_expr.anno, param_ty)?;
-                    }
-                    args.push(arg_val.into());
-                }
+                let call_args = lower_and_box_args(ctx, &call.args, &sig.params)?;
 
                 let call_site = ctx
                     .codegen
                     .builder
-                    .build_call(fn_val, &args, "call")
+                    .build_call(fn_val, &call_args, "call")
                     .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
                 let result = call_site
                     .try_as_basic_value()
                     .unwrap_basic();
@@ -214,11 +207,18 @@ fn lower_class_method_call<'ctx>(
         .into_pointer_value();
 
     // 6. Prepare the call arguments: first `self` (the object pointer), then the rest.
-    let mut call_args = Vec::new();
-    call_args.push(obj_ptr.into());
-    for arg in args {
-        call_args.push(lower_expr(ctx, arg)?.into());
-    }
+    let mut call_args = vec![obj_ptr.into()];
+
+    // Look up the method signature to get parameter types.
+    let method_sig = ctx
+        .registry
+        .lookup_method(obj_type, method_name)
+        .ok_or_else(|| CodegenError::Unsupported {
+            construct: format!("method '{}' not found", method_name),
+        })?;
+
+    // Lower and box each argument according to the parameter type.
+    call_args.extend(lower_and_box_args(ctx, args, &method_sig.params)?);
 
     // 7. Retrieve the method's declared LLVM function type from the module.
     let qualified_name = format!("{}::{}", type_name, method_name);
@@ -568,9 +568,9 @@ fn lower_protocol_call<'ctx>(
 
     // 7. Prepare arguments: data_ptr as `self`, then the rest.
     let mut call_args = vec![data_ptr.into()];
-    for arg in args {
-        call_args.push(lower_expr(ctx, arg)?.into());
-    }
+
+    // Lower and box each argument according to the parameter type.
+    call_args.extend(lower_and_box_args(ctx, args, &method_sig.params)?);
 
     let call_site = ctx
         .codegen
@@ -578,4 +578,33 @@ fn lower_protocol_call<'ctx>(
         .build_indirect_call(fn_type, fn_ptr_typed, &call_args, "itable_call")
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
     Ok(call_site.try_as_basic_value().unwrap_basic())
+}
+
+// --------------- HELPERS ------------------------
+
+/// Lowers a list of argument expressions and boxes them according to the corresponding
+/// parameter types.
+///
+/// # Parameters
+/// - `ctx`: The lowering context.
+/// - `args`: The argument expressions to lower.
+/// - `params`: The function/method parameter list `(name, type)`.
+///
+/// # Returns
+/// A vector of LLVM metadata values ready to be passed to `build_call` or
+/// `build_indirect_call`.
+fn lower_and_box_args<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    args: &[TypedExpr],
+    params: &[(String, Type)],
+) -> Result<Vec<BasicMetadataValueEnum<'ctx>>, CodegenError> {
+    let mut call_args = Vec::with_capacity(args.len());
+    for (arg_expr, (_, param_ty)) in args.iter().zip(params) {
+        let mut arg_val = lower_expr(ctx, arg_expr)?;
+        if matches!(param_ty, Type::Object) {
+            arg_val = crate::lower::utils::ensure_boxed(ctx, arg_val, &arg_expr.anno, param_ty)?;
+        }
+        call_args.push(arg_val.into());
+    }
+    Ok(call_args)
 }

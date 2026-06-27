@@ -57,19 +57,6 @@ pub fn to_string<'ctx>(
     }
 }
 
-/// Boxes a value if the target type is `Object`.
-///
-/// Currently a placeholder; full implementation in Phase 4/5.
-pub fn box_if_needed<'ctx>(
-    _ctx: &mut LowerCtx<'_, 'ctx>,
-    val: inkwell::values::BasicValueEnum<'ctx>,
-    _src_ty: &Type,
-    _target_ty: &Type,
-) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
-    // TODO: Implement boxing for Object-typed targets.
-    Ok(val)
-}
-
 /// Maps a HULK type to an LLVM type.
 pub fn llvm_type<'ctx>(
     codegen: &CodegenCtx<'ctx>,
@@ -392,22 +379,17 @@ pub fn box_primitive<'ctx>(
 }
 
 /// Ensures a value is boxed if the target type is a pointer type (`Object` or `Vector` element).
+///
+/// This is the single entry point for boxing at dynamic boundaries.
+/// It delegates to `box_primitive` when boxing is required.
 pub fn ensure_boxed<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     value: BasicValueEnum<'ctx>,
     src_ty: &Type,
     target_ty: &Type,
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-    // If target is Object or Vector element (pointer) and source is primitive, box.
-    match target_ty {
-        Type::Object => {
-            if matches!(src_ty, Type::Number | Type::Boolean) {
-                return box_primitive(ctx, value, src_ty);
-            }
-        }
-        // For Vector elements, we need to check if the target element type is Object or pointer.
-        // In practice, vector elements are always pointers, so we box primitives.
-        _ => {}
+    if matches!(target_ty, Type::Object) && matches!(src_ty, Type::Number | Type::Boolean) {
+        return box_primitive(ctx, value, src_ty);
     }
     Ok(value)
 }

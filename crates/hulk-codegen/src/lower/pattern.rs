@@ -161,10 +161,18 @@ pub fn lower_match<'ctx>(
         // Lower the case body.
         let body_val = lower_expr(ctx, &case.body)?;
 
-        // Store the body value in the result alloca.
+        // Box the body value if the match result type is Object and the body type is primitive.
+        let boxed_body_val = crate::lower::utils::ensure_boxed(
+            ctx,
+            body_val,
+            &case.body.anno,
+            &match_expr.value.anno, // The match's result type.
+        )?;
+
+        // Store the (possibly boxed) body value in the result alloca.
         ctx.codegen
             .builder
-            .build_store(result_alloca, body_val)
+            .build_store(result_alloca, boxed_body_val)
             .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
 
         ctx.pop_scope();
