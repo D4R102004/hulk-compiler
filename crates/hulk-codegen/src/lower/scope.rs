@@ -22,12 +22,12 @@ impl<'ctx> ScopeStack<'ctx> {
         self.scopes.push(HashMap::new());
     }
 
-    /// Pops the innermost scope.
+    /// Pops the innermost scope and returns its bindings.
     ///
     /// # Panics
     /// Panics if there is no scope to pop (i.e., the stack is empty).
-    pub fn pop_scope(&mut self) {
-        self.scopes.pop().expect("scope stack underflow");
+    pub fn pop_scope(&mut self) -> HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type)> {
+        self.scopes.pop().expect("scope stack underflow")
     }
 
     /// Declares a variable in the innermost scope.

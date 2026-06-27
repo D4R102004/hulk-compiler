@@ -19,7 +19,7 @@ use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
-use crate::lower::utils::{resolve_attribute_with_offset, resolve_type_ref_to_type, convert_to_protocol};
+use crate::lower::utils::{resolve_attribute_with_offset, resolve_type_ref_to_type, convert_to_protocol, is_heap_allocated_type};
 use super::lower_expr;
 
 /// Lowers a variable reference.
@@ -135,7 +135,7 @@ pub fn lower_assign<'ctx>(
     match &assign.target {
         hulk_ast::AssignTarget::Variable(name) => {
             // 1. Look up the variable's LLVM pointer and semantic type.
-            let (_ptr, _llvm_ty, target_ty) = ctx.lookup_var(name)?;
+            let (ptr, _llvm_ty, target_ty) = ctx.lookup_var(name)?;
 
             // 2. Lower the value to be stored.
             let mut stored_val = lower_expr(ctx, &assign.value)?;
@@ -145,20 +145,55 @@ pub fn lower_assign<'ctx>(
             if ctx.registry.is_protocol(&target_ty) {
                 if let Type::Named(_) = val_ty {
                     if !ctx.registry.is_protocol(val_ty) {
-                        stored_val = crate::lower::utils::convert_to_protocol(
-                            ctx,
-                            stored_val,
-                            val_ty,
-                            &target_ty,
-                        )?;
+                        stored_val = convert_to_protocol(ctx, stored_val, val_ty, &target_ty)?;
                     }
                 }
             }
 
-            // 4. Store the (possibly converted) value.
+            // 4. Load the old value (for release).
+            let old_val = ctx
+                .codegen
+                .builder
+                .build_load(
+                    crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &target_ty)?,
+                    ptr,
+                    "old_var",
+                )
+                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+            // 5. If the target type is heap-allocated, release the old value and retain the new.
+            if is_heap_allocated_type(&target_ty, ctx.registry) {
+                let release_fn = ctx
+                    .codegen
+                    .functions
+                    .get("hulk_rt_release")
+                    .cloned()
+                    .ok_or_else(|| CodegenError::Unsupported {
+                        construct: "hulk_rt_release not declared".into(),
+                    })?;
+                ctx.codegen
+                    .builder
+                    .build_call(release_fn, &[old_val.into()], "release_old_var")
+                    .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+                let retain_fn = ctx
+                    .codegen
+                    .functions
+                    .get("hulk_rt_retain")
+                    .cloned()
+                    .ok_or_else(|| CodegenError::Unsupported {
+                        construct: "hulk_rt_retain not declared".into(),
+                    })?;
+                ctx.codegen
+                    .builder
+                    .build_call(retain_fn, &[stored_val.into()], "retain_new_var")
+                    .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            }
+
+            // 6. Store the (possibly converted) value.
             ctx.store_var(name, stored_val)?;
 
-            // 5. The assignment expression returns the stored value.
+            // 7. The assignment expression returns the stored value.
             Ok(stored_val)
         }
         hulk_ast::AssignTarget::Member { object, field } => {
@@ -168,7 +203,7 @@ pub fn lower_assign<'ctx>(
 
             // 2. Determine the static type of the object and resolve the attribute.
             let obj_type = &object.anno;
-            let (_attr_type, offset) = resolve_attribute_with_offset(ctx, obj_type, field)?;
+            let (attr_type, offset) = resolve_attribute_with_offset(ctx, obj_type, field)?;
 
             // 3. Compute the field address using byte offset.
             let ptr_type = ctx.codegen.context.ptr_type(Default::default());
@@ -193,14 +228,53 @@ pub fn lower_assign<'ctx>(
                 .build_pointer_cast(field_ptr_i8, attr_ptr_type, "field_typed_ptr")
                 .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
 
-            // 5. Lower the value and store it.
+            // 5. Lower the new value.
             let val = lower_expr(ctx, &assign.value)?;
+
+            // 6. Load the old value.
+            let attr_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &attr_type)?;
+            let old_val = ctx
+                .codegen
+                .builder
+                .build_load(attr_llvm_ty, field_ptr, "old_attr")
+                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+            // 7. If the attribute is heap-allocated, release the old value and retain the new.
+            if is_heap_allocated_type(&attr_type, ctx.registry) {
+                let release_fn = ctx
+                    .codegen
+                    .functions
+                    .get("hulk_rt_release")
+                    .cloned()
+                    .ok_or_else(|| CodegenError::Unsupported {
+                        construct: "hulk_rt_release not declared".into(),
+                    })?;
+                ctx.codegen
+                    .builder
+                    .build_call(release_fn, &[old_val.into()], "release_old_attr")
+                    .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+                let retain_fn = ctx
+                    .codegen
+                    .functions
+                    .get("hulk_rt_retain")
+                    .cloned()
+                    .ok_or_else(|| CodegenError::Unsupported {
+                        construct: "hulk_rt_retain not declared".into(),
+                    })?;
+                ctx.codegen
+                    .builder
+                    .build_call(retain_fn, &[val.into()], "retain_new_attr")
+                    .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            }
+
+            // 8. Store the new value.
             ctx.codegen
                 .builder
                 .build_store(field_ptr, val)
                 .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
 
-            // 6. Assignment expression returns the value.
+            // 9. Assignment expression returns the value.
             Ok(val)
         }
         _ => Err(CodegenError::Unsupported {

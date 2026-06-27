@@ -120,10 +120,11 @@ pub fn lower_new<'ctx>(
     }
     for (i, (param_name, _)) in params.iter().enumerate() {
         let arg_val = lower_expr(ctx, &new_expr.args[i])?;
-        ctx.declare_var(param_name, arg_val)?;
+        let param_ty = params[i].1.clone(); // get the semantic type
+        ctx.declare_var(param_name, arg_val, param_ty)?;
     }
 
-    // --- 4. Evaluate attribute initializers in parent‑first order ------------
+    // ─── 4. Evaluate attribute initializers in parent‑first order ────────────
 
     // `ancestors` is already computed; use it.
     let mut attr_inits = Vec::new();
@@ -136,25 +137,58 @@ pub fn lower_new<'ctx>(
         collect_attribute_initializers(ty_decl, &mut attr_inits);
     }
 
+    // Get the retain function once, outside the loop.
+    let retain_fn = ctx
+        .codegen
+        .functions
+        .get("hulk_rt_retain")
+        .cloned()
+        .ok_or_else(|| CodegenError::Unsupported {
+            construct: "hulk_rt_retain not declared".into(),
+        })?;
+
     // Now evaluate each initializer and store it at the correct offset.
     for (attr_name, init_expr) in attr_inits {
-        let offset = *field_offsets.get(&attr_name)
+        // 1. Resolve the attribute's declared type.
+        let attr_info = ctx
+            .registry
+            .lookup_type(type_name)
+            .and_then(|info| info.attributes.get(&attr_name))
+            .ok_or_else(|| CodegenError::Unsupported {
+                construct: format!("attribute info for '{}' not found", attr_name),
+            })?;
+        let attr_ty = attr_info
+            .declared_type
+            .as_ref()
+            .ok_or_else(|| CodegenError::Unsupported {
+                construct: format!("attribute '{}' has no declared type", attr_name),
+            })?;
+
+        // 2. Compute the byte offset of the attribute.
+        let offset = *field_offsets
+            .get(&attr_name)
             .ok_or_else(|| CodegenError::Unsupported {
                 construct: format!("no offset for attribute '{}'", attr_name),
             })?;
 
+        // 3. Lower the initializer expression.
         let val = lower_expr(ctx, init_expr)?;
-        let offset_val = ctx.codegen.context.i64_type().const_int(offset as u64, false);
 
+        // 4. Compute the field pointer as an i8*.
+        let offset_val = ctx.codegen.context.i64_type().const_int(offset as u64, false);
         let field_ptr = unsafe {
-            ctx.codegen.builder.build_in_bounds_gep(
-                ctx.codegen.context.i8_type(),
-                obj_ptr,
-                &[offset_val.into()],
-                "field_ptr",
-            ).map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            ctx.codegen
+                .builder
+                .build_in_bounds_gep(
+                    ctx.codegen.context.i8_type(),
+                    obj_ptr,
+                    &[offset_val.into()],
+                    "field_ptr",
+                )
+                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
         };
-        
+
+        // 5. Cast to the attribute's type pointer.
         let target_ptr_type = ctx.codegen.context.ptr_type(Default::default());
         let typed_field_ptr = ctx
             .codegen
@@ -162,10 +196,19 @@ pub fn lower_new<'ctx>(
             .build_pointer_cast(field_ptr, target_ptr_type, "field_typed_ptr")
             .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
 
+        // 6. Store the value.
         ctx.codegen
             .builder
             .build_store(typed_field_ptr, val)
             .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+
+        // 7. If the attribute is heap‑allocated, retain the stored value.
+        if crate::lower::utils::is_heap_allocated_type(attr_ty, ctx.registry) {
+            ctx.codegen
+                .builder
+                .build_call(retain_fn, &[val.into()], "retain_attr")
+                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        }
     }
 
     // --- 5. Clean up and return ----------------------------------------------

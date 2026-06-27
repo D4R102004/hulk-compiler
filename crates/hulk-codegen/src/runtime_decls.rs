@@ -14,6 +14,22 @@ pub fn declare_alloc<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
     ctx.module.add_function("hulk_rt_alloc", fn_type, None)
 }
 
+/// Declares `hulk_rt_retain(ptr) -> void`.
+pub fn declare_retain<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let void_type = ctx.context.void_type();
+    let fn_type = void_type.fn_type(&[ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_retain", fn_type, None)
+}
+
+/// Declares `hulk_rt_release(ptr) -> void`.
+pub fn declare_release<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let void_type = ctx.context.void_type();
+    let fn_type = void_type.fn_type(&[ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_release", fn_type, None)
+}
+
 /// Declares `hulk_rt_string_concat(a: ptr, b: ptr) -> ptr`.
 pub fn declare_string_concat<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
     let ptr_type = ctx.context.ptr_type(Default::default());
@@ -170,10 +186,18 @@ pub fn declare_dynamic_vector_to_vector<'ctx>(ctx: &CodegenCtx<'ctx>) -> Functio
 /// - The qualified name `"Type::method"` for itable/vtable dispatch.
 /// - The raw runtime symbol name `"hulk_rt_*"` for direct calls.
 pub fn declare_all(ctx: &mut CodegenCtx) {
-    // ─── Basic runtime functions ──────────────────────────────────────────
+    // ─── Memory management ──────────────────────────────────────────
 
     let alloc = declare_alloc(ctx);
     ctx.functions.insert("hulk_rt_alloc".to_string(), alloc);
+
+    let retain = declare_retain(ctx);
+    ctx.functions.insert("hulk_rt_retain".to_string(), retain);
+
+    let release = declare_release(ctx);
+    ctx.functions.insert("hulk_rt_release".to_string(), release);
+
+    // ─── Basic runtime functions ──────────────────────────────────────────
 
     let concat = declare_string_concat(ctx);
     ctx.functions.insert("hulk_rt_string_concat".to_string(), concat);

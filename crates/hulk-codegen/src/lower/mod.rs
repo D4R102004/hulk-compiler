@@ -99,7 +99,19 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
 
     /// Pops the innermost lexical scope.
     pub fn pop_scope(&mut self) {
-        self.scope_stack.pop_scope();
+        let scope = self.scope_stack.pop_scope();
+        let release_fn = self.codegen.functions.get("hulk_rt_release").cloned();
+        if let Some(release) = release_fn {
+            let ptr_type = self.codegen.context.ptr_type(Default::default());
+            for (_name, (ptr, _llvm_ty, sem_ty)) in scope {
+                if crate::lower::utils::is_heap_allocated_type(&sem_ty, self.registry) {
+                    // Load the current value from the alloca.
+                    if let Ok(val) = self.codegen.builder.build_load(ptr_type, ptr, "scope_exit_load") {
+                        let _ = self.codegen.builder.build_call(release, &[val.into()], "scope_exit_release");
+                    }
+                }
+            }
+        }
     }
 
     /// Declares a variable in the current scope and initialises it with `value`.
