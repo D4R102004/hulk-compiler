@@ -39,6 +39,7 @@ pub mod new;
 pub mod member;
 pub mod type_ops;
 pub mod for_loop;
+pub mod pattern;
 // pub mod vector;
 // pub mod object;
 
@@ -182,6 +183,7 @@ pub fn lower_expr<'ctx>(
         ExprKind::If(if_expr) => control::lower_if(ctx, if_expr, &expr.anno),
         ExprKind::While(while_expr) => control::lower_while(ctx, while_expr, &expr.anno),
         ExprKind::For(for_expr) => for_loop::lower_for(ctx, for_expr),
+        ExprKind::Match(match_expr) => pattern::lower_match(ctx, match_expr),
 
         // ─── Bindings and assignments ────────────────────────────────────
 
@@ -203,11 +205,6 @@ pub fn lower_expr<'ctx>(
         ExprKind::Index(_) => {
             Err(CodegenError::Unsupported {
                 construct: "indexing not yet supported".into()
-            })
-        }
-        ExprKind::Match(_) => {
-            Err(CodegenError::Unsupported {
-                construct: "match not yet supported".into()
             })
         }
         // ─── Catch-all for unhandled cases ───────────────────────────────

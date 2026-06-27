@@ -119,8 +119,54 @@ pub fn declare_range_current<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx
     ctx.module.add_function("hulk_rt_range_current", fn_type, None)
 }
 
+// ─── Match fail trap ──────────────────────────────────────────────────────
+
+/// Declares `hulk_rt_match_fail() -> !` (noreturn).
+pub fn declare_match_fail<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let void_type = ctx.context.void_type();
+    let fn_type = void_type.fn_type(&[], false);
+    ctx.module.add_function("hulk_rt_match_fail", fn_type, None)
+}
+
+// ─── String equality ──────────────────────────────────────────────────────
+
+/// Declares `hulk_rt_string_equals(a: ptr, b: ptr) -> i1`.
+pub fn declare_string_equals<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let bool_type = ctx.context.bool_type();
+    let fn_type = bool_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_string_equals", fn_type, None)
+}
+
+// ─── Dynamic vector helpers for comprehensions ──────────────────────────
+
+/// Declares `hulk_rt_dynamic_vector_new() -> ptr`.
+pub fn declare_dynamic_vector_new<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let fn_type = ptr_type.fn_type(&[], false);
+    ctx.module.add_function("hulk_rt_dynamic_vector_new", fn_type, None)
+}
+
+/// Declares `hulk_rt_dynamic_vector_append(vec: ptr, value: ptr) -> void`.
+pub fn declare_dynamic_vector_append<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let void_type = ctx.context.void_type();
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let fn_type = void_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_dynamic_vector_append", fn_type, None)
+}
+
+/// Declares `hulk_rt_dynamic_vector_to_vector(vec: ptr) -> ptr`.
+pub fn declare_dynamic_vector_to_vector<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let fn_type = ptr_type.fn_type(&[ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_dynamic_vector_to_vector", fn_type, None)
+}
+
+// ─── Declare all runtime functions ───────────────────────────────────────────
+
 /// Declares all standard runtime functions and inserts them into `ctx.functions`.
 pub fn declare_all(ctx: &mut CodegenCtx) {
+    // Basic runtime functions
     let alloc = declare_alloc(ctx);
     ctx.functions.insert("hulk_rt_alloc".to_string(), alloc);
     let concat = declare_string_concat(ctx);
@@ -135,7 +181,7 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
     ctx.functions.insert("hulk_rt_downcast_check".to_string(), downcast_check);
     let downcast_fail = declare_downcast_fail(ctx);
     ctx.functions.insert("hulk_rt_downcast_fail".to_string(), downcast_fail);
-    
+
     // Vector methods
     let vec_size = declare_vector_size(ctx);
     ctx.functions.insert("Vector::size".to_string(), vec_size);
@@ -153,4 +199,20 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
     ctx.functions.insert("Range::next".to_string(), range_next);
     let range_current = declare_range_current(ctx);
     ctx.functions.insert("Range::current".to_string(), range_current);
+
+    // Match fail trap
+    let match_fail = declare_match_fail(ctx);
+    ctx.functions.insert("hulk_rt_match_fail".to_string(), match_fail);
+
+    // String equality
+    let str_eq = declare_string_equals(ctx);
+    ctx.functions.insert("hulk_rt_string_equals".to_string(), str_eq);
+
+    // Dynamic vector helpers for comprehensions
+    let dyn_new = declare_dynamic_vector_new(ctx);
+    ctx.functions.insert("hulk_rt_dynamic_vector_new".to_string(), dyn_new);
+    let dyn_append = declare_dynamic_vector_append(ctx);
+    ctx.functions.insert("hulk_rt_dynamic_vector_append".to_string(), dyn_append);
+    let dyn_to_vec = declare_dynamic_vector_to_vector(ctx);
+    ctx.functions.insert("hulk_rt_dynamic_vector_to_vector".to_string(), dyn_to_vec);
 }
