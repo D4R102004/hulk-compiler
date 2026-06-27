@@ -37,11 +37,8 @@ fn declare_methods_for_type(
         .lookup_type(type_name)
         .ok_or_else(|| CodegenError::LlvmVerification(format!("type '{}' not found", type_name)))?;
 
-    let methods = if !type_info.flattened_methods.is_empty() {
-        &type_info.flattened_methods
-    } else {
-        &type_info.methods
-    };
+    
+    let methods = &type_info.methods;
 
     // Get the type layout to know the struct type for `self`.
     let _layout = ctx
@@ -102,11 +99,7 @@ fn define_methods_for_type(
         .lookup_type(type_name)
         .ok_or_else(|| CodegenError::LlvmVerification(format!("type '{}' not found", type_name)))?;
 
-    let methods = if !type_info.flattened_methods.is_empty() {
-        &type_info.flattened_methods
-    } else {
-        &type_info.methods
-    };
+    let methods = &type_info.methods;
 
     // Get layout for self type.
     let _layout = ctx

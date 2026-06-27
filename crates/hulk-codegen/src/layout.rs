@@ -217,15 +217,18 @@ pub fn build_vtables(ctx: &mut CodegenCtx, registry: &TypeRegistry) -> Result<()
 
         let mut fn_ptrs = Vec::new();
         for method_name in methods.keys() {
-            let qualified_name = format!("{}::{}", type_name, method_name);
+            let owner = owning_type_for_method(&type_name, method_name, registry)
+                .ok_or_else(|| CodegenError::LlvmVerification(format!(
+                    "method '{}' has no declaring type in the ancestor chain of '{}'",
+                    method_name, type_name
+                )))?;
+            let qualified_name = format!("{}::{}", owner, method_name);
             let fn_value = ctx
                 .functions
                 .get(&qualified_name)
                 .cloned()
-                .ok_or_else(|| {
-                    CodegenError::LlvmVerification(format!("method '{}' not declared", qualified_name))
-                })?;
-            let fn_ptr = fn_value.as_global_value().as_pointer_value();
+                .ok_or_else(|| CodegenError::LlvmVerification(format!("method '{}' not declared", qualified_name)))?;
+                        let fn_ptr = fn_value.as_global_value().as_pointer_value();
             fn_ptrs.push(fn_ptr.into());
         }
 
@@ -243,6 +246,23 @@ pub fn build_vtables(ctx: &mut CodegenCtx, registry: &TypeRegistry) -> Result<()
         }
     }
     Ok(())
+}
+
+/// Returns the name of the type that actually declares or overrides
+/// `method_name`, searching `type_name` and then its ancestors in order.
+pub fn owning_type_for_method(
+    type_name: &str,
+    method_name: &str,
+    registry: &TypeRegistry,
+) -> Option<String> {
+    let mut current = type_name.to_string();
+    loop {
+        let info = registry.lookup_type(&current)?;
+        if info.methods.contains_key(method_name) {
+            return Some(current);
+        }
+        current = info.parent.as_ref()?.name.clone();
+    }
 }
 
 #[cfg(test)]

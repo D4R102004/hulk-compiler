@@ -372,10 +372,11 @@ fn get_method_function<'ctx>(
     type_name: &str,
     method_name: &str,
 ) -> Result<inkwell::values::FunctionValue<'ctx>, CodegenError> {
-    // Try the qualified name first.
-    let qualified_name = format!("{}::{}", type_name, method_name);
-    if let Some(fn_val) = ctx.functions.get(&qualified_name) {
-        return Ok(*fn_val);
+    if let Some(owner) = crate::layout::owning_type_for_method(type_name, method_name, registry) {
+        let qualified_name = format!("{}::{}", owner, method_name);
+        if let Some(fn_val) = ctx.functions.get(&qualified_name) {
+            return Ok(*fn_val);
+        }
     }
 
     // Fallback for builtin types (hard‑coded mapping).
