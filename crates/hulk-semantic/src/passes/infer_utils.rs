@@ -27,7 +27,15 @@ pub fn patch_unknowns(
             if let ExprKind::Variable(callee_name) = &call.callee.kind {
                 if callee_name == current_function {
                     expr.anno = return_type.clone();
-                    call.callee.anno = return_type.clone(); // patch the nested callee too
+                    match &call.callee.anno {
+                        Type::Function { params, .. } => {
+                            call.callee.anno = Type::Function {
+                                params: params.clone(),
+                                return_type: Box::new(return_type.clone()),
+                            };
+                        }
+                        _ => call.callee.anno = return_type.clone(),
+                    }
                 }
             }
             // Cover methods that call themselves (e. g. via self.m())
@@ -35,7 +43,15 @@ pub fn patch_unknowns(
                 if member.member == *current_function {
                     if let ExprKind::SelfRef = member.object.kind {
                         expr.anno = return_type.clone();
-                        call.callee.anno = return_type.clone();
+                        match &call.callee.anno {
+                            Type::Function { params, .. } => {
+                                call.callee.anno = Type::Function {
+                                    params: params.clone(),
+                                    return_type: Box::new(return_type.clone()),
+                                };
+                            }
+                            _ => call.callee.anno = return_type.clone(),
+                        }
                     }
                 }
             }
