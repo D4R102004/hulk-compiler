@@ -2,13 +2,12 @@
 
 use inkwell::values::BasicValueEnum;
 
-use hulk_ast::{ForExpr, VectorComprehension};
+use hulk_ast::ForExpr;
 use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::call::lower_method_call;
 use crate::lower::LowerCtx;
-use crate::runtime_decls::ensure_decl;
 use super::lower_expr;
 
 /// Lowers a `for` loop.

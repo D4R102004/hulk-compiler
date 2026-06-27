@@ -20,6 +20,7 @@ use hulk_semantic::Type;
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
 use crate::lower::utils::{resolve_attribute_with_offset, resolve_type_ref_to_type, convert_to_protocol, is_heap_allocated_type, is_protocol_or_iterable};
+use crate::lower::builtins::lookup_constant;
 use super::lower_expr;
 
 /// Lowers a variable reference.
@@ -44,6 +45,13 @@ pub fn lower_variable<'ctx>(
     name: &str,
     span: Option<SourceSpan>,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+    // Built-in global constants lookup
+    if let Some(val) = lookup_constant(name) {
+        let float = ctx.codegen.context.f64_type().const_float(val);
+        return Ok(float.into());
+    }
+
+    // General variable lookup in the current lexical scope.
     ctx.load_var(name, span)
 }
 

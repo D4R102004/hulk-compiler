@@ -7,6 +7,7 @@ use hulk_semantic::{Type, TypedExpr};
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
+use crate::lower::builtins::lower_builtin_call;
 use crate::lower::utils::llvm_type;
 use crate::lower::utils::is_protocol_or_iterable as is_protocol_type;
 use crate::layout::has_subtypes;
@@ -35,6 +36,11 @@ pub fn lower_call<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     call: &CallExpr<Type>,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+    // Try built-in functions first
+    if let Some(result) = lower_builtin_call(ctx, call) {
+        return result;
+    }
+
     match &call.callee.kind {
         // ─── Global function call ──────────────────────────────────────────
 
