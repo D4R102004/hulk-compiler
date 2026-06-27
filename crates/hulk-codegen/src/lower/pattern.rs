@@ -27,8 +27,9 @@ use super::lower_expr;
 pub fn lower_match<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     match_expr: &MatchExpr<Type>,
+    result_type: &Type,
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-    let result_ty = llvm_type(ctx.codegen, ctx.registry, &match_expr.value.anno)?;
+    let result_ty = llvm_type(ctx.codegen, ctx.registry, result_type)?;
     let result_alloca = ctx
         .codegen
         .builder
@@ -37,7 +38,7 @@ pub fn lower_match<'ctx>(
 
     // Store a dummy default value (zero/null) – it is only used if the
     // match is non‑exhaustive, which will call `match_fail` instead.
-    let dummy: BasicValueEnum<'ctx> = match &match_expr.value.anno {
+    let dummy: BasicValueEnum<'ctx> = match result_type {
         Type::Number => {
             let val = ctx.codegen.context.f64_type().const_float(0.0);
             BasicValueEnum::FloatValue(val)
@@ -167,7 +168,7 @@ pub fn lower_match<'ctx>(
             ctx,
             body_val,
             &case.body.anno,
-            &match_expr.value.anno, // The match's result type.
+            result_type, // The match's result type.
         )?;
 
         // Store the (possibly boxed) body value in the result alloca.
