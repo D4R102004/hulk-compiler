@@ -475,8 +475,14 @@ mod tests {
         lower::method::declare_methods(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("declare methods");
 
-        // 7. Build vtables.
+        // 7. Build vtables and itables for every (type, protocol) pair the program actually uses.
         layout::build_vtables(&mut codegen, &verified.registry).expect("build vtables");
+
+        itables::build_itables(&mut codegen, &verified.registry, &verified.typed_program)
+            .expect("build itables");
+
+        lower::decl::define_functions(&mut codegen, &verified.typed_program, &verified.registry)
+            .expect("define functions");
 
         // 8. Define free functions and methods.
         lower::decl::define_functions(&mut codegen, &verified.typed_program, &verified.registry)

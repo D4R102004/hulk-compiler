@@ -89,9 +89,9 @@ pub fn lower_let<'ctx>(
             init_ty.clone()
         };
         // 3. If the declared type is a protocol and the initializer is concrete, convert.
-        if ctx.registry.is_protocol(&declared_ty) {
+        if utils::is_protocol_or_iterable(&declared_ty, ctx.registry) {
             if let Type::Named(_) = init_ty {
-                if !ctx.registry.is_protocol(init_ty) {
+                if !utils::is_protocol_or_iterable(init_ty, ctx.registry) {
                     init_val = convert_to_protocol(ctx, init_val, init_ty, &declared_ty)?;
                 }
             }

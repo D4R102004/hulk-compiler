@@ -8,6 +8,7 @@ use hulk_semantic::{Type, TypedExpr, TypeRegistry};
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
 use crate::lower::utils::llvm_type;
+use crate::lower::utils::is_protocol_or_iterable as is_protocol_type;
 use super::lower_expr;
 
 /// Lowers a call expression.
@@ -577,17 +578,4 @@ fn lower_protocol_call<'ctx>(
         .build_indirect_call(fn_type, fn_ptr_typed, &call_args, "itable_call")
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
     Ok(call_site.try_as_basic_value().unwrap_basic())
-}
-
-// ===========================================================
-//                       HELPERS
-// ===========================================================
-
-/// Returns `true` if `ty` is a protocol (including the builtin `Iterable`).
-fn is_protocol_type(ty: &Type, registry: &TypeRegistry) -> bool {
-    match ty {
-        Type::Named(_name) => registry.is_protocol(ty),
-        Type::Iterable(_) => true,
-        _ => false,
-    }
 }
