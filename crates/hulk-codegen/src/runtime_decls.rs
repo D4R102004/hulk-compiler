@@ -165,54 +165,85 @@ pub fn declare_dynamic_vector_to_vector<'ctx>(ctx: &CodegenCtx<'ctx>) -> Functio
 // ─── Declare all runtime functions ───────────────────────────────────────────
 
 /// Declares all standard runtime functions and inserts them into `ctx.functions`.
+///
+/// Each function is inserted under two names where applicable:
+/// - The qualified name `"Type::method"` for itable/vtable dispatch.
+/// - The raw runtime symbol name `"hulk_rt_*"` for direct calls.
 pub fn declare_all(ctx: &mut CodegenCtx) {
-    // Basic runtime functions
+    // ─── Basic runtime functions ──────────────────────────────────────────
+
     let alloc = declare_alloc(ctx);
     ctx.functions.insert("hulk_rt_alloc".to_string(), alloc);
+
     let concat = declare_string_concat(ctx);
     ctx.functions.insert("hulk_rt_string_concat".to_string(), concat);
+
     let concat_space = declare_string_concat_space(ctx);
     ctx.functions.insert("hulk_rt_string_concat_space".to_string(), concat_space);
+
     let num_to_str = declare_number_to_string(ctx);
     ctx.functions.insert("hulk_rt_number_to_string".to_string(), num_to_str);
+
     let bool_to_str = declare_bool_to_string(ctx);
     ctx.functions.insert("hulk_rt_bool_to_string".to_string(), bool_to_str);
+
     let downcast_check = declare_downcast_check(ctx);
     ctx.functions.insert("hulk_rt_downcast_check".to_string(), downcast_check);
+
     let downcast_fail = declare_downcast_fail(ctx);
     ctx.functions.insert("hulk_rt_downcast_fail".to_string(), downcast_fail);
 
-    // Vector methods
+    // ─── Vector builtin methods ───────────────────────────────────────────
+    // Insert under both qualified and raw names.
+
     let vec_size = declare_vector_size(ctx);
     ctx.functions.insert("Vector::size".to_string(), vec_size);
+    ctx.functions.insert("hulk_rt_vector_size".to_string(), vec_size);
+
     let vec_get = declare_vector_get(ctx);
     ctx.functions.insert("Vector::get".to_string(), vec_get);
+    ctx.functions.insert("hulk_rt_vector_get".to_string(), vec_get);
+
     let vec_set = declare_vector_set(ctx);
     ctx.functions.insert("Vector::set".to_string(), vec_set);
+    ctx.functions.insert("hulk_rt_vector_set".to_string(), vec_set);
+
     let vec_next = declare_vector_next(ctx);
     ctx.functions.insert("Vector::next".to_string(), vec_next);
+    ctx.functions.insert("hulk_rt_vector_next".to_string(), vec_next);
+
     let vec_current = declare_vector_current(ctx);
     ctx.functions.insert("Vector::current".to_string(), vec_current);
+    ctx.functions.insert("hulk_rt_vector_current".to_string(), vec_current);
 
-    // Range methods
+    // ─── Range builtin methods ────────────────────────────────────────────
+
     let range_next = declare_range_next(ctx);
     ctx.functions.insert("Range::next".to_string(), range_next);
+    ctx.functions.insert("hulk_rt_range_next".to_string(), range_next);
+
     let range_current = declare_range_current(ctx);
     ctx.functions.insert("Range::current".to_string(), range_current);
+    ctx.functions.insert("hulk_rt_range_current".to_string(), range_current);
 
-    // Match fail trap
+    // ─── Match fail trap ──────────────────────────────────────────────────
+
     let match_fail = declare_match_fail(ctx);
     ctx.functions.insert("hulk_rt_match_fail".to_string(), match_fail);
 
-    // String equality
+    // ─── String equality ──────────────────────────────────────────────────
+
     let str_eq = declare_string_equals(ctx);
     ctx.functions.insert("hulk_rt_string_equals".to_string(), str_eq);
 
-    // Dynamic vector helpers for comprehensions
+    // ─── Dynamic vector helpers (comprehensions) ─────────────────────────
+
     let dyn_new = declare_dynamic_vector_new(ctx);
     ctx.functions.insert("hulk_rt_dynamic_vector_new".to_string(), dyn_new);
+
     let dyn_append = declare_dynamic_vector_append(ctx);
     ctx.functions.insert("hulk_rt_dynamic_vector_append".to_string(), dyn_append);
+
     let dyn_to_vec = declare_dynamic_vector_to_vector(ctx);
     ctx.functions.insert("hulk_rt_dynamic_vector_to_vector".to_string(), dyn_to_vec);
 }

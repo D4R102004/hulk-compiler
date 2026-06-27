@@ -143,7 +143,7 @@ pub fn lower_for<'ctx>(
         .builder
         .build_store(var_ptr, current_val)
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
-    ctx.scope_stack.declare(&for_expr.var, var_ptr, elem_llvm_ty);
+    ctx.scope_stack.declare(&for_expr.var, var_ptr, elem_llvm_ty, elem_ty.clone());
 
     // Lower the body.
     let body_val = lower_expr(ctx, body_expr)?;
@@ -261,11 +261,15 @@ pub fn lower_vector_comprehension<'ctx>(
         .builder
         .build_store(var_ptr, current_val)
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
-    ctx.scope_stack.declare(&comp.var, var_ptr, elem_llvm_ty);
+    ctx.scope_stack.declare(&comp.var, var_ptr, elem_llvm_ty, elem_ty.clone());
 
     // Lower the head expression.
-    let head_val = lower_expr(ctx, head_expr)?;
-    ctx.pop_scope();
+    let mut head_val = lower_expr(ctx, head_expr)?;
+
+    // If the element type is primitive (Number, Boolean), box it for storage in vector.
+    if matches!(elem_ty, Type::Number | Type::Boolean) {
+        head_val = crate::lower::utils::box_primitive(ctx, head_val, &elem_ty)?;
+    }
 
     // Append to dynamic vector.
     let append_fn = ctx

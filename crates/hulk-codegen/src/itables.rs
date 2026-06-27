@@ -7,11 +7,12 @@
 
 use std::collections::HashSet;
 
-use hulk_ast::{DeclarationKind, Expr, ExprKind, Program, TypeRef, TypeMemberKind, VectorExpr};
+use hulk_ast::{DeclarationKind, Expr, ExprKind, Program, TypeMemberKind, VectorExpr};
 use hulk_semantic::{Type, TypeRegistry};
 
 use crate::context::CodegenCtx;
 use crate::error::CodegenError;
+use crate::lower::utils::resolve_type_ref_to_type;
 
 /// A pair `(type_name, protocol_name)` that requires an itable.
 type ItablePair = (String, String);
@@ -128,7 +129,7 @@ fn collect_used_pairs(
                     let expected_ty = binding
                         .type_annotation
                         .as_ref()
-                        .and_then(|tr| resolve_type_ref_to_type(tr, registry));
+                        .and_then(|tr| Some(resolve_type_ref_to_type(tr, registry)));
                     walk_expr(
                         &binding.initializer,
                         expected_ty.as_ref(),
@@ -219,8 +220,9 @@ fn collect_used_pairs(
             ExprKind::Downcast(downcast) => {
                 let src_ty = &downcast.expr.anno;
                 let target_ty = resolve_type_ref_to_type(&downcast.type_name, registry);
-                if let Some(tgt) = &target_ty {
-                    record_conversion(src_ty, tgt, registry, pairs);
+                // Only record conversion if the target type is a protocol.
+                if registry.is_protocol(&target_ty) {
+                    record_conversion(src_ty, &target_ty, registry, pairs);
                 }
                 walk_expr(&downcast.expr, None, registry, pairs, visitor);
             }
@@ -265,7 +267,7 @@ fn collect_used_pairs(
                 let return_ty = f
                     .return_type
                     .as_ref()
-                    .and_then(|tr| resolve_type_ref_to_type(tr, registry));
+                    .and_then(|tr| Some(resolve_type_ref_to_type(tr, registry)));
                 walk_expr(
                     &f.body,
                     return_ty.as_ref(),
@@ -282,7 +284,7 @@ fn collect_used_pairs(
                             let expected_ty = attr
                                 .type_annotation
                                 .as_ref()
-                                .and_then(|tr| resolve_type_ref_to_type(tr, registry));
+                                .and_then(|tr| Some(resolve_type_ref_to_type(tr, registry)));
                             walk_expr(
                                 &attr.initializer,
                                 expected_ty.as_ref(),
@@ -295,7 +297,7 @@ fn collect_used_pairs(
                             let return_ty = m
                                 .return_type
                                 .as_ref()
-                                .and_then(|tr| resolve_type_ref_to_type(tr, registry));
+                                .and_then(|tr| Some(resolve_type_ref_to_type(tr, registry)));
                             walk_expr(
                                 &m.body,
                                 return_ty.as_ref(),
@@ -316,35 +318,6 @@ fn collect_used_pairs(
     walk_expr(&program.entry, None, registry, &mut pairs, &mut visitor);
 
     pairs
-}
-
-/// Attempts to resolve a syntactic `TypeRef` to a semantic `Type` using the registry.
-///
-/// This is a simplified version of the resolver used in the inference pass.
-/// It only needs to determine if the type is a protocol, so it handles
-/// builtins and user‑defined types by name.
-fn resolve_type_ref_to_type(tr: &TypeRef, registry: &TypeRegistry) -> Option<Type> {
-    match tr.name.as_str() {
-        "Number" => Some(Type::Number),
-        "String" => Some(Type::String),
-        "Boolean" => Some(Type::Boolean),
-        "Object" => Some(Type::Object),
-        "Vector" if !tr.args.is_empty() => {
-            // We don't need the inner type for protocol detection.
-            Some(Type::Vector(Box::new(Type::Unknown)))
-        }
-        "Iterable" if !tr.args.is_empty() => {
-            Some(Type::Iterable(Box::new(Type::Unknown)))
-        }
-        name => {
-            // It could be a user‑defined type or protocol.
-            if registry.types.contains_key(name) || registry.protocols.contains_key(name) {
-                Some(Type::Named(name.to_string()))
-            } else {
-                None
-            }
-        }
-    }
 }
 
 /// Builds a single itable for a given `(type_name, protocol_name)` pair.

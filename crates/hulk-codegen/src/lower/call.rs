@@ -1,6 +1,6 @@
 //! Lowering of function and method calls.
 
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
+use inkwell::values::BasicValueEnum;
 use inkwell::types::BasicType;
 use hulk_ast::{CallExpr, SourceSpan};
 use hulk_semantic::{Type, TypedExpr, TypeRegistry};
@@ -38,15 +38,22 @@ pub fn lower_call<'ctx>(
 
         hulk_ast::ExprKind::Variable(name) => {
             if let Some(fn_val) = ctx.codegen.functions.get(name).copied() {
-                // Lower arguments.
-                let args: Vec<BasicMetadataValueEnum> = call
-                    .args
-                    .iter()
-                    .map(|arg| lower_expr(ctx, arg))
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .map(|val| val.into())
-                    .collect();
+                // Get the function signature from registry.
+                let sig = ctx.registry.lookup_function(name)
+                    .ok_or_else(|| CodegenError::Unsupported {
+                        construct: format!("function '{}' not in registry", name),
+                    })?;
+
+                // Lower and box arguments if needed.
+                let mut args = Vec::new();
+                for (arg_expr, (_, param_ty)) in call.args.iter().zip(&sig.params) {
+                    let mut arg_val = lower_expr(ctx, arg_expr)?;
+                    // If parameter type is Object, ensure argument is boxed.
+                    if matches!(param_ty, Type::Object) {
+                        arg_val = crate::lower::utils::ensure_boxed(ctx, arg_val, &arg_expr.anno, param_ty)?;
+                    }
+                    args.push(arg_val.into());
+                }
 
                 let call_site = ctx
                     .codegen

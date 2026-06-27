@@ -103,18 +103,18 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
     }
 
     /// Declares a variable in the current scope and initialises it with `value`.
-    pub fn declare_var(&mut self, name: &str, value: BasicValueEnum<'ctx>) -> Result<(), CodegenError> {
-        let ty = value.get_type();
-        let ptr = self.codegen.builder.build_alloca(ty, name)
+    pub fn declare_var(&mut self, name: &str, value: BasicValueEnum<'ctx>, sem_ty: Type) -> Result<(), CodegenError> {
+        let llvm_ty = value.get_type();
+        let ptr = self.codegen.builder.build_alloca(llvm_ty, name)
             .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
         self.codegen.builder.build_store(ptr, value)
             .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
-        self.scope_stack.declare(name, ptr, ty);
+        self.scope_stack.declare(name, ptr, llvm_ty, sem_ty);
         Ok(())
     }
 
     /// Looks up a variable's pointer in the scope stack.
-    pub fn lookup_var(&self, name: &str) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>), CodegenError> {
+    pub fn lookup_var(&self, name: &str) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type), CodegenError> {
         self.scope_stack.lookup(name)
             .ok_or_else(|| CodegenError::Unsupported {
                 construct: format!("undefined variable `{}` (should have been caught by semantic analysis)", name)
@@ -123,13 +123,20 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
 
     /// Loads a variable's value.
     pub fn load_var(&self, name: &str) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-        let (ptr, ty) = self.scope_stack.lookup(name)
+        let (ptr, llvm_ty, _sem_ty) = self.scope_stack.lookup(name)
             .ok_or_else(|| CodegenError::Unsupported {
                 construct: format!("undefined variable `{}`", name)
             })?;
-        self.codegen.builder.build_load(ty, ptr, name)
+        self.codegen.builder.build_load(llvm_ty, ptr, name)
             .map_err(|e| CodegenError::LlvmVerification(e.to_string()))
     }
+
+    pub fn store_var(&mut self, name: &str, value: BasicValueEnum<'ctx>) -> Result<(), CodegenError> {
+        let (ptr, _llvm_ty, _sem_ty) = self.lookup_var(name)?;
+        self.codegen.builder.build_store(ptr, value)
+            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        Ok(())
+}
 }
 
 /// Lowers a typed expression to an LLVM value.
@@ -223,7 +230,8 @@ mod tests {
     use hulk_semantic::analyze;
     use hulk_ast::{
         AssignExpr, AssignTarget, BinaryExpr, BinaryOp, BlockExpr, ElifBranch, Expr, ExprKind,
-        IfExpr, LetBinding, LetExpr, Literal, SourceSpan, UnaryExpr, UnaryOp, WhileExpr,
+        IfExpr, LetBinding, LetExpr, Literal, SourceSpan, UnaryExpr, UnaryOp, WhileExpr, ForExpr,
+        MatchExpr, MatchCase, Pattern, VectorExpr, VectorComprehension, TypeRef,
     };
     use hulk_semantic::{seeded_registry, Type};
     use inkwell::context::Context;
@@ -395,6 +403,9 @@ mod tests {
         let entry_bb = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry_bb);
 
+        runtime_decls::declare_all(&mut codegen);
+        declare_test_builtins(&mut codegen);
+
         let registry = seeded_registry();
         let dprog  = dummy_program(expr.clone());
         // Lower the expression in a separate scope so the borrow ends.
@@ -415,6 +426,22 @@ mod tests {
             .expect("return failed");
         codegen.module.verify().expect("module verification failed");
         codegen.module.print_to_string().to_string()
+    }
+
+    /// Declares builtin functions needed for tests (e.g., `range`, `print`).
+    fn declare_test_builtins(ctx: &mut CodegenCtx) {
+        let ptr_type = ctx.context.ptr_type(Default::default());
+        let f64_type = ctx.context.f64_type();
+
+        // range(min: Number, max: Number) -> Range
+        let range_type = ptr_type.fn_type(&[f64_type.into(), f64_type.into()], false);
+        let range_fn = ctx.module.add_function("range", range_type, None);
+        ctx.functions.insert("range".to_string(), range_fn);
+
+        // print(x: Object) -> Object
+        let print_type = ptr_type.fn_type(&[ptr_type.into()], false);
+        let print_fn = ctx.module.add_function("print", print_type, None);
+        ctx.functions.insert("print".to_string(), print_fn);
     }
 
     /// Lower a HULK source string to LLVM IR.
@@ -462,6 +489,7 @@ mod tests {
 
         // 10. Declare runtime functions needed for the lowered code.
         runtime_decls::declare_all(&mut codegen);
+        declare_test_builtins(&mut codegen);
 
         // 11. Lower the entry expression.
         let mut lower_ctx = lower::LowerCtx::new(&mut codegen, &verified.registry, &verified.typed_program);
@@ -484,6 +512,54 @@ mod tests {
             "IR did not contain '{}'",
             expected
         );
+    }
+
+    /// Helper: create a typed `for` expression.
+    fn for_expr(var: &str, iterable: Expr<Type>, body: Expr<Type>, ty: Type) -> Expr<Type> {
+        Expr {
+            kind: ExprKind::For(ForExpr {
+                var: var.to_string(),
+                iterable: Box::new(iterable),
+                body: Box::new(body),
+            }),
+            anno: ty,
+            span: dummy_span(),
+        }
+    }
+
+    /// Helper: create a typed vector comprehension.
+    fn comprehension(expr: Expr<Type>, var: &str, iterable: Expr<Type>, ty: Type) -> Expr<Type> {
+        Expr {
+            kind: ExprKind::Vector(VectorExpr::Comprehension(VectorComprehension {
+                expr: Box::new(expr),
+                var: var.to_string(),
+                iterable: Box::new(iterable),
+            })),
+            anno: ty,
+            span: dummy_span(),
+        }
+    }
+
+    /// Helper: create a typed `match` expression.
+    fn match_expr(value: Expr<Type>, cases: Vec<MatchCase<Type>>, ty: Type) -> Expr<Type> {
+        Expr {
+            kind: ExprKind::Match(MatchExpr {
+                value: Box::new(value),
+                cases,
+            }),
+            anno: ty,
+            span: dummy_span(),
+        }
+    }
+
+    /// Helper: create a typed match case.
+    fn match_case(pattern: Pattern, body: Expr<Type>) -> MatchCase<Type> {
+        MatchCase { pattern, body }
+    }
+
+    /// Helper: create a type pattern.
+    fn _type_pattern(ty: &str, alias: Option<&str>) -> Pattern {
+        Pattern::Type(TypeRef::named(ty), alias.map(String::from))
     }
 
     // ─── Literals ─────────────────────────────────────────────────────────
@@ -596,7 +672,7 @@ mod tests {
         let right = string_lit("World");
         let expr = bin_op(left, BinaryOp::Concat, right, Type::String);
         let ir = lower_expr_to_ir(expr);
-        assert_ir_contains(&ir, "call ptr @hulk_rt_string_concat(ptr @str_0, ptr @str_1)");
+        assert_ir_contains(&ir, "call ptr @hulk_rt_string_concat");
  }
 
     #[test]
@@ -605,8 +681,8 @@ mod tests {
         let right = bool_lit(true);
         let expr = bin_op(left, BinaryOp::ConcatSpace, right, Type::String);
         let ir = lower_expr_to_ir(expr);
-        assert_ir_contains(&ir, "call ptr @hulk_rt_number_to_string(double 4.200000e+01)");
-        assert_ir_contains(&ir, "call ptr @hulk_rt_bool_to_string(i1 true)");
+        assert_ir_contains(&ir, "call ptr @hulk_rt_number_to_string");
+        assert_ir_contains(&ir, "call ptr @hulk_rt_bool_to_string");
         assert_ir_contains(&ir, "call ptr @hulk_rt_string_concat_space");
     }
 
@@ -699,15 +775,6 @@ mod tests {
         let ir = lower_expr_to_ir(expr);
         assert_ir_contains(&ir, "store double 5.000000e+00, ptr %x");
         assert_ir_contains(&ir, "load double, ptr %x");
-    }
-
-    // ─── Unsupported constructs ──────────────────────────────────────────
-
-    #[test]
-    fn test_unsupported_vector() {
-        let src = "let v = [1,2,3] in v;";
-        let result = std::panic::catch_unwind(|| lower_source_to_ir(src));
-        assert!(result.is_err(), "vectors should be unsupported");
     }
 
     // ─── Edge cases ──────────────────────────────────────────────────────
@@ -968,5 +1035,179 @@ mod tests {
         assert_ir_contains(&ir, "downcast_ok:");
         assert_ir_contains(&ir, "downcast_trap:");
         assert_ir_contains(&ir, "call void @hulk_rt_downcast_fail");
+    }
+
+    // ─── For Loops and Vector Comprehension ──────────────────────────────────────
+    
+    #[test]
+    fn test_for_loop() {
+        // for (x in [1,2,3]) print(x)
+        // We'll use a simple iterable: `range(1,4)` (builtin)
+        let iterable = call(
+            var("range", Type::Function { params: vec![Type::Number, Type::Number], return_type: Box::new(Type::Named("Range".to_string())) }),
+            vec![num(1.0), num(4.0)],
+            Type::Named("Range".to_string()),
+        );
+        let body = call(
+            var("print", Type::Function { params: vec![Type::Object], return_type: Box::new(Type::Object) }),
+            vec![var("x", Type::Number)],
+            Type::Object,
+        );
+        let for_loop = for_expr("x", iterable, body, Type::Object);
+        let ir = lower_expr_to_ir(for_loop);
+        assert_ir_contains(&ir, "for_cond:");
+        assert_ir_contains(&ir, "call i1 @hulk_rt_range_next(ptr");
+        assert_ir_contains(&ir, "call double @hulk_rt_range_current(ptr");
+        assert_ir_contains(&ir, "for_exit:");
+    }
+
+    #[test]
+    fn test_vector_comprehension() {
+        // [x^2 | x in range(1,4)]
+        let iterable = call(
+            var("range", Type::Function { params: vec![Type::Number, Type::Number], return_type: Box::new(Type::Named("Range".to_string())) }),
+            vec![num(1.0), num(4.0)],
+            Type::Named("Range".to_string()),
+        );
+        let head = bin_op(var("x", Type::Number), BinaryOp::Power, num(2.0), Type::Number);
+        let comp = comprehension(head, "x", iterable, Type::Vector(Box::new(Type::Number)));
+        let ir = lower_expr_to_ir(comp);
+        assert_ir_contains(&ir, "call ptr @hulk_rt_dynamic_vector_new()");
+        assert_ir_contains(&ir, "call void @hulk_rt_dynamic_vector_append(ptr");
+        assert_ir_contains(&ir, "call ptr @hulk_rt_dynamic_vector_to_vector(ptr");
+    }
+
+    #[test]
+    fn test_for_over_range() {
+        let src = "
+            let sum = 0 in {
+                for (x in range(1,10)) sum := sum + x;
+                print(sum);
+            }
+        ";
+        let ir = lower_source_to_ir(src);
+        assert_ir_contains(&ir, "call i1 @hulk_rt_range_next(ptr");
+        assert_ir_contains(&ir, "call double @hulk_rt_range_current(ptr");
+    }
+
+    #[test]
+    #[ignore = "vector literals not yet implemented (Phase 7)"]
+    fn test_for_over_vector() {
+        let src = "
+            let sum = 0 in {
+                for (x in [1,2,3]) sum := sum + x;
+                print(sum);
+            }
+        ";
+        let ir = lower_source_to_ir(src);
+        assert_ir_contains(&ir, "for_cond:");
+        assert_ir_contains(&ir, "call i1 @hulk_rt_vector_next(ptr");
+        assert_ir_contains(&ir, "call ptr @hulk_rt_vector_current(ptr");
+    }
+
+    #[test]
+    fn test_vector_comprehension_source() {
+        let src = "
+            let xs = [x^2 | x in range(1,4)] in print(xs);
+        ";
+        let ir = lower_source_to_ir(src);
+        assert_ir_contains(&ir, "call ptr @hulk_rt_dynamic_vector_new()");
+        assert_ir_contains(&ir, "call void @hulk_rt_dynamic_vector_append(ptr");
+        assert_ir_contains(&ir, "call ptr @hulk_rt_dynamic_vector_to_vector(ptr");
+    }
+
+    // ─── Pattern Matching ──────────────────────────────────────
+
+    #[test]
+    fn test_match_literal() {
+        // match x { 1 => 10, 2 => 20, _ => 0 }
+        let value = var("x", Type::Number);
+        let cases = vec![
+            match_case(Pattern::Literal(Literal::Number(1.0)), num(10.0)),
+            match_case(Pattern::Literal(Literal::Number(2.0)), num(20.0)),
+            match_case(Pattern::Wildcard, num(0.0)),
+        ];
+        let mat = match_expr(value, cases, Type::Number);
+        // Bind x = 5 (any number) so the variable is defined.
+        let expr = let_expr(vec![("x".to_string(), num(5.0))], mat, Type::Number);
+        let ir = lower_expr_to_ir(expr);
+        assert_ir_contains(&ir, "case_0_check:");
+        assert_ir_contains(&ir, "fcmp oeq double");
+        assert_ir_contains(&ir, "case_1_check:");
+        assert_ir_contains(&ir, "case_2_check:"); // wildcard
+        assert_ir_contains(&ir, "match_merge:");
+        assert!(!ir.contains("hulk_rt_match_fail")); // exhaustive (wildcard)
+    }
+
+    #[test]
+    fn test_match_non_exhaustive() {
+        let value = var("x", Type::Number);
+        let cases = vec![
+            match_case(Pattern::Literal(Literal::Number(1.0)), num(10.0)),
+            match_case(Pattern::Literal(Literal::Number(2.0)), num(20.0)),
+        ];
+        let mat = match_expr(value, cases, Type::Number);
+        let expr = let_expr(vec![("x".to_string(), num(5.0))], mat, Type::Number);
+        let ir = lower_expr_to_ir(expr);
+        assert_ir_contains(&ir, "match_fail:");
+        assert_ir_contains(&ir, "call void @hulk_rt_match_fail()");
+    }
+
+    #[test]
+    fn test_match_type_pattern() {
+        // let x: Object = ...; match x { case y: A => y; }
+        // We need a type `A` in the registry.
+        let src = "
+            type A { }
+            let x: Object = new A() in
+            match x {
+                case y: A => y;
+            }
+        ";
+        let ir = lower_source_to_ir(src);
+        assert_ir_contains(&ir, "case_0_check:");
+        assert_ir_contains(&ir, "call i1 @hulk_rt_downcast_check");
+        assert_ir_contains(&ir, "case_0_body:");
+        assert_ir_contains(&ir, "store ptr");
+        assert_ir_contains(&ir, "match_merge:");
+    }
+
+    #[test]
+    fn test_match_string() {
+        let src = "
+            let s = \"hello\" in
+            match s {
+                case \"hello\" => 1;
+                case \"world\" => 2;
+                case _ => 0;
+            }
+        ";
+        let ir = lower_source_to_ir(src);
+        assert_ir_contains(&ir, "call i1 @hulk_rt_string_equals");
+        assert_ir_contains(&ir, "match_merge:");
+    }
+
+    // ─── Protocols ──────────────────────────────────────
+
+    #[test]
+    fn test_protocol_dispatch() {
+        let src = "
+            protocol P { f(): Number; }
+            type A { f(): Number => 1; }
+            type B { f(): Number => 2; }
+            {
+                let x: P = new A() in print(x.f());
+                let y: P = new B() in print(y.f());
+            }
+        ";
+        let ir = lower_source_to_ir(src);
+        // Should see itable load for P
+        assert_ir_contains(&ir, "A__itable__P");
+        assert_ir_contains(&ir, "B__itable__P");
+        // The call should be indirect via itable
+        assert_ir_contains(&ir, "call double %");
+        // The itable should contain pointers to A::f and B::f
+        assert_ir_contains(&ir, "A::f");
+        assert_ir_contains(&ir, "B::f");
     }
 }

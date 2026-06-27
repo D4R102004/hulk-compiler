@@ -13,12 +13,13 @@
 //!   subsequent bindings can refer to earlier ones.
 //! - A plain `Block` does not introduce a new scope (handled in `control.rs`).
 
+use inkwell::values::BasicValueEnum;
 use hulk_ast::{AssignExpr, LetExpr};
 use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
-use crate::lower::utils::resolve_attribute_with_offset;
+use crate::lower::utils::{resolve_attribute_with_offset, resolve_type_ref_to_type, convert_to_protocol};
 use super::lower_expr;
 
 /// Lowers a variable reference.
@@ -73,12 +74,33 @@ pub fn lower_variable<'ctx>(
 pub fn lower_let<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     let_expr: &LetExpr<Type>,
-) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+) -> Result<BasicValueEnum<'ctx>, CodegenError> {
     ctx.push_scope();
+
     for binding in &let_expr.bindings {
-        let init = lower_expr(ctx, &binding.initializer)?;
-        ctx.declare_var(&binding.name, init)?;
+        // 1. Lower the initializer.
+        let mut init_val = lower_expr(ctx, &binding.initializer)?;
+        let init_ty = &binding.initializer.anno;
+
+        // 2. Determine the declared type from the annotation, or fallback to initializer type.
+        let declared_ty = if let Some(ann) = &binding.type_annotation {
+            resolve_type_ref_to_type(ann, ctx.registry)
+        } else {
+            init_ty.clone()
+        };
+        // 3. If the declared type is a protocol and the initializer is concrete, convert.
+        if ctx.registry.is_protocol(&declared_ty) {
+            if let Type::Named(_) = init_ty {
+                if !ctx.registry.is_protocol(init_ty) {
+                    init_val = convert_to_protocol(ctx, init_val, init_ty, &declared_ty)?;
+                }
+            }
+        }
+
+        // 4. Declare the variable with the resolved semantic type.
+        ctx.declare_var(&binding.name, init_val, declared_ty)?;
     }
+
     let body_val = lower_expr(ctx, &let_expr.body)?;
     ctx.pop_scope();
     Ok(body_val)
@@ -112,12 +134,32 @@ pub fn lower_assign<'ctx>(
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     match &assign.target {
         hulk_ast::AssignTarget::Variable(name) => {
-            let val = lower_expr(ctx, &assign.value)?;
-            let (ptr, _ty) = ctx.lookup_var(name)?;
-            ctx.codegen.builder
-                .build_store(ptr, val)
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
-            Ok(val)
+            // 1. Look up the variable's LLVM pointer and semantic type.
+            let (_ptr, _llvm_ty, target_ty) = ctx.lookup_var(name)?;
+
+            // 2. Lower the value to be stored.
+            let mut stored_val = lower_expr(ctx, &assign.value)?;
+            let val_ty = &assign.value.anno;
+
+            // 3. If the target is a protocol and the source is a concrete class, convert.
+            if ctx.registry.is_protocol(&target_ty) {
+                if let Type::Named(_) = val_ty {
+                    if !ctx.registry.is_protocol(val_ty) {
+                        stored_val = crate::lower::utils::convert_to_protocol(
+                            ctx,
+                            stored_val,
+                            val_ty,
+                            &target_ty,
+                        )?;
+                    }
+                }
+            }
+
+            // 4. Store the (possibly converted) value.
+            ctx.store_var(name, stored_val)?;
+
+            // 5. The assignment expression returns the stored value.
+            Ok(stored_val)
         }
         hulk_ast::AssignTarget::Member { object, field } => {
             // 1. Lower the object expression to get a pointer.

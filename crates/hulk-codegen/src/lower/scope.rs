@@ -4,11 +4,12 @@ use std::collections::HashMap;
 
 use inkwell::values::PointerValue;
 use inkwell::types::BasicTypeEnum;
+use hulk_semantic::Type;
 
 /// A stack of scopes, each mapping a variable name to its LLVM `alloca` pointer.
 #[derive(Default)]
 pub struct ScopeStack<'ctx> {
-    scopes: Vec<HashMap<String,(PointerValue<'ctx>, BasicTypeEnum<'ctx>)>>,
+    scopes: Vec<HashMap<String,(PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type)>>,
 }
 
 impl<'ctx> ScopeStack<'ctx> {
@@ -32,16 +33,16 @@ impl<'ctx> ScopeStack<'ctx> {
     /// Declares a variable in the innermost scope.
     ///
     /// Overwrites any existing binding with the same name in that scope.
-    pub fn declare(&mut self, name: &str, ptr: PointerValue<'ctx>, ty: BasicTypeEnum<'ctx>) {
+    pub fn declare(&mut self, name: &str, ptr: PointerValue<'ctx>, llvm_ty: BasicTypeEnum<'ctx>, sem_ty: Type) {
         let scope = self.scopes.last_mut().expect("no scope to declare into");
-        scope.insert(name.to_string(), (ptr, ty));
+        scope.insert(name.to_string(), (ptr, llvm_ty, sem_ty));
     }
 
     /// Looks up a variable starting from the innermost scope outward.
-    pub fn lookup(&self, name: &str) -> Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>)> {
+    pub fn lookup(&self, name: &str) -> Option<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type)> {
         for scope in self.scopes.iter().rev() {
-            if let Some(entry) = scope.get(name) {
-                return Some(*entry);
+            if let Some((ptr, llvm_ty, sem_ty)) = scope.get(name) {
+                return Some((*ptr, *llvm_ty, sem_ty.clone()));
             }
         }
         None
