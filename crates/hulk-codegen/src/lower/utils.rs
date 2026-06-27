@@ -299,7 +299,7 @@ pub fn box_primitive<'ctx>(
         .get("hulk_rt_alloc")
         .cloned()
         .ok_or_else(|| CodegenError::unsupported(
-            "hulk_rt_alloc not declared".into(),
+            "hulk_rt_alloc not declared",
             None
         ))?;
 

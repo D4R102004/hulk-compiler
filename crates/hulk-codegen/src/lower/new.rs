@@ -1,6 +1,6 @@
 //! Lowering of object construction (`new T(args)`).
 
-use hulk_ast::{NewExpr, TypeDecl, TypeMemberKind};
+use hulk_ast::{NewExpr, TypeDecl, TypeMemberKind, SourceSpan};
 use hulk_semantic::{Type, TypeRegistry};
 
 use crate::error::CodegenError;
@@ -59,7 +59,7 @@ pub fn lower_new<'ctx>(
     let alloc_fn = ctx.codegen.functions.get("hulk_rt_alloc")
         .cloned()
         .ok_or_else(|| CodegenError::unsupported (
-            "hulk_rt_alloc not declared".into(),
+            "hulk_rt_alloc not declared",
             span,
         ))?;
 
@@ -67,7 +67,7 @@ pub fn lower_new<'ctx>(
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let obj_ptr = call.try_as_basic_value()
         .basic()
-        .ok_or_else(|| CodegenError::llvm_verification("alloc returned void".into()))?
+        .ok_or_else(|| CodegenError::llvm_verification("alloc returned void"))?
         .into_pointer_value();
 
     // --- 2. Initialise header ------------------------------------------------
@@ -121,7 +121,7 @@ pub fn lower_new<'ctx>(
     ctx.push_scope();
 
     if new_expr.args.len() != params.len() {
-        return Err(CodegenError::llvm_verification("argument count mismatch".into()));
+        return Err(CodegenError::llvm_verification("argument count mismatch"));
     }
     for (i, (param_name, _)) in params.iter().enumerate() {
         let arg_val = lower_expr(ctx, &new_expr.args[i])?;
@@ -149,7 +149,7 @@ pub fn lower_new<'ctx>(
         .get("hulk_rt_retain")
         .cloned()
         .ok_or_else(|| CodegenError::unsupported (
-            "hulk_rt_retain not declared".into(),
+            "hulk_rt_retain not declared",
             span,
         ))?;
 

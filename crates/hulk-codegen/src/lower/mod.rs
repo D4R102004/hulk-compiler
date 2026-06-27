@@ -188,7 +188,7 @@ pub fn lower_expr<'ctx>(
             VectorExpr::Comprehension(comp) => for_loop::lower_vector_comprehension(ctx, comp),
             VectorExpr::Literal(_) => {
                 Err(CodegenError::unsupported (
-                    "vector literals not yet implemented".into(),
+                    "vector literals not yet implemented",
                     Some(expr.span)
                 ))
             }
@@ -216,7 +216,7 @@ pub fn lower_expr<'ctx>(
 
         ExprKind::Call(call) => call::lower_call(ctx, call), 
         ExprKind::New(new_expr) => new::lower_new(ctx, new_expr, Some(expr.span)), 
-        ExprKind::Member(member_expr) => member::lower_member(ctx, member_expr),
+        ExprKind::Member(member_expr) => member::lower_member(ctx, member_expr, Some(expr.span)),
 
         // ─── Type tests and downcasts ──────────────────────────────────────────
         ExprKind::TypeTest(type_test) => type_ops::lower_typetest(ctx, type_test),
@@ -226,7 +226,7 @@ pub fn lower_expr<'ctx>(
 
         ExprKind::Index(_) => {
             Err(CodegenError::unsupported (
-                "indexing not yet supported".into(),
+                "indexing not yet supported",
                 Some(expr.span)
             ))
         }
@@ -241,7 +241,7 @@ pub fn lower_expr<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{layout, lower, runtime_decls};
+    use crate::{layout, lower, runtime_decls, itables};
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
     use hulk_semantic::analyze;

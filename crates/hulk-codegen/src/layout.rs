@@ -135,13 +135,14 @@ fn build_struct_type<'ctx>(
         attr_names: &mut Vec<String>,
         attr_tys: &mut Vec<BasicTypeEnum<'a>>,
         ctx: &CodegenCtx<'a>,
+        registry: &TypeRegistry,
     ) -> Result<(), CodegenError> {
         for (name, attr) in &type_info.attributes {
             let ty = attr
                 .declared_type
                 .as_ref()
                 .ok_or_else(|| CodegenError::llvm_verification(format!("attribute '{}' has no declared type", name)))?;
-            let llvm_ty = llvm_type(ctx, registry, ty)?;
+            let llvm_ty = llvm_type(ctx, registry, ty)?; // ERROR: can't capture dynamic environment in a fn item use the `|| { ... }` closure form instead
             attr_names.push(name.clone());
             attr_tys.push(llvm_ty);
         }
@@ -154,11 +155,11 @@ fn build_struct_type<'ctx>(
         let ancestor_info = registry
             .lookup_type(&ancestor_name)
             .ok_or_else(|| CodegenError::llvm_verification(format!("ancestor '{}' not found", ancestor_name)))?;
-        add_attributes_from_type(ancestor_info, &mut attr_names, &mut attr_tys, ctx)?;
+        add_attributes_from_type(ancestor_info, &mut attr_names, &mut attr_tys, ctx, registry)?;
     }
 
     // Add own attributes.
-    add_attributes_from_type(info, &mut attr_names, &mut attr_tys, ctx)?;
+    add_attributes_from_type(info, &mut attr_names, &mut attr_tys, ctx, registry)?;
 
     // ─── 2. Build the struct type ──────────────────────────────────────────
 

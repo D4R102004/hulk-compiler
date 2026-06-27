@@ -14,12 +14,12 @@
 //! - A plain `Block` does not introduce a new scope (handled in `control.rs`).
 
 use inkwell::values::BasicValueEnum;
-use hulk_ast::{AssignExpr, LetExpr};
+use hulk_ast::{AssignExpr, LetExpr, SourceSpan};
 use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
-use crate::lower::utils::{resolve_attribute_with_offset, resolve_type_ref_to_type, convert_to_protocol, is_heap_allocated_type};
+use crate::lower::utils::{resolve_attribute_with_offset, resolve_type_ref_to_type, convert_to_protocol, is_heap_allocated_type, is_protocol_or_iterable};
 use super::lower_expr;
 
 /// Lowers a variable reference.
@@ -90,9 +90,9 @@ pub fn lower_let<'ctx>(
             init_ty.clone()
         };
         // 3. If the declared type is a protocol and the initializer is concrete, convert.
-        if utils::is_protocol_or_iterable(&declared_ty, ctx.registry) {
+        if is_protocol_or_iterable(&declared_ty, ctx.registry) {
             if let Type::Named(_) = init_ty {
-                if !utils::is_protocol_or_iterable(init_ty, ctx.registry) {
+                if !is_protocol_or_iterable(init_ty, ctx.registry) {
                     init_val = convert_to_protocol(ctx, init_val, init_ty, &declared_ty)?;
                 }
             }
@@ -169,10 +169,10 @@ pub fn lower_assign<'ctx>(
                     .functions
                     .get("hulk_rt_release")
                     .cloned()
-                    .ok_or_else(|| Err(CodegenError::unsupported(
+                    .ok_or_else(|| CodegenError::unsupported(
                         "hulk_rt_release not declared",
                         Some(assign.value.span),
-                    )))?;
+                    ))?;
                 ctx.codegen
                     .builder
                     .build_call(release_fn, &[old_val.into()], "release_old_var")
@@ -183,10 +183,10 @@ pub fn lower_assign<'ctx>(
                     .functions
                     .get("hulk_rt_retain")
                     .cloned()
-                    .ok_or_else(|| Err(CodegenError::unsupported(
+                    .ok_or_else(|| CodegenError::unsupported(
                         "hulk_rt_retain not declared",
                         Some(assign.value.span),
-                    )))?;
+                    ))?;
                 ctx.codegen
                     .builder
                     .build_call(retain_fn, &[stored_val.into()], "retain_new_var")
@@ -249,10 +249,10 @@ pub fn lower_assign<'ctx>(
                     .functions
                     .get("hulk_rt_release")
                     .cloned()
-                    .ok_or_else(|| Err(CodegenError::unsupported(
+                    .ok_or_else(|| CodegenError::unsupported(
                         "hulk_rt_release not declared",
                         Some(assign.value.span),
-                    )))?;
+                    ))?;
                 ctx.codegen
                     .builder
                     .build_call(release_fn, &[old_val.into()], "release_old_attr")
@@ -263,10 +263,10 @@ pub fn lower_assign<'ctx>(
                     .functions
                     .get("hulk_rt_retain")
                     .cloned()
-                    .ok_or_else(|| Err(CodegenError::unsupported(
+                    .ok_or_else(|| CodegenError::unsupported(
                         "hulk_rt_retain not declared",
                         Some(assign.value.span),
-                    )))?;
+                    ))?;
                 ctx.codegen
                     .builder
                     .build_call(retain_fn, &[val.into()], "retain_new_attr")
@@ -282,6 +282,6 @@ pub fn lower_assign<'ctx>(
             // 9. Assignment expression returns the value.
             Ok(val)
         }
-        _ => Err(CodegenError::unsupported("invalid assignment to non-variable target".into(), Some(assign.value.span),))
+        _ => Err(CodegenError::unsupported("invalid assignment to non-variable target", Some(assign.value.span),))
     }
 }

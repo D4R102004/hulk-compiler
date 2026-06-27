@@ -186,7 +186,7 @@ fn lower_class_method_call<'ctx>(
     call_args.extend(lower_and_box_args(ctx, args, &method_sig.params)?);
 
     // 5. Devirtualization: if the type has no subtypes, we can call the method directly.
-    if !crate::layout::has_subtypes(type_name, ctx.registry) {
+    if !has_subtypes(type_name, ctx.registry) {
         let qualified_name = format!("{}::{}", type_name, method_name);
         if let Some(fn_val) = ctx.codegen.functions.get(&qualified_name) {
             let call_site = ctx
@@ -292,7 +292,7 @@ fn lower_base_call<'ctx>(
         (Some(ty), Some(meth)) => (ty, meth),
         _ => {
             return Err(CodegenError::unsupported(
-                "base call outside of an overriding method".into(),
+                "base call outside of an overriding method",
                 Some(call.callee.span)
             ));
         }
@@ -346,7 +346,7 @@ fn lower_base_call<'ctx>(
         .lookup("self")
         .ok_or_else(|| {
             CodegenError::unsupported(
-                "self not in scope".into(),
+                "self not in scope",
                 Some(call.callee.span)
             )
         })?
@@ -391,7 +391,7 @@ fn lower_function_value<'ctx>(
         Type::Function { params, return_type } => (params, return_type.as_ref()),
         _ => {
             return Err(CodegenError::unsupported(
-                "expected function type".into(),
+                "expected function type",
                 span,
             ));
         }

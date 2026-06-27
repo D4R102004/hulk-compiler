@@ -5,6 +5,7 @@
 use inkwell::values::FunctionValue;
 
 use crate::context::CodegenCtx;
+use crate::error::CodegenError;
 
 /// Declares `hulk_rt_alloc(size: i64) -> ptr`.
 pub fn declare_alloc<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {

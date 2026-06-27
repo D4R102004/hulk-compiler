@@ -344,7 +344,7 @@ fn build_itable_for_pair(
     let mut fn_ptrs = Vec::new();
 
     for method_name in proto_methods.keys() {
-        let fn_val = get_method_function(ctx, type_name, method_name, Some(proto_info.span))?;
+        let fn_val = get_method_function(ctx, registry, type_name, method_name, Some(proto_info.span))?;
         let fn_ptr = fn_val.as_global_value().as_pointer_value();
         fn_ptrs.push(fn_ptr.into());
     }
@@ -369,6 +369,7 @@ fn build_itable_for_pair(
 /// For builtin types (`Vector`, `Range`), we map to the runtime function names.
 fn get_method_function<'ctx>(
     ctx: &CodegenCtx<'ctx>,
+    registry: &TypeRegistry,
     type_name: &str,
     method_name: &str,
     span: Option<SourceSpan>,

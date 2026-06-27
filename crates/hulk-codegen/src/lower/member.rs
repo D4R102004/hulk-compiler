@@ -1,6 +1,6 @@
 //! Lowering of member access: attributes and method references.
 
-use hulk_ast::MemberExpr;
+use hulk_ast::{MemberExpr, SourceSpan};
 use hulk_semantic::Type;
 
 use crate::error::CodegenError;
@@ -16,6 +16,7 @@ use super::lower_expr;
 pub fn lower_member<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     member: &MemberExpr<Type>,
+    span: Option<SourceSpan>,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     // 1. Lower the object expression to get the object pointer.
     let obj_val = lower_expr(ctx, &member.object)?;
@@ -30,7 +31,7 @@ pub fn lower_member<'ctx>(
     }
 
     if resolve_method(ctx, obj_type, &member.member) {
-        return lower_method_reference(ctx, obj_ptr, obj_type, &member.member);
+        return lower_method_reference(ctx, obj_ptr, obj_type, &member.member, span);
     }
 
     Err(CodegenError::unsupported (
@@ -107,13 +108,14 @@ fn lower_method_reference<'ctx>(
     obj_ptr: inkwell::values::PointerValue<'ctx>,
     obj_type: &Type,
     method_name: &str,
+    span: Option<SourceSpan>
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     let type_name = match obj_type {
         Type::Named(name) => name,
         _ => {
             return Err(CodegenError::unsupported (
                 format!("method reference on non‑named type: {:?}", obj_type),
-                Some(obj_type.span())
+                span
             ));
         }
     };
@@ -125,7 +127,7 @@ fn lower_method_reference<'ctx>(
         .get(type_name)
         .ok_or_else(|| CodegenError::unsupported (
             format!("no layout for type '{}'", type_name),
-            Some(obj_type.span())
+            span
         ))?;
 
     let slot_idx = *layout
@@ -133,7 +135,7 @@ fn lower_method_reference<'ctx>(
         .get(method_name)
         .ok_or_else(|| CodegenError::unsupported (
             format!("method '{}' not found in type '{}'", method_name, type_name),
-            Some(obj_type.span())
+            span
         ))?;
 
     // Load the vtable pointer from the object header.
