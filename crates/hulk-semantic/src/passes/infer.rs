@@ -503,11 +503,21 @@ impl<'a> InferState<'a> {
             let ty = binding.ty.clone();
             typed_expr(ExprKind::Variable(name.to_string()), ty, span)
         } else {
-            // Check for global constants (zero-arity functions like PI, E)
+            // Check if it is a function in the registry.
             if let Some(sig) = self.registry.lookup_function(name) {
                 if sig.params.is_empty() {
+                    // Zero-arity: treat as constant
                     let ty = sig.return_type.clone();
                     return typed_expr(ExprKind::Variable(name.to_string()), ty, span);
+                } else {
+                    // Non-zero-arity: treat as a function value
+                    let param_types = sig.params.iter().map(|(_, ty)| ty.clone()).collect();
+                    let return_type = sig.return_type.clone();
+                    let func_type = Type::Function {
+                        params: param_types,
+                        return_type: Box::new(return_type),
+                    };
+                    return typed_expr(ExprKind::Variable(name.to_string()), func_type, span);
                 }
             }
             self.errors.push(SemanticError::error(
@@ -1210,36 +1220,6 @@ impl<'a> InferState<'a> {
                 Type::Error,
                 call.callee.span,
             );
-        }
-
-        // ─── Special case: global function call ─────────────────────────────
-
-        // Global functions (like `print`) are not values; they are only callable, and their
-        // return type is known from the registry, not from a `Type::Function` annotation.
-        if let ExprKind::Variable(name) = &call.callee.kind {
-            if let Some(sig) = self.registry.lookup_function(name) {
-                let params: Vec<(String, Type)> = sig.params.clone();
-                let return_type = sig.return_type.clone();
-                let typed_callee = typed_expr(
-                    ExprKind::Variable(name.clone()),
-                    sig.return_type.clone(),
-                    call.callee.span,
-                );
-
-                let mut typed_args = Vec::new();
-                for arg in &call.args {
-                    typed_args.push(self.infer_expr(arg, env));
-                }
-                self.check_call_arity_and_types(&typed_args, &params, call.callee.span);
-                return typed_expr(
-                    ExprKind::Call(CallExpr {
-                        callee: Box::new(typed_callee),
-                        args: typed_args,
-                    }),
-                    return_type,
-                    call.callee.span,
-                );
-            }
         }
 
         // ─── Infer the callee expression ─────────────────────────────────────
