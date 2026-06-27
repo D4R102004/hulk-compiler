@@ -38,6 +38,7 @@ pub mod method;
 pub mod new;
 pub mod member;
 pub mod type_ops;
+pub mod vector;
 pub mod for_loop;
 pub mod pattern;
 
@@ -182,16 +183,8 @@ pub fn lower_expr<'ctx>(
 
         ExprKind::Variable(name) => binding::lower_variable(ctx, name, Some(expr.span)),
         ExprKind::SelfRef => binding::lower_variable(ctx, "self", Some(expr.span)),
-        ExprKind::Vector(vector) => match vector {
-            VectorExpr::Comprehension(comp) => for_loop::lower_vector_comprehension(ctx, comp),
-            VectorExpr::Literal(_) => {
-                Err(CodegenError::unsupported (
-                    "vector literals not yet implemented",
-                    Some(expr.span)
-                ))
-            }
-        },
-
+        ExprKind::Vector(vector) => vector::lower_vector(ctx, vector, &expr.anno, expr.span),
+        
         // ─── Unary and binary operators ──────────────────────────────────
 
         ExprKind::Unary(unary) => operators::lower_unary(ctx, unary),
