@@ -265,6 +265,13 @@ pub fn owning_type_for_method(
     }
 }
 
+// Determines if a given type has any subtypes in the current compilation unit
+pub fn has_subtypes(type_name: &str, registry: &TypeRegistry) -> bool {
+    registry.types.values().any(|info| {
+        info.parent.as_ref().map_or(false, |p| p.name == type_name)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     // TODO: Add unit tests for layout building.

@@ -9,6 +9,7 @@ use crate::error::CodegenError;
 use crate::lower::LowerCtx;
 use crate::lower::utils::llvm_type;
 use crate::lower::utils::is_protocol_or_iterable as is_protocol_type;
+use crate::layout::has_subtypes;
 use super::lower_expr;
 
 /// Lowers a call expression.
@@ -168,7 +169,36 @@ fn lower_class_method_call<'ctx>(
         }
     };
 
-    // 3. Look up the type layout to obtain the method slot index.
+    // 3. Look up the method signature to get parameter types and the declaring type.
+    let method_sig = ctx
+        .registry
+        .lookup_method(obj_type, method_name)
+        .ok_or_else(|| CodegenError::Unsupported {
+            construct: format!("method '{}' not found", method_name),
+        })?;
+
+    // 4. Prepare the call arguments: first `self` (the object pointer), then the rest.
+    let mut call_args = vec![obj_ptr.into()];
+    call_args.extend(lower_and_box_args(ctx, args, &method_sig.params)?);
+
+    // 5. Devirtualization: if the type has no subtypes, we can call the method directly.
+    if !crate::layout::has_subtypes(type_name, ctx.registry) {
+        let qualified_name = format!("{}::{}", type_name, method_name);
+        if let Some(fn_val) = ctx.codegen.functions.get(&qualified_name) {
+            let call_site = ctx
+                .codegen
+                .builder
+                .build_call(*fn_val, &call_args, "direct_method_call")
+                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            let result = call_site
+                .try_as_basic_value()
+                .unwrap_basic();
+            return Ok(result);
+        }
+        // Fallback to vtable if function not found.
+    }
+
+    // 6. Look up the type layout to obtain the method slot index.
     let layout = ctx
         .codegen
         .type_layouts
@@ -184,7 +214,7 @@ fn lower_class_method_call<'ctx>(
             construct: format!("method '{}' not found in type '{}'", method_name, type_name),
         })?;
 
-    // 4. Load the vtable pointer from the object header (field index 3).
+    // 7. Load the vtable pointer from the object header (field index 3).
     let i32_type = ctx.codegen.context.i32_type();
     let ptr_type = ctx.codegen.context.ptr_type(Default::default());
     let vtable_ptr_ptr = unsafe {
@@ -205,7 +235,7 @@ fn lower_class_method_call<'ctx>(
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
         .into_pointer_value();
 
-    // 5. Load the function pointer from the vtable at the computed slot index.
+    // 8. Load the function pointer from the vtable at the computed slot index.
     let slot_val = ctx.codegen.context.i32_type().const_int(slot_idx as u64, false);
     let fn_ptr_ptr = unsafe {
         ctx.codegen
@@ -220,21 +250,7 @@ fn lower_class_method_call<'ctx>(
         .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
         .into_pointer_value();
 
-    // 6. Prepare the call arguments: first `self` (the object pointer), then the rest.
-    let mut call_args = vec![obj_ptr.into()];
-
-    // Look up the method signature to get parameter types.
-    let method_sig = ctx
-        .registry
-        .lookup_method(obj_type, method_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("method '{}' not found", method_name),
-        })?;
-
-    // Lower and box each argument according to the parameter type.
-    call_args.extend(lower_and_box_args(ctx, args, &method_sig.params)?);
-
-    // 7. Retrieve the method's declared LLVM function type from the module.
+    // 9. Retrieve the method's declared LLVM function type from the module.
     let qualified_name = format!("{}::{}", type_name, method_name);
     let fn_decl = ctx
         .codegen
@@ -248,7 +264,7 @@ fn lower_class_method_call<'ctx>(
         })?;
     let fn_type = fn_decl.get_type();
 
-    // 8. Build an indirect call using the loaded function pointer.
+    // 10. Build an indirect call using the loaded function pointer.
     let call_site = ctx
         .codegen
         .builder
