@@ -123,19 +123,11 @@ pub fn lower_binary<'ctx>(
                 .into()
         }
         BinaryOp::Modulo => {
-            // LLVM has no direct `fmod` instruction; call the `llvm.fmod.f64` intrinsic.
             let lf = left.into_float_value();
             let rf = right.into_float_value();
-            let fmod_fn = ctx.codegen.module.get_function("llvm.fmod.f64")
-                .unwrap_or_else(|| {
-                    let f64_type = ctx.codegen.context.f64_type();
-                    let fn_type = f64_type.fn_type(&[f64_type.into(), f64_type.into()], false);
-                    ctx.codegen.module.add_function("llvm.fmod.f64", fn_type, None)
-                });
-            let call = ctx.codegen.builder.build_call(fmod_fn, &[lf.into(), rf.into()], "mod")
+            ctx.codegen.builder.build_float_rem(lf, rf, "rem")
                 .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
-                .try_as_basic_value().unwrap_basic();
-            call.into()
+                .into()
         }
         BinaryOp::Power => {
             // Call `llvm.pow.f64` intrinsic.
