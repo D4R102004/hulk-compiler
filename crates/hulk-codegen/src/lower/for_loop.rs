@@ -36,10 +36,10 @@ pub fn lower_for<'ctx>(
                 construct: format!("iterable type `{}` does not support `current()`", iterable_expr.anno),
             }
         })?;
-    let elem_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, &elem_ty)?;
+    let elem_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &elem_ty)?;
 
     // Result storage: the loop's value is the last body value, or a default.
-    let result_ty = crate::lower::utils::llvm_type(ctx.codegen, &body_expr.anno)?;
+    let result_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &body_expr.anno)?;
     let result_alloca = ctx
         .codegen
         .builder
@@ -186,7 +186,7 @@ pub fn lower_vector_comprehension<'ctx>(
 
     // Determine the element type of the comprehension (the head expression's type).
     let elem_ty = head_expr.anno.clone();
-    let elem_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, &elem_ty)?;
+    let elem_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &elem_ty)?;
 
     // Create a dynamic vector.
     let dyn_new_fn = ctx

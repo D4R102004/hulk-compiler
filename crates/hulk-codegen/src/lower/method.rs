@@ -54,11 +54,11 @@ fn declare_methods_for_type(
         let param_types: Vec<BasicMetadataTypeEnum> = method_sig
             .params
             .iter()
-            .map(|(_, ty)| utils::llvm_type(ctx, ty).map(BasicMetadataTypeEnum::from))
+            .map(|(_, ty)| utils::llvm_type(ctx, registry, ty).map(BasicMetadataTypeEnum::from))
             .collect::<Result<_, _>>()?;
 
         // Return type.
-        let return_ty = utils::llvm_type(ctx, &method_sig.return_type)?;
+        let return_ty = utils::llvm_type(ctx, registry, &method_sig.return_type)?;
 
         // Signature: (self: *mut T, ...params) -> return_ty
         let mut all_param_types: Vec<BasicMetadataTypeEnum> = vec![self_ty.into()];
@@ -143,7 +143,7 @@ fn define_methods_for_type(
         // Bind other parameters.
         for (i, (param_name, param_ty)) in method_sig.params.iter().enumerate() {
             let param_value = params[i + 1];
-            let llvm_param_ty = utils::llvm_type(lower_ctx.codegen, param_ty)?;
+            let llvm_param_ty = utils::llvm_type(lower_ctx.codegen, registry, param_ty)?;
             let alloca = lower_ctx.codegen.builder
                 .build_alloca(llvm_param_ty, param_name)
                 .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;

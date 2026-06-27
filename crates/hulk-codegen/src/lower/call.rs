@@ -372,9 +372,9 @@ fn lower_function_value<'ctx>(
     // Build the function type for the indirect call.
     let llvm_param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = param_types
         .iter()
-        .map(|ty| llvm_type(ctx.codegen, ty).map(|t| t.into()))
+        .map(|ty| llvm_type(ctx.codegen, ctx.registry, ty).map(|t| t.into()))
         .collect::<Result<Vec<_>, _>>()?;
-    let llvm_return = llvm_type(ctx.codegen, return_type)?;
+    let llvm_return = llvm_type(ctx.codegen, ctx.registry, return_type)?;
 
     // Method function pointers expect `self` as the first parameter.
     let self_ptr_type = ctx.codegen.context.ptr_type(Default::default());
@@ -551,10 +551,10 @@ fn lower_protocol_call<'ctx>(
         })?;
     let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
     for (_, ty) in &method_sig.params {
-        let llvm_ty = llvm_type(ctx.codegen, ty)?;
+        let llvm_ty = llvm_type(ctx.codegen, ctx.registry, ty)?;
         param_types.push(llvm_ty.into());
     }
-    let return_ty = llvm_type(ctx.codegen, &method_sig.return_type)?;
+    let return_ty = llvm_type(ctx.codegen, ctx.registry, &method_sig.return_type)?;
     let mut all_param_types = vec![ptr_type.into()];
     all_param_types.extend(param_types);
     let fn_type = return_ty.fn_type(&all_param_types, false);

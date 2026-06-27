@@ -27,7 +27,7 @@ pub fn lower_match<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     match_expr: &MatchExpr<Type>,
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-    let result_ty = llvm_type(ctx.codegen, &match_expr.value.anno)?;
+    let result_ty = llvm_type(ctx.codegen, ctx.registry, &match_expr.value.anno)?;
     let result_alloca = ctx
         .codegen
         .builder

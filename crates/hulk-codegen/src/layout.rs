@@ -141,7 +141,7 @@ fn build_struct_type<'ctx>(
                 .declared_type
                 .as_ref()
                 .ok_or_else(|| CodegenError::LlvmVerification(format!("attribute '{}' has no declared type", name)))?;
-            let llvm_ty = llvm_type(ctx, ty)?;
+            let llvm_ty = llvm_type(ctx, registry, ty)?;
             attr_names.push(name.clone());
             attr_tys.push(llvm_ty);
         }

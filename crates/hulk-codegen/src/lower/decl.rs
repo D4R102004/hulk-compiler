@@ -41,10 +41,10 @@ fn declare_function(
     let param_types: Vec<_> = sig
         .params
         .iter()
-        .map(|(_, ty)| utils::llvm_type(ctx, ty))
+        .map(|(_, ty)| utils::llvm_type(ctx, registry, ty))
         .collect::<Result<_, _>>()?;
 
-    let return_ty = utils::llvm_type(ctx, &sig.return_type)?;
+    let return_ty = utils::llvm_type(ctx, registry, &sig.return_type)?;
 
     // Convert to `BasicMetadataTypeEnum` for `fn_type`.
     let param_metadata: Vec<BasicMetadataTypeEnum> = param_types
@@ -112,7 +112,7 @@ fn define_function(
             .get(i)
             .ok_or_else(|| CodegenError::LlvmVerification(format!("missing parameter {}", i)))?;
         // Use lower_ctx.codegen instead of ctx to avoid mutable borrow conflict.
-        let llvm_param_ty = utils::llvm_type(lower_ctx.codegen, param_ty)?;
+        let llvm_param_ty = utils::llvm_type(lower_ctx.codegen, registry, param_ty)?;
         let alloca = lower_ctx.codegen.builder
             .build_alloca(llvm_param_ty, param_name)
             .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;

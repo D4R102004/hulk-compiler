@@ -60,7 +60,7 @@ fn load_attribute<'ctx>(
             .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
     };
 
-    let attr_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, attr_type)?;
+    let attr_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, attr_type)?;
     let attr_ptr_type = ctx.codegen.context.ptr_type(Default::default());
     let field_ptr = ctx
         .codegen
