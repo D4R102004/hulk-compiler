@@ -120,6 +120,14 @@ pub fn declare_vector_current<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ct
 
 // ─── Range builtin methods ────────────────────────────────────────────────
 
+/// Declares `hulk_rt_range_new(min: f64, max: f64) -> ptr`.
+pub fn declare_range_new<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let f64_type = ctx.context.f64_type();
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let fn_type = ptr_type.fn_type(&[f64_type.into(), f64_type.into()], false);
+    ctx.module.add_function("hulk_rt_range_new", fn_type, None)
+}
+
 /// Declares `hulk_rt_range_next(rng: ptr) -> i1`.
 pub fn declare_range_next<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
     let ptr_type = ctx.context.ptr_type(Default::default());
@@ -179,7 +187,60 @@ pub fn declare_dynamic_vector_to_vector<'ctx>(ctx: &CodegenCtx<'ctx>) -> Functio
     ctx.module.add_function("hulk_rt_dynamic_vector_to_vector", fn_type, None)
 }
 
-// ─── Group Declarations ───────────────────────────────────────────
+// ─── Print ──────────────────────────────────────────────────────────────────
+
+/// Declares `hulk_rt_print(obj: ptr) -> ptr`.
+pub fn declare_print<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let fn_type = ptr_type.fn_type(&[ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_print", fn_type, None)
+}
+
+// ─── Math Builtin Functions ───────────────────────────────────────────────────
+
+/// Declares `hulk_rt_sqrt(x: f64) -> f64`.
+pub fn declare_sqrt<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let f64_type = ctx.context.f64_type();
+    let fn_type = f64_type.fn_type(&[f64_type.into()], false);
+    ctx.module.add_function("hulk_rt_sqrt", fn_type, None)
+}
+
+/// Declares `hulk_rt_sin(x: f64) -> f64`.
+pub fn declare_sin<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let f64_type = ctx.context.f64_type();
+    let fn_type = f64_type.fn_type(&[f64_type.into()], false);
+    ctx.module.add_function("hulk_rt_sin", fn_type, None)
+}
+
+/// Declares `hulk_rt_cos(x: f64) -> f64`.
+pub fn declare_cos<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let f64_type = ctx.context.f64_type();
+    let fn_type = f64_type.fn_type(&[f64_type.into()], false);
+    ctx.module.add_function("hulk_rt_cos", fn_type, None)
+}
+
+/// Declares `hulk_rt_exp(x: f64) -> f64`.
+pub fn declare_exp<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let f64_type = ctx.context.f64_type();
+    let fn_type = f64_type.fn_type(&[f64_type.into()], false);
+    ctx.module.add_function("hulk_rt_exp", fn_type, None)
+}
+
+/// Declares `hulk_rt_log(base: f64, x: f64) -> f64`.
+pub fn declare_log<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let f64_type = ctx.context.f64_type();
+    let fn_type = f64_type.fn_type(&[f64_type.into(), f64_type.into()], false);
+    ctx.module.add_function("hulk_rt_log", fn_type, None)
+}
+
+/// Declares `hulk_rt_rand() -> f64`.
+pub fn declare_rand<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let f64_type = ctx.context.f64_type();
+    let fn_type = f64_type.fn_type(&[], false);
+    ctx.module.add_function("hulk_rt_rand", fn_type, None)
+}
+
+// ─── Group Declarations ──────────────────────────────────────────────────────
 
 /// Returns the existing declaration for `name` if this module already has
 /// one, or declares it now (caching the result) if not.
@@ -270,6 +331,10 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
 
     // ─── Range builtin methods ────────────────────────────────────────────
 
+    let range_new = declare_range_new(ctx);
+    ctx.functions.insert("hulk_rt_range_new".to_string(), range_new);
+    ctx.functions.insert("Range::new".to_string(), range_new); // optional for consistency
+
     let range_next = declare_range_next(ctx);
     ctx.functions.insert("Range::next".to_string(), range_next);
     ctx.functions.insert("hulk_rt_range_next".to_string(), range_next);
@@ -277,4 +342,29 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
     let range_current = declare_range_current(ctx);
     ctx.functions.insert("Range::current".to_string(), range_current);
     ctx.functions.insert("hulk_rt_range_current".to_string(), range_current);
-}
+
+    // ─── Print ─────────────────────────────────────────────────────────────
+
+    let print_fn = declare_print(ctx);
+    ctx.functions.insert("hulk_rt_print".to_string(), print_fn);
+
+    // ─── Math functions ──────────────────────────────────────────────
+
+    let sqrt_fn = declare_sqrt(ctx);
+    ctx.functions.insert("hulk_rt_sqrt".to_string(), sqrt_fn);
+
+    let sin_fn = declare_sin(ctx);
+    ctx.functions.insert("hulk_rt_sin".to_string(), sin_fn);
+
+    let cos_fn = declare_cos(ctx);
+    ctx.functions.insert("hulk_rt_cos".to_string(), cos_fn);
+
+    let exp_fn = declare_exp(ctx);
+    ctx.functions.insert("hulk_rt_exp".to_string(), exp_fn);
+
+    let log_fn = declare_log(ctx);
+    ctx.functions.insert("hulk_rt_log".to_string(), log_fn);
+
+    let rand_fn = declare_rand(ctx);
+    ctx.functions.insert("hulk_rt_rand".to_string(), rand_fn);
+    }

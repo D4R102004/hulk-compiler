@@ -219,6 +219,9 @@ dependencies = [
 [[package]]
 name = "hulk-rt"
 version = "0.1.0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "hulk-semantic"

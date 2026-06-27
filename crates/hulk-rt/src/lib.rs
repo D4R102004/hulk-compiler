@@ -17,6 +17,7 @@ const TAG_BOX: u8   = 2;
 const TAG_RANGE: u8 = 3;
 const TAG_NUMBER: u8 = 4;   // used inside HulkBox
 const TAG_BOOLEAN: u8 = 5;  // used inside HulkBox
+const TAG_DYN_VEC: u8 = 6;  // used for dynamic vectors (comprehensions)
 
 // ─── Object header ─────────────────────────────────────────────────────
 #[repr(C)]
@@ -43,6 +44,13 @@ pub struct HulkVector {
     pub len: i64,
     pub current_index: i64, // For iteration
     pub data: *mut *mut std::ffi::c_void,
+}
+
+// ─── Dynamic vector (for comprehensions) ──────────────────────────────
+#[repr(C)]
+pub struct HulkDynamicVector {
+    pub header: ObjHeader,
+    pub data: Vec<*mut std::ffi::c_void>,
 }
 
 // ─── HulkBox ───────────────────────────────────────────────────────────
@@ -322,6 +330,10 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
                     let range_layout = Layout::new::<HulkRange>();
                     dealloc(range as *mut u8, range_layout);
                 }
+                TAG_DYN_VEC => {
+                    // Reconstruct the Box and drop it, which frees the Vec and the struct.
+                    let _ = Box::from_raw(ptr as *mut HulkDynamicVector);
+                }
                 _ => {
                     // Fallback for unknown tags (should not happen)
                     let layout = Layout::from_size_align(32, 8).unwrap();
@@ -391,6 +403,7 @@ pub extern "C" fn hulk_rt_vector_get(vec: *mut HulkVector, index: i64) -> *mut s
     }
 }
 
+/// Sets the element at the given index in a HulkVector to a new value, managing reference counts appropriately.
 #[no_mangle]
 pub extern "C" fn hulk_rt_vector_set(
     vec: *mut HulkVector,
@@ -449,6 +462,61 @@ pub extern "C" fn hulk_rt_vector_current(vec: *mut HulkVector) -> *mut std::ffi:
         if pos < 0 || pos >= (*vec).len { return ptr::null_mut(); }
         let data = (*vec).data;
         *data.offset(pos as isize)
+    }
+}
+
+// ─── Dynamic vector helpers for comprehensions ────────────────────────
+
+#[no_mangle]
+pub extern "C" fn hulk_rt_dynamic_vector_new() -> *mut HulkDynamicVector {
+    let vec = HulkDynamicVector {
+        header: ObjHeader {
+            ref_count: 1,
+            gc_mark: 0,
+            type_tag: TAG_DYN_VEC,
+            next: ptr::null_mut(),
+            vtable: ptr::null(),
+        },
+        data: Vec::new(),
+    };
+    Box::into_raw(Box::new(vec))
+}
+
+#[no_mangle]
+pub extern "C" fn hulk_rt_dynamic_vector_append(
+    vec: *mut HulkDynamicVector,
+    value: *mut std::ffi::c_void,
+) {
+    if vec.is_null() { return; }
+    unsafe {
+        let vec_ref = &mut *vec;
+        vec_ref.data.push(value);
+        if !value.is_null() {
+            hulk_rt_retain(value);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn hulk_rt_dynamic_vector_to_vector(
+    dyn_vec: *mut HulkDynamicVector,
+) -> *mut HulkVector {
+    if dyn_vec.is_null() { return ptr::null_mut(); }
+    unsafe {
+        let vec_ref = &mut *dyn_vec;
+        let len = vec_ref.data.len() as i64;
+        let fixed = hulk_rt_vector_new(len);
+        if fixed.is_null() {
+            // Release the dynamic vector (drops the Vec and the struct)
+            drop(Box::from_raw(dyn_vec));
+            return ptr::null_mut();
+        }
+        for (i, &val) in vec_ref.data.iter().enumerate() {
+            hulk_rt_vector_set(fixed, i as i64, val);
+        }
+        // Release the dynamic vector (drops the Vec and the struct)
+        drop(Box::from_raw(dyn_vec));
+        fixed
     }
 }
 
@@ -860,7 +928,7 @@ mod tests {
             let _ = hulk_rt_print(s);
         });
         // Note: the formatting may vary; we accept exact representation.
-        assert!(output == "123.45");
+        assert!(output == "123.45", "output was: {:?}", output);
         hulk_rt_release(s);
     }
 
@@ -878,6 +946,37 @@ mod tests {
     fn print_handles_null() {
         let result = hulk_rt_print(ptr::null_mut());
         assert!(result.is_null());
+    }
+
+    /// Tests dynamic vector append and conversion to a fixed-size vector.
+    #[test]
+    fn dynamic_vector_append_and_to_vector() {
+        let dyn_vec = hulk_rt_dynamic_vector_new();
+        assert!(!dyn_vec.is_null());
+        unsafe {
+            let v1 = hulk_rt_number_to_string(1.0);
+            let v2 = hulk_rt_number_to_string(2.0);
+            let v3 = hulk_rt_number_to_string(3.0);
+            hulk_rt_dynamic_vector_append(dyn_vec, v1);
+            hulk_rt_dynamic_vector_append(dyn_vec, v2);
+            hulk_rt_dynamic_vector_append(dyn_vec, v3);
+            let fixed = hulk_rt_dynamic_vector_to_vector(dyn_vec);
+            assert!(!fixed.is_null());
+            // Check fixed vector length.
+            assert_eq!((*fixed).len, 3);
+            // Check elements.
+            let e1 = hulk_rt_vector_get(fixed, 0);
+            let e2 = hulk_rt_vector_get(fixed, 1);
+            let e3 = hulk_rt_vector_get(fixed, 2);
+            assert_eq!(string_from_ptr(e1), "1");
+            assert_eq!(string_from_ptr(e2), "2");
+            assert_eq!(string_from_ptr(e3), "3");
+            // Clean up.
+            hulk_rt_release(fixed as *mut std::ffi::c_void);
+            hulk_rt_release(v1);
+            hulk_rt_release(v2);
+            hulk_rt_release(v3);
+        }
     }
 
 }
