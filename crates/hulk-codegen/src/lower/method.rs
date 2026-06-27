@@ -176,12 +176,12 @@ fn define_methods_for_type(
         // Lower the method body.
         let body_value = lower_expr(&mut lower_ctx, method_body)?;
 
+        lower_ctx.pop_scope(); // Pop the function's parameter scope.
+        
         // Return.
         lower_ctx.codegen.builder
             .build_return(Some(&body_value))
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-
-        lower_ctx.pop_scope();
     }
 
     Ok(())

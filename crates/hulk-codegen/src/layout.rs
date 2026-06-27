@@ -142,7 +142,7 @@ fn build_struct_type<'ctx>(
                 .declared_type
                 .as_ref()
                 .ok_or_else(|| CodegenError::llvm_verification(format!("attribute '{}' has no declared type", name)))?;
-            let llvm_ty = llvm_type(ctx, registry, ty)?; // ERROR: can't capture dynamic environment in a fn item use the `|| { ... }` closure form instead
+            let llvm_ty = llvm_type(ctx, registry, ty)?;
             attr_names.push(name.clone());
             attr_tys.push(llvm_ty);
         }

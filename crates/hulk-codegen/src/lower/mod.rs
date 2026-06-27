@@ -40,8 +40,6 @@ pub mod member;
 pub mod type_ops;
 pub mod for_loop;
 pub mod pattern;
-// pub mod vector;
-// pub mod object;
 
 // ─── Lowering context ────────────────────────────────────────────────────
 
