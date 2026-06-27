@@ -48,7 +48,7 @@ pub fn lower_unary<'ctx>(
                 .codegen
                 .builder
                 .build_float_neg(float_val, "neg")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             Ok(neg.into())
         }
         UnaryOp::Not => {
@@ -58,7 +58,7 @@ pub fn lower_unary<'ctx>(
                 .codegen
                 .builder
                 .build_not(int_val, "not")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             Ok(not.into())
         }
     }
@@ -98,35 +98,35 @@ pub fn lower_binary<'ctx>(
             let lf = left.into_float_value();
             let rf = right.into_float_value();
             ctx.codegen.builder.build_float_add(lf, rf, "add")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Subtract => {
             let lf = left.into_float_value();
             let rf = right.into_float_value();
             ctx.codegen.builder.build_float_sub(lf, rf, "sub")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Multiply => {
             let lf = left.into_float_value();
             let rf = right.into_float_value();
             ctx.codegen.builder.build_float_mul(lf, rf, "mul")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Divide => {
             let lf = left.into_float_value();
             let rf = right.into_float_value();
             ctx.codegen.builder.build_float_div(lf, rf, "div")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Modulo => {
             let lf = left.into_float_value();
             let rf = right.into_float_value();
             ctx.codegen.builder.build_float_rem(lf, rf, "rem")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Power => {
@@ -140,7 +140,7 @@ pub fn lower_binary<'ctx>(
                     ctx.codegen.module.add_function("llvm.pow.f64", fn_type, None)
                 });
             let call = ctx.codegen.builder.build_call(pow_fn, &[lf.into(), rf.into()], "pow")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .try_as_basic_value().unwrap_basic();
             call.into()
         }
@@ -172,14 +172,14 @@ pub fn lower_binary<'ctx>(
             let li = left.into_int_value();
             let ri = right.into_int_value();
             ctx.codegen.builder.build_and(li, ri, "and")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Or => {
             let li = left.into_int_value();
             let ri = right.into_int_value();
             ctx.codegen.builder.build_or(li, ri, "or")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
 
@@ -187,15 +187,15 @@ pub fn lower_binary<'ctx>(
 
         BinaryOp::Concat | BinaryOp::ConcatSpace => {
             // Auto‑stringify operands.
-            let left_str = to_string(ctx, left, &binary.left.anno)?;
-            let right_str = to_string(ctx, right, &binary.right.anno)?;
+            let left_str = to_string(ctx, left, &binary.left.anno).map_err(|e| e.with_span(binary.left.span))?;
+            let right_str = to_string(ctx, right, &binary.right.anno).map_err(|e| e.with_span(binary.right.span))?;
             let concat_fn = if matches!(binary.op, BinaryOp::Concat) {
                 declare_string_concat(ctx.codegen)
             } else {
                 declare_string_concat_space(ctx.codegen)
             };
             let call = ctx.codegen.builder.build_call(concat_fn, &[left_str.into(), right_str.into()], "concat")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .try_as_basic_value()
                 .unwrap_basic();
             call.into()

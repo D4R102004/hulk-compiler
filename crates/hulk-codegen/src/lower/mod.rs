@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::types::BasicTypeEnum;
 
-use hulk_ast::{Expr, Program, TypeDecl, DeclarationKind, VectorExpr};
+use hulk_ast::{Expr, Program, TypeDecl, DeclarationKind, VectorExpr, SourceSpan};
 use hulk_semantic::{Type, TypeRegistry};
 
 use crate::context::CodegenCtx;
@@ -118,35 +118,37 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
     pub fn declare_var(&mut self, name: &str, value: BasicValueEnum<'ctx>, sem_ty: Type) -> Result<(), CodegenError> {
         let llvm_ty = value.get_type();
         let ptr = self.codegen.builder.build_alloca(llvm_ty, name)
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         self.codegen.builder.build_store(ptr, value)
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         self.scope_stack.declare(name, ptr, llvm_ty, sem_ty);
         Ok(())
     }
 
     /// Looks up a variable's pointer in the scope stack.
-    pub fn lookup_var(&self, name: &str) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type), CodegenError> {
+    pub fn lookup_var(&self, name: &str, span: Option<SourceSpan>) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type), CodegenError> {
         self.scope_stack.lookup(name)
-            .ok_or_else(|| CodegenError::Unsupported {
-                construct: format!("undefined variable `{}` (should have been caught by semantic analysis)", name)
-            })
+            .ok_or_else(|| CodegenError::unsupported (
+                format!("undefined variable `{}` (should have been caught by semantic analysis)", name),
+                span
+            ))
     }
 
     /// Loads a variable's value.
-    pub fn load_var(&self, name: &str) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+    pub fn load_var(&self, name: &str, span: Option<SourceSpan>) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         let (ptr, llvm_ty, _sem_ty) = self.scope_stack.lookup(name)
-            .ok_or_else(|| CodegenError::Unsupported {
-                construct: format!("undefined variable `{}`", name)
-            })?;
+            .ok_or_else(|| CodegenError::unsupported (
+                format!("undefined variable `{}`", name),
+                span
+            ))?;
         self.codegen.builder.build_load(llvm_ty, ptr, name)
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))
     }
 
-    pub fn store_var(&mut self, name: &str, value: BasicValueEnum<'ctx>) -> Result<(), CodegenError> {
-        let (ptr, _llvm_ty, _sem_ty) = self.lookup_var(name)?;
+    pub fn store_var(&mut self, name: &str, value: BasicValueEnum<'ctx>, span: Option<SourceSpan>) -> Result<(), CodegenError> {
+        let (ptr, _llvm_ty, _sem_ty) = self.lookup_var(name, span)?;
         self.codegen.builder.build_store(ptr, value)
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         Ok(())
 }
 }
@@ -180,14 +182,15 @@ pub fn lower_expr<'ctx>(
 
         // ─── Variables and special references ────────────────────────────
 
-        ExprKind::Variable(name) => binding::lower_variable(ctx, name),
-        ExprKind::SelfRef => binding::lower_variable(ctx, "self"),
+        ExprKind::Variable(name) => binding::lower_variable(ctx, name, Some(expr.span)),
+        ExprKind::SelfRef => binding::lower_variable(ctx, "self", Some(expr.span)),
         ExprKind::Vector(vector) => match vector {
             VectorExpr::Comprehension(comp) => for_loop::lower_vector_comprehension(ctx, comp),
             VectorExpr::Literal(_) => {
-                Err(CodegenError::Unsupported {
-                    construct: "vector literals not yet implemented".into(),
-                })
+                Err(CodegenError::unsupported (
+                    "vector literals not yet implemented".into(),
+                    Some(expr.span)
+                ))
             }
         },
 
@@ -212,7 +215,7 @@ pub fn lower_expr<'ctx>(
         // ─── Functions and properties calls ────────────────────────────────────
 
         ExprKind::Call(call) => call::lower_call(ctx, call), 
-        ExprKind::New(new_expr) => new::lower_new(ctx, new_expr), 
+        ExprKind::New(new_expr) => new::lower_new(ctx, new_expr, Some(expr.span)), 
         ExprKind::Member(member_expr) => member::lower_member(ctx, member_expr),
 
         // ─── Type tests and downcasts ──────────────────────────────────────────
@@ -222,14 +225,16 @@ pub fn lower_expr<'ctx>(
         // ─── Deferred to later phases ────────────────────────────────────
 
         ExprKind::Index(_) => {
-            Err(CodegenError::Unsupported {
-                construct: "indexing not yet supported".into()
-            })
+            Err(CodegenError::unsupported (
+                "indexing not yet supported".into(),
+                Some(expr.span)
+            ))
         }
         // ─── Catch-all for unhandled cases ───────────────────────────────
-        _ => Err(CodegenError::Unsupported {
-            construct: format!("lowering of {:?} not yet implemented or unsupported", expr.kind)
-        }),
+        _ => Err(CodegenError::unsupported (
+            format!("lowering of {:?} not yet implemented or unsupported", expr.kind),
+            Some(expr.span)
+        )),
     }
 }
 

@@ -35,7 +35,7 @@ fn declare_methods_for_type(
     let type_name = &ty_decl.name;
     let type_info = registry
         .lookup_type(type_name)
-        .ok_or_else(|| CodegenError::LlvmVerification(format!("type '{}' not found", type_name)))?;
+        .ok_or_else(|| CodegenError::llvm_verification(format!("type '{}' not found", type_name)))?;
 
     
     let methods = &type_info.methods;
@@ -44,7 +44,7 @@ fn declare_methods_for_type(
     let _layout = ctx
         .type_layouts
         .get(type_name)
-        .ok_or_else(|| CodegenError::LlvmVerification(format!("no layout for type '{}'", type_name)))?;
+        .ok_or_else(|| CodegenError::llvm_verification(format!("no layout for type '{}'", type_name)))?;
     let self_ty = ctx.context.ptr_type(Default::default());
 
     for (method_name, method_sig) in methods {
@@ -97,7 +97,7 @@ fn define_methods_for_type(
     let type_name = &ty_decl.name;
     let type_info = registry
         .lookup_type(type_name)
-        .ok_or_else(|| CodegenError::LlvmVerification(format!("type '{}' not found", type_name)))?;
+        .ok_or_else(|| CodegenError::llvm_verification(format!("type '{}' not found", type_name)))?;
 
     let methods = &type_info.methods;
 
@@ -105,7 +105,7 @@ fn define_methods_for_type(
     let _layout = ctx
         .type_layouts
         .get(type_name)
-        .ok_or_else(|| CodegenError::LlvmVerification(format!("no layout for type '{}'", type_name)))?;
+        .ok_or_else(|| CodegenError::llvm_verification(format!("no layout for type '{}'", type_name)))?;
     let self_ty = ctx.context.ptr_type(Default::default());
 
     for (method_name, method_sig) in methods {
@@ -114,7 +114,7 @@ fn define_methods_for_type(
             .functions
             .get(&qualified_name)
             .cloned()
-            .ok_or_else(|| CodegenError::LlvmVerification(format!("method '{}' not declared", qualified_name)))?;
+            .ok_or_else(|| CodegenError::llvm_verification(format!("method '{}' not declared", qualified_name)))?;
 
         // Create entry block.
         let entry_bb = ctx.context.append_basic_block(fn_value, "entry");
@@ -133,10 +133,10 @@ fn define_methods_for_type(
             .codegen
             .builder
             .build_alloca(self_ty, "self")
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         lower_ctx.codegen.builder
             .build_store(self_alloca, self_param)
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         let self_sem_ty = Type::Named(type_name.clone());
         lower_ctx.scope_stack.declare("self", self_alloca, self_ty.into(), self_sem_ty);
         
@@ -146,10 +146,10 @@ fn define_methods_for_type(
             let llvm_param_ty = utils::llvm_type(lower_ctx.codegen, registry, param_ty)?;
             let alloca = lower_ctx.codegen.builder
                 .build_alloca(llvm_param_ty, param_name)
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             lower_ctx.codegen.builder
                 .build_store(alloca, param_value)
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             lower_ctx.scope_stack.declare(param_name, alloca, llvm_param_ty, param_ty.clone());
         }
 
@@ -170,7 +170,7 @@ fn define_methods_for_type(
                 }
             })
             .ok_or_else(|| {
-                CodegenError::LlvmVerification(format!("method body for '{}' not found", method_name))
+                CodegenError::llvm_verification(format!("method body for '{}' not found", method_name))
             })?;
 
         // Lower the method body.
@@ -179,7 +179,7 @@ fn define_methods_for_type(
         // Return.
         lower_ctx.codegen.builder
             .build_return(Some(&body_value))
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
         lower_ctx.pop_scope();
     }

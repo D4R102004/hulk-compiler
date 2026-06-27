@@ -55,14 +55,14 @@ pub fn build_smoke_module(context: &Context) -> Result<CodegenCtx<'_>, CodegenEr
     ctx.builder.position_at_end(entry_bb);
     ctx.builder
         .build_call(noop, &[], "call_noop")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.builder
         .build_return(Some(&i32_t.const_int(0, false)))
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     ctx.module
         .verify()
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     Ok(ctx)
 }
@@ -72,7 +72,7 @@ pub fn build_smoke_module(context: &Context) -> Result<CodegenCtx<'_>, CodegenEr
 pub fn emit_llvm_ir_to_file(ctx: &CodegenCtx, path: &Path) -> Result<(), CodegenError> {
     ctx.module
         .print_to_file(path)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))
 }
 
 pub fn compile(
@@ -130,11 +130,11 @@ pub fn compile(
 
     // Return 0.
     codegen.builder.build_return(Some(&i32_type.const_int(0, false)))
-        .map_err(|e| error::CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| error::CodegenError::llvm_verification(e.to_string()))?;
 
     // Verify module.
     codegen.module.verify()
-        .map_err(|e| error::CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| error::CodegenError::llvm_verification(e.to_string()))?;
 
     // Emit object file and link (using existing emit logic).
     let obj_path = opts.output_path.with_extension("o");

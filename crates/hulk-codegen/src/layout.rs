@@ -61,7 +61,7 @@ pub fn build_layouts(registry: &TypeRegistry, ctx: &mut CodegenCtx) -> Result<()
     for type_name in order {
         let info = registry
             .lookup_type(&type_name)
-            .ok_or_else(|| CodegenError::LlvmVerification(format!("type '{}' not in registry", type_name)))?;
+            .ok_or_else(|| CodegenError::llvm_verification(format!("type '{}' not in registry", type_name)))?;
 
         // Skip builtin value types and other special types that have no user‑defined layout.
         if info.is_builtin_value
@@ -140,7 +140,7 @@ fn build_struct_type<'ctx>(
             let ty = attr
                 .declared_type
                 .as_ref()
-                .ok_or_else(|| CodegenError::LlvmVerification(format!("attribute '{}' has no declared type", name)))?;
+                .ok_or_else(|| CodegenError::llvm_verification(format!("attribute '{}' has no declared type", name)))?;
             let llvm_ty = llvm_type(ctx, registry, ty)?;
             attr_names.push(name.clone());
             attr_tys.push(llvm_ty);
@@ -153,7 +153,7 @@ fn build_struct_type<'ctx>(
     for ancestor_name in ancestors {
         let ancestor_info = registry
             .lookup_type(&ancestor_name)
-            .ok_or_else(|| CodegenError::LlvmVerification(format!("ancestor '{}' not found", ancestor_name)))?;
+            .ok_or_else(|| CodegenError::llvm_verification(format!("ancestor '{}' not found", ancestor_name)))?;
         add_attributes_from_type(ancestor_info, &mut attr_names, &mut attr_tys, ctx)?;
     }
 
@@ -186,7 +186,7 @@ fn build_struct_type<'ctx>(
         let field_idx = 4 + idx;
         let offset = data_layout
             .offset_of_element(&struct_ty, field_idx as u32)
-            .ok_or_else(|| CodegenError::LlvmVerification(format!("offset computation failed for '{}'", name)))?;
+            .ok_or_else(|| CodegenError::llvm_verification(format!("offset computation failed for '{}'", name)))?;
         field_offsets.insert(name.clone(), offset as usize);
     }
 
@@ -207,7 +207,7 @@ pub fn build_vtables(ctx: &mut CodegenCtx, registry: &TypeRegistry) -> Result<()
     for type_name in type_names {
         let info = registry
             .lookup_type(&type_name)
-            .ok_or_else(|| CodegenError::LlvmVerification(format!("type '{}' not found", type_name)))?;
+            .ok_or_else(|| CodegenError::llvm_verification(format!("type '{}' not found", type_name)))?;
 
         let methods = if !info.flattened_methods.is_empty() {
             &info.flattened_methods
@@ -218,7 +218,7 @@ pub fn build_vtables(ctx: &mut CodegenCtx, registry: &TypeRegistry) -> Result<()
         let mut fn_ptrs = Vec::new();
         for method_name in methods.keys() {
             let owner = owning_type_for_method(&type_name, method_name, registry)
-                .ok_or_else(|| CodegenError::LlvmVerification(format!(
+                .ok_or_else(|| CodegenError::llvm_verification(format!(
                     "method '{}' has no declaring type in the ancestor chain of '{}'",
                     method_name, type_name
                 )))?;
@@ -227,7 +227,7 @@ pub fn build_vtables(ctx: &mut CodegenCtx, registry: &TypeRegistry) -> Result<()
                 .functions
                 .get(&qualified_name)
                 .cloned()
-                .ok_or_else(|| CodegenError::LlvmVerification(format!("method '{}' not declared", qualified_name)))?;
+                .ok_or_else(|| CodegenError::llvm_verification(format!("method '{}' not declared", qualified_name)))?;
                         let fn_ptr = fn_value.as_global_value().as_pointer_value();
             fn_ptrs.push(fn_ptr.into());
         }

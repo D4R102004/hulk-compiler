@@ -45,12 +45,13 @@ pub fn lower_call<'ctx>(
                 let param_types = match &call.callee.anno {
                     Type::Function { params, .. } => params,
                     other => {
-                        return Err(CodegenError::Unsupported {
-                            construct: format!(
+                        return Err(CodegenError::unsupported(
+                            format!(
                                 "call to variable `{}` with non-function type `{:?}`",
                                 name, other
                             ),
-                        });
+                            Some(call.callee.span)
+                            ),);
                     }
                 };
 
@@ -68,7 +69,7 @@ pub fn lower_call<'ctx>(
                     .codegen
                     .builder
                     .build_call(fn_val, &args, "call")
-                    .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+                    .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
                 let result = call_site
                     .try_as_basic_value()
                     .unwrap_basic();
@@ -94,10 +95,11 @@ pub fn lower_call<'ctx>(
     // Generic function‑value call (e.g., a variable holding a method reference).
     let callee_val = lower_expr(ctx, &call.callee)?;
     match &call.callee.anno {
-        Type::Function { .. } => lower_function_value(ctx, callee_val, &call.callee.anno, &call.args),
-        _ => Err(CodegenError::Unsupported {
-            construct: format!("unable to resolve call to type `{}`", call.callee.anno),
-        }),
+        Type::Function { .. } => lower_function_value(ctx, callee_val, &call.callee.anno, &call.args, Some(call.callee.span)),
+        _ => Err(CodegenError::unsupported (
+            format!("unable to resolve call to type `{}`", call.callee.anno),
+            Some(call.callee.span)
+        )),
     }
 }
 
@@ -152,7 +154,7 @@ fn lower_class_method_call<'ctx>(
     object: TypedExpr,
     method_name: &str,
     args: &[TypedExpr],
-    _span: SourceSpan,
+    span: SourceSpan,
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
     // 1. Lower the object expression to obtain a pointer to the receiver.
     let obj_val = lower_expr(ctx, &object)?;
@@ -163,9 +165,10 @@ fn lower_class_method_call<'ctx>(
     let type_name = match obj_type {
         Type::Named(name) => name,
         _ => {
-            return Err(CodegenError::Unsupported {
-                construct: format!("method call on non‑named type: {:?}", obj_type),
-            });
+            return Err(CodegenError::unsupported(
+                format!("method call on non-named type: {:?}", obj_type),
+                Some(span)
+            ));
         }
     };
 
@@ -173,9 +176,10 @@ fn lower_class_method_call<'ctx>(
     let method_sig = ctx
         .registry
         .lookup_method(obj_type, method_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("method '{}' not found", method_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported(
+            format!("method '{}' not found", method_name),
+            Some(span)
+        ))?;
 
     // 4. Prepare the call arguments: first `self` (the object pointer), then the rest.
     let mut call_args = vec![obj_ptr.into()];
@@ -189,7 +193,7 @@ fn lower_class_method_call<'ctx>(
                 .codegen
                 .builder
                 .build_call(*fn_val, &call_args, "direct_method_call")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             let result = call_site
                 .try_as_basic_value()
                 .unwrap_basic();
@@ -203,16 +207,18 @@ fn lower_class_method_call<'ctx>(
         .codegen
         .type_layouts
         .get(type_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("no layout for type '{}'", type_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported(
+            format!("no layout for type '{}'", type_name),
+            Some(span)
+        ))?;
 
     let slot_idx = *layout
         .method_slots
         .get(method_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("method '{}' not found in type '{}'", method_name, type_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported(
+            format!("method '{}' not found in type '{}'", method_name, type_name),
+            Some(span)
+        ))?;
 
     // 7. Load the vtable pointer from the object header (field index 3).
     let i32_type = ctx.codegen.context.i32_type();
@@ -226,13 +232,13 @@ fn lower_class_method_call<'ctx>(
                 &[i32_type.const_int(0, false), i32_type.const_int(3, false)],
                 "vtable_ptr_ptr",
             )
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     let vtable_ptr = ctx
         .codegen
         .builder
         .build_load(ptr_type, vtable_ptr_ptr, "vtable_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .into_pointer_value();
 
     // 8. Load the function pointer from the vtable at the computed slot index.
@@ -241,13 +247,13 @@ fn lower_class_method_call<'ctx>(
         ctx.codegen
             .builder
             .build_gep(ptr_type, vtable_ptr, &[slot_val.into()], "fn_ptr_ptr")
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     let fn_ptr = ctx
         .codegen
         .builder
         .build_load(ptr_type, fn_ptr_ptr, "fn_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .into_pointer_value();
 
     // 9. Retrieve the method's declared LLVM function type from the module.
@@ -258,9 +264,10 @@ fn lower_class_method_call<'ctx>(
         .get(&qualified_name)
         .cloned()
         .ok_or_else(|| {
-            CodegenError::Unsupported {
-                construct: format!("method '{}' not declared", qualified_name),
-            }
+            CodegenError::unsupported(
+                format!("method '{}' not declared", qualified_name),
+                Some(span)
+            )
         })?;
     let fn_type = fn_decl.get_type();
 
@@ -269,7 +276,7 @@ fn lower_class_method_call<'ctx>(
         .codegen
         .builder
         .build_indirect_call(fn_type, fn_ptr, &call_args, "method_call")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let result = call_site
         .try_as_basic_value()
         .unwrap_basic();
@@ -284,9 +291,10 @@ fn lower_base_call<'ctx>(
     let (current_type, current_method) = match (&ctx.current_type, &ctx.current_method) {
         (Some(ty), Some(meth)) => (ty, meth),
         _ => {
-            return Err(CodegenError::Unsupported {
-                construct: "base call outside of an overriding method".into(),
-            });
+            return Err(CodegenError::unsupported(
+                "base call outside of an overriding method".into(),
+                Some(call.callee.span)
+            ));
         }
     };
 
@@ -295,24 +303,27 @@ fn lower_base_call<'ctx>(
         .registry
         .parent_of(current_type)
         .ok_or_else(|| {
-            CodegenError::Unsupported {
-                construct: format!("type '{}' has no parent", current_type),
-            }
-        })?;
+            CodegenError::unsupported(
+                format!("type '{}' has no parent", current_type),
+                Some(call.callee.span)
+            )
+            })?;
 
     // Look up the parent method signature.
     let parent_info = ctx
         .registry
         .lookup_type(&parent_name)
         .ok_or_else(|| {
-            CodegenError::Unsupported {
-                construct: format!("parent type '{}' not found", parent_name),
-            }
+            CodegenError::unsupported(
+                format!("parent type '{}' not found", parent_name),
+                Some(call.callee.span)
+            )
         })?;
     if !parent_info.methods.contains_key(current_method) {
-        return Err(CodegenError::Unsupported {
-            construct: format!("method '{}' not found in parent type '{}'", current_method, parent_name),
-        });
+        return Err(CodegenError::unsupported(
+            format!("method '{}' not found in parent type '{}'", current_method, parent_name),
+            Some(call.callee.span)
+        ));
     }
 
     // Get the function from the module using the qualified name.
@@ -323,9 +334,10 @@ fn lower_base_call<'ctx>(
         .get(&qualified_name)
         .cloned()
         .ok_or_else(|| {
-            CodegenError::Unsupported {
-                construct: format!("parent method '{}' not declared", qualified_name),
-            }
+            CodegenError::unsupported(
+                format!("parent method '{}' not declared", qualified_name),
+                Some(call.callee.span)
+            )
         })?;
 
     // Prepare arguments: `self` is the first argument. We need to load `self` from the scope.
@@ -333,9 +345,10 @@ fn lower_base_call<'ctx>(
         .scope_stack
         .lookup("self")
         .ok_or_else(|| {
-            CodegenError::Unsupported {
-                construct: "self not in scope".into(),
-            }
+            CodegenError::unsupported(
+                "self not in scope".into(),
+                Some(call.callee.span)
+            )
         })?
         .0;
     let mut args = Vec::new();
@@ -349,7 +362,7 @@ fn lower_base_call<'ctx>(
         .codegen
         .builder
         .build_call(fn_val, &args, "base_call")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let result = call_site
         .try_as_basic_value()
         .unwrap_basic();
@@ -371,14 +384,16 @@ fn lower_function_value<'ctx>(
     callee_val: inkwell::values::BasicValueEnum<'ctx>,
     callee_ty: &Type,
     args: &[hulk_ast::Expr<Type>],
+    span: Option<SourceSpan>,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     // Extract the function type details.
     let (param_types, return_type) = match callee_ty {
         Type::Function { params, return_type } => (params, return_type.as_ref()),
         _ => {
-            return Err(CodegenError::Unsupported {
-                construct: "expected function type".into(),
-            });
+            return Err(CodegenError::unsupported(
+                "expected function type".into(),
+                span,
+            ));
         }
     };
 
@@ -390,13 +405,13 @@ fn lower_function_value<'ctx>(
         .codegen
         .builder
         .build_extract_value(struct_val, 0, "self_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .into_pointer_value();
     let fn_ptr = ctx
         .codegen
         .builder
         .build_extract_value(struct_val, 1, "fn_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .into_pointer_value();
 
     // Build the function type for the indirect call.
@@ -417,7 +432,7 @@ fn lower_function_value<'ctx>(
         .codegen
         .builder
         .build_pointer_cast(fn_ptr, ctx.codegen.context.ptr_type(Default::default()), "fn_ptr_typed") 
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Prepare arguments: first self_ptr, then the rest.
     let mut call_args = Vec::new();
@@ -431,7 +446,7 @@ fn lower_function_value<'ctx>(
         .codegen
         .builder
         .build_indirect_call(fn_type, fn_ptr_typed, &call_args, "call_fat_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let result = call_site.try_as_basic_value().unwrap_basic();
     Ok(result)
 }
@@ -442,7 +457,7 @@ fn lower_builtin_vector_call<'ctx>(
     obj_val: BasicValueEnum<'ctx>,
     method_name: &str,
     args: &[TypedExpr],
-    _span: SourceSpan,
+    span: SourceSpan,
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
     let obj_ptr = obj_val.into_pointer_value();
     let runtime_name = match method_name {
@@ -451,18 +466,20 @@ fn lower_builtin_vector_call<'ctx>(
         "set" => "hulk_rt_vector_set",
         "next" => "hulk_rt_vector_next",
         "current" => "hulk_rt_vector_current",
-        _ => return Err(CodegenError::Unsupported {
-            construct: format!("Vector method `{}` not implemented", method_name),
-        }),
+        _ => return Err(CodegenError::unsupported (
+            format!("Vector method `{}` not implemented", method_name),
+            Some(span),
+        )),
     };
     let fn_val = ctx
         .codegen
         .functions
         .get(runtime_name)
         .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("runtime function `{}` not declared", runtime_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported(
+            format!("runtime function `{}` not declared", runtime_name),
+            Some(span),
+        ))?;
 
     let mut call_args = vec![obj_ptr.into()];
     for arg in args {
@@ -473,7 +490,7 @@ fn lower_builtin_vector_call<'ctx>(
         .codegen
         .builder
         .build_call(fn_val, &call_args, "vector_call")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     Ok(call_site.try_as_basic_value().unwrap_basic())
 }
 
@@ -483,24 +500,26 @@ fn lower_builtin_range_call<'ctx>(
     obj_val: BasicValueEnum<'ctx>,
     method_name: &str,
     args: &[TypedExpr],
-    _span: SourceSpan,
+    span: SourceSpan,
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
     let obj_ptr = obj_val.into_pointer_value();
     let runtime_name = match method_name {
         "next" => "hulk_rt_range_next",
         "current" => "hulk_rt_range_current",
-        _ => return Err(CodegenError::Unsupported {
-            construct: format!("Range method `{}` not implemented", method_name),
-        }),
+        _ => return Err(CodegenError::unsupported(
+            format!("Range method `{}` not implemented", method_name),
+            Some(span),
+        )),
     };
     let fn_val = ctx
         .codegen
         .functions
         .get(runtime_name)
         .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("runtime function `{}` not declared", runtime_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported(
+            format!("runtime function `{}` not declared", runtime_name),
+            Some(span),
+        ))?;
 
     let mut call_args = vec![obj_ptr.into()];
     for arg in args {
@@ -511,7 +530,7 @@ fn lower_builtin_range_call<'ctx>(
         .codegen
         .builder
         .build_call(fn_val, &call_args, "range_call")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     Ok(call_site.try_as_basic_value().unwrap_basic())
 }
 
@@ -524,7 +543,7 @@ fn lower_protocol_call<'ctx>(
     obj_type: &Type,
     method_name: &str,
     args: &[TypedExpr],
-    _span: SourceSpan,
+    span: SourceSpan,
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
     // 1. Extract data and itable from the fat pointer.
     let struct_val = obj_val.into_struct_value();
@@ -532,29 +551,31 @@ fn lower_protocol_call<'ctx>(
         .codegen
         .builder
         .build_extract_value(struct_val, 0, "data_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .into_pointer_value();
     let itable_ptr = ctx
         .codegen
         .builder
         .build_extract_value(struct_val, 1, "itable_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .into_pointer_value();
 
     // 2. Determine the protocol name (for Iterable, use "Iterable").
     let protocol_name = match obj_type {
         Type::Named(name) => name.as_str(),
         Type::Iterable(_) => "Iterable",
-        _ => return Err(CodegenError::Unsupported {
-            construct: format!("expected protocol type, got {:?}", obj_type),
-        }),
+        _ => return Err(CodegenError::unsupported (
+            format!("expected protocol type, got {:?}", obj_type),
+            Some(span),
+        )),
     };
 
     // 3. Get the method slot index in the protocol's flattened method table.
     let slot = crate::itables::protocol_method_slot(ctx.registry, protocol_name, method_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("method `{}` not found in protocol `{}`", method_name, protocol_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported (
+            format!("method `{}` not found in protocol `{}`", method_name, protocol_name),
+            Some(span),
+        ))?;
 
     // 4. Load the function pointer from the itable.
     let ptr_type = ctx.codegen.context.ptr_type(Default::default());
@@ -563,22 +584,23 @@ fn lower_protocol_call<'ctx>(
         ctx.codegen
             .builder
             .build_gep(ptr_type, itable_ptr, &[slot_val.into()], "fn_ptr_ptr")
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     let fn_ptr = ctx
         .codegen
         .builder
         .build_load(ptr_type, fn_ptr_ptr, "fn_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .into_pointer_value();
 
     // 5. Build the function type from the method signature.
     let method_sig = ctx
         .registry
         .lookup_method(obj_type, method_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("method `{}` not found", method_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported (
+            format!("method `{}` not found", method_name),
+            Some(span),
+        ))?;
     let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
     for (_, ty) in &method_sig.params {
         let llvm_ty = llvm_type(ctx.codegen, ctx.registry, ty)?;
@@ -594,7 +616,7 @@ fn lower_protocol_call<'ctx>(
         .codegen
         .builder
         .build_pointer_cast(fn_ptr, ctx.codegen.context.ptr_type(Default::default()), "fn_ptr_typed")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // 7. Prepare arguments: data_ptr as `self`, then the rest.
     let mut call_args = vec![data_ptr.into()];
@@ -606,7 +628,7 @@ fn lower_protocol_call<'ctx>(
         .codegen
         .builder
         .build_indirect_call(fn_type, fn_ptr_typed, &call_args, "itable_call")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     Ok(call_site.try_as_basic_value().unwrap_basic())
 }
 

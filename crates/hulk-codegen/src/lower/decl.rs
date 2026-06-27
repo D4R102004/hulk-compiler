@@ -35,7 +35,7 @@ fn declare_function(
 ) -> Result<(), CodegenError> {
     let sig = registry
         .lookup_function(&func.name)
-        .ok_or_else(|| CodegenError::LlvmVerification(format!("function '{}' not in registry", func.name)))?;
+        .ok_or_else(|| CodegenError::llvm_verification(format!("function '{}' not in registry", func.name)))?;
 
     // Map parameter types from the registry signature.
     let param_types: Vec<_> = sig
@@ -87,7 +87,7 @@ fn define_function(
         .get(&func.name)
         .cloned()
         .ok_or_else(|| {
-            CodegenError::LlvmVerification(format!("function '{}' not declared", func.name))
+            CodegenError::llvm_verification(format!("function '{}' not declared", func.name))
         })?;
 
     let entry_bb = ctx.context.append_basic_block(fn_value, "entry");
@@ -101,7 +101,7 @@ fn define_function(
     // Retrieve the function signature from the registry to get parameter types.
     let sig = registry
         .lookup_function(&func.name)
-        .ok_or_else(|| CodegenError::LlvmVerification(format!("function '{}' not in registry", func.name)))?;
+        .ok_or_else(|| CodegenError::llvm_verification(format!("function '{}' not in registry", func.name)))?;
 
     // Collect all parameter values.
     let param_values = fn_value.get_params();
@@ -110,15 +110,15 @@ fn define_function(
     for (i, (param_name, param_ty)) in sig.params.iter().enumerate() {
         let param_value = param_values
             .get(i)
-            .ok_or_else(|| CodegenError::LlvmVerification(format!("missing parameter {}", i)))?;
+            .ok_or_else(|| CodegenError::llvm_verification(format!("missing parameter {}", i)))?;
         // Use lower_ctx.codegen instead of ctx to avoid mutable borrow conflict.
         let llvm_param_ty = utils::llvm_type(lower_ctx.codegen, registry, param_ty)?;
         let alloca = lower_ctx.codegen.builder
             .build_alloca(llvm_param_ty, param_name)
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         lower_ctx.codegen.builder
             .build_store(alloca, *param_value)
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         lower_ctx.scope_stack.declare(param_name, alloca, llvm_param_ty, param_ty.clone());
     }
 
@@ -128,7 +128,7 @@ fn define_function(
     // Return the body value.
     lower_ctx.codegen.builder
         .build_return(Some(&body_value))
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     
     lower_ctx.pop_scope(); // Pop the function's parameter scope.
 

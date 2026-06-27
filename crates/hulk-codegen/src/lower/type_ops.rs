@@ -1,6 +1,6 @@
 //! Lowering of type tests (`is`) and downcasts (`as`).
 
-use hulk_ast::{DowncastExpr, TypeTestExpr};
+use hulk_ast::{DowncastExpr, TypeTestExpr, SourceSpan};
 use hulk_semantic::Type;
 
 use crate::error::CodegenError;
@@ -16,7 +16,7 @@ pub fn lower_typetest<'ctx>(
     type_test: &TypeTestExpr<Type>,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     let obj_ptr = lower_object_pointer(ctx, &type_test.expr)?;
-    let target_vtable = resolve_vtable(ctx, &type_test.type_name.name)?;
+    let target_vtable = resolve_vtable(ctx, &type_test.type_name.name, Some(type_test.expr.span))?;
 
     let check_fn = ensure_decl(ctx.codegen, "hulk_rt_downcast_check")?;
     let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![obj_ptr.into(), target_vtable.into()];
@@ -24,7 +24,7 @@ pub fn lower_typetest<'ctx>(
         .codegen
         .builder
         .build_call(check_fn, &args, "downcast_check")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let result = call_site.try_as_basic_value().unwrap_basic();
     Ok(result)
 }
@@ -38,7 +38,7 @@ pub fn lower_downcast<'ctx>(
     downcast: &DowncastExpr<Type>,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     let obj_ptr = lower_object_pointer(ctx, &downcast.expr)?;
-    let target_vtable = resolve_vtable(ctx, &downcast.type_name.name)?;
+    let target_vtable = resolve_vtable(ctx, &downcast.type_name.name, Some(downcast.expr.span))?;
 
     let check_fn = ensure_decl(ctx.codegen, "hulk_rt_downcast_check")?;
     let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![obj_ptr.into(), target_vtable.into()];
@@ -46,7 +46,7 @@ pub fn lower_downcast<'ctx>(
         .codegen
         .builder
         .build_call(check_fn, &args, "downcast_check")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let is_ok = call_site.try_as_basic_value().unwrap_basic();
 
     // Branch: if ok, continue; else trap.
@@ -60,7 +60,7 @@ pub fn lower_downcast<'ctx>(
     ctx.codegen
         .builder
         .build_conditional_branch(cond_int, ok_bb, trap_bb)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ─── Trap block ──────────────────────────────────────────────────────
 
@@ -69,12 +69,12 @@ pub fn lower_downcast<'ctx>(
     ctx.codegen
         .builder
         .build_call(fail_fn, &[], "downcast_fail")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     // Mark the block as unreachable (the function never returns).
     ctx.codegen
         .builder
         .build_unreachable()
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ─── OK block ────────────────────────────────────────────────────────
 
@@ -85,11 +85,11 @@ pub fn lower_downcast<'ctx>(
         .codegen
         .builder
         .build_pointer_cast(obj_ptr, target_ptr_type, "downcast_result")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.codegen
         .builder
         .build_unconditional_branch(merge_bb)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ─── Merge block ─────────────────────────────────────────────────────
 
@@ -111,18 +111,21 @@ fn lower_object_pointer<'ctx>(
 fn resolve_vtable<'ctx>(
     ctx: &LowerCtx<'_, 'ctx>,
     type_name: &str,
+    span: Option<SourceSpan>,
 ) -> Result<inkwell::values::PointerValue<'ctx>, CodegenError> {
     let layout = ctx
         .codegen
         .type_layouts
         .get(type_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("no layout for type '{}'", type_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported (
+            format!("no layout for type '{}'", type_name),
+            span
+        ))?;
     let vtable_global = layout
         .vtable_global
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("vtable for '{}' not built", type_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported (
+            format!("vtable for '{}' not built", type_name),
+            span
+        ))?;
     Ok(vtable_global.as_pointer_value())
 }

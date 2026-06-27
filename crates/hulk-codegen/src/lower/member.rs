@@ -33,9 +33,10 @@ pub fn lower_member<'ctx>(
         return lower_method_reference(ctx, obj_ptr, obj_type, &member.member);
     }
 
-    Err(CodegenError::Unsupported {
-        construct: format!("member '{}' not found in type '{}'", member.member, obj_type),
-    })
+    Err(CodegenError::unsupported (
+        format!("member '{}' not found in type '{}'", member.member, obj_type),
+        Some(member.object.span),
+    ))
 }
 
 /// Loads an attribute value from the object at the given offset.
@@ -50,14 +51,14 @@ fn load_attribute<'ctx>(
         .codegen
         .builder
         .build_pointer_cast(obj_ptr, ptr_type, "obj_i8")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     let offset_val = ctx.codegen.context.i64_type().const_int(offset as u64, false);
     let field_ptr_i8 = unsafe {
         ctx.codegen
             .builder
             .build_gep(ptr_type, obj, &[offset_val.into()], "field_ptr")
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
 
     let attr_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, attr_type)?;
@@ -66,14 +67,14 @@ fn load_attribute<'ctx>(
         .codegen
         .builder
         .build_pointer_cast(field_ptr_i8, attr_ptr_type, "field_typed_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Load and return the attribute value.
     let val = ctx
         .codegen
         .builder
         .build_load(attr_llvm_ty, field_ptr, "attr_load")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     Ok(val)
 }
@@ -110,9 +111,10 @@ fn lower_method_reference<'ctx>(
     let type_name = match obj_type {
         Type::Named(name) => name,
         _ => {
-            return Err(CodegenError::Unsupported {
-                construct: format!("method reference on non‑named type: {:?}", obj_type),
-            });
+            return Err(CodegenError::unsupported (
+                format!("method reference on non‑named type: {:?}", obj_type),
+                Some(obj_type.span())
+            ));
         }
     };
 
@@ -121,16 +123,18 @@ fn lower_method_reference<'ctx>(
         .codegen
         .type_layouts
         .get(type_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("no layout for type '{}'", type_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported (
+            format!("no layout for type '{}'", type_name),
+            Some(obj_type.span())
+        ))?;
 
     let slot_idx = *layout
         .method_slots
         .get(method_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("method '{}' not found in type '{}'", method_name, type_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported (
+            format!("method '{}' not found in type '{}'", method_name, type_name),
+            Some(obj_type.span())
+        ))?;
 
     // Load the vtable pointer from the object header.
     let i32_type = ctx.codegen.context.i32_type();
@@ -146,13 +150,13 @@ fn lower_method_reference<'ctx>(
                 &[i32_type.const_int(0, false), i32_type.const_int(3, false)],
                 "vtable_ptr_ptr",
             )
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     let vtable_ptr = ctx
         .codegen
         .builder
         .build_load(ptr_type, vtable_ptr_ptr, "vtable_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .into_pointer_value();
 
     // Load the function pointer from the vtable at the slot index.
@@ -161,13 +165,13 @@ fn lower_method_reference<'ctx>(
         ctx.codegen
             .builder
             .build_gep(ptr_type, vtable_ptr, &[slot_val.into()], "fn_ptr_ptr")
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     let fn_ptr = ctx
         .codegen
         .builder
         .build_load(ptr_type, fn_ptr_ptr, "fn_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .into_pointer_value();
 
     // Build the fat pointer struct: { self_ptr, fn_ptr }
@@ -176,37 +180,37 @@ fn lower_method_reference<'ctx>(
         .codegen
         .builder
         .build_alloca(fat_ptr_ty, "fat_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Store self pointer at index 0.
     let self_ptr_ptr = unsafe {
         ctx.codegen
             .builder
             .build_gep(fat_ptr_ty, fat_ptr_alloca, &[i32_type.const_int(0, false), i32_type.const_int(0, false)], "self_ptr_ptr")
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     ctx.codegen
         .builder
         .build_store(self_ptr_ptr, obj_ptr)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Store function pointer at index 1.
     let fn_ptr_ptr2 = unsafe {
         ctx.codegen
             .builder
             .build_gep(fat_ptr_ty, fat_ptr_alloca, &[i32_type.const_int(0, false), i32_type.const_int(1, false)], "fn_ptr_ptr2")
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     ctx.codegen
         .builder
         .build_store(fn_ptr_ptr2, fn_ptr)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Load the fat pointer struct as the result.
     let fat_ptr_val = ctx
         .codegen
         .builder
         .build_load(fat_ptr_ty, fat_ptr_alloca, "fat_ptr_val")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     Ok(fat_ptr_val)
 }

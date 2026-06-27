@@ -32,11 +32,10 @@ pub fn lower_for<'ctx>(
         .registry
         .lookup_method(&iterable_expr.anno, "current")
         .map(|sig| sig.return_type)
-        .ok_or_else(|| {
-            CodegenError::Unsupported {
-                construct: format!("iterable type `{}` does not support `current()`", iterable_expr.anno),
-            }
-        })?;
+        .ok_or_else(|| CodegenError::unsupported (
+            format!("iterable type `{}` does not support `current()`", iterable_expr.anno),
+            Some(iterable_expr.span)
+        ))?;
     let elem_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &elem_ty)?;
 
     // Result storage: the loop's value is the last body value, or a default.
@@ -45,7 +44,7 @@ pub fn lower_for<'ctx>(
         .codegen
         .builder
         .build_alloca(result_ty, "for_result")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Default value (zero/null) when body never executes.
     let default_val: BasicValueEnum<'ctx> = match &body_expr.anno {
@@ -75,15 +74,16 @@ pub fn lower_for<'ctx>(
             BasicValueEnum::StructValue(null_struct)
         }
         _ => {
-            return Err(CodegenError::Unsupported {
-                construct: format!("default value for type `{}` not implemented", body_expr.anno),
-            });
+            return Err(CodegenError::unsupported (
+                format!("default value for type `{}` not implemented", body_expr.anno),
+                Some(body_expr.span)
+            ));
         }
     };
     ctx.codegen
         .builder
         .build_store(result_alloca, default_val)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Basic blocks.
     let parent_fn = ctx
@@ -101,7 +101,7 @@ pub fn lower_for<'ctx>(
     ctx.codegen
         .builder
         .build_unconditional_branch(cond_bb)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ── Condition block ─────────────────────────────────────────────────
     ctx.codegen.builder.position_at_end(cond_bb);
@@ -119,7 +119,7 @@ pub fn lower_for<'ctx>(
     ctx.codegen
         .builder
         .build_conditional_branch(next_bool, body_bb, exit_bb)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ── Body block ──────────────────────────────────────────────────────
     ctx.codegen.builder.position_at_end(body_bb);
@@ -139,11 +139,11 @@ pub fn lower_for<'ctx>(
         .codegen
         .builder
         .build_alloca(elem_llvm_ty, &for_expr.var)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.codegen
         .builder
         .build_store(var_ptr, current_val)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.scope_stack.declare(&for_expr.var, var_ptr, elem_llvm_ty, elem_ty.clone());
 
     // Lower the body.
@@ -153,7 +153,7 @@ pub fn lower_for<'ctx>(
     ctx.codegen
         .builder
         .build_store(result_alloca, body_val)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     ctx.pop_scope();
 
@@ -161,7 +161,7 @@ pub fn lower_for<'ctx>(
     ctx.codegen
         .builder
         .build_unconditional_branch(cond_bb)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ── Exit block ──────────────────────────────────────────────────────
     ctx.codegen.builder.position_at_end(exit_bb);
@@ -169,7 +169,7 @@ pub fn lower_for<'ctx>(
         .codegen
         .builder
         .build_load(result_ty, result_alloca, "for_result_load")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     Ok(result)
 }
 
@@ -195,7 +195,7 @@ pub fn lower_vector_comprehension<'ctx>(
         .codegen
         .builder
         .build_call(dyn_new_fn, &[], "dyn_vec")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .try_as_basic_value()
         .basic()
         .unwrap()
@@ -216,7 +216,7 @@ pub fn lower_vector_comprehension<'ctx>(
     ctx.codegen
         .builder
         .build_unconditional_branch(cond_bb)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ── Condition block ─────────────────────────────────────────────────
     ctx.codegen.builder.position_at_end(cond_bb);
@@ -231,7 +231,7 @@ pub fn lower_vector_comprehension<'ctx>(
     ctx.codegen
         .builder
         .build_conditional_branch(next_bool, body_bb, exit_bb)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ── Body block ──────────────────────────────────────────────────────
     ctx.codegen.builder.position_at_end(body_bb);
@@ -250,11 +250,11 @@ pub fn lower_vector_comprehension<'ctx>(
         .codegen
         .builder
         .build_alloca(elem_llvm_ty, &comp.var)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.codegen
         .builder
         .build_store(var_ptr, current_val)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.scope_stack.declare(&comp.var, var_ptr, elem_llvm_ty, elem_ty.clone());
 
     // Lower the head expression.
@@ -270,13 +270,13 @@ pub fn lower_vector_comprehension<'ctx>(
     ctx.codegen
         .builder
         .build_call(append_fn, &[dyn_vec.into(), head_val.into()], "append")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Jump back to condition.
     ctx.codegen
         .builder
         .build_unconditional_branch(cond_bb)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ── Exit block ──────────────────────────────────────────────────────
     ctx.codegen.builder.position_at_end(exit_bb);
@@ -286,7 +286,7 @@ pub fn lower_vector_comprehension<'ctx>(
         .codegen
         .builder
         .build_call(to_vec_fn, &[dyn_vec.into()], "comp_result")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .try_as_basic_value()
         .basic()
         .unwrap();

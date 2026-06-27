@@ -26,7 +26,7 @@ pub fn init_all_targets() -> Result<(), CodegenError> {
 pub fn linux_x86_64_target_machine() -> Result<TargetMachine, CodegenError> {
     let triple = TargetTriple::create(TARGET_TRIPLE);
     let target = Target::from_triple(&triple)
-        .map_err(|e| CodegenError::TargetEmission(format!("could not find Linux x86_64 target: {e}")))?;
+        .map_err(|e| CodegenError::target_emission(format!("could not find Linux x86_64 target: {e}")))?;
 
     target
         .create_target_machine(
@@ -38,8 +38,8 @@ pub fn linux_x86_64_target_machine() -> Result<TargetMachine, CodegenError> {
             CodeModel::Small,
         )
         .ok_or_else(|| {
-            CodegenError::TargetEmission(
-                "could not create a target machine for x86_64-unknown-linux-gnu".into(),
+            CodegenError::target_emission(
+                "could not create a target machine for x86_64-unknown-linux-gnu",
             )
         })
 }
@@ -48,5 +48,5 @@ pub fn linux_x86_64_target_machine() -> Result<TargetMachine, CodegenError> {
 pub fn write_object_file(machine: &TargetMachine, module: &Module, path: &Path) -> Result<(), CodegenError> {
     machine
         .write_to_file(module, FileType::Object, path)
-        .map_err(|e| CodegenError::TargetEmission(e.to_string()))
+        .map_err(|e| CodegenError::target_emission(e.to_string()))
 }

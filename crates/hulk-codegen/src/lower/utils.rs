@@ -21,7 +21,7 @@ pub fn cmp_float<'ctx>(
     let lf = left.into_float_value();
     let rf = right.into_float_value();
     let cmp = ctx.codegen.builder.build_float_compare(pred, lf, rf, name)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     Ok(cmp.into())
 }
 
@@ -37,7 +37,7 @@ pub fn to_string<'ctx>(
             let f = val.into_float_value();
             let fn_val = runtime_decls::declare_number_to_string(ctx.codegen);
             let call = ctx.codegen.builder.build_call(fn_val, &[f.into()], "num_to_str")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .try_as_basic_value()
                 .unwrap_basic();
             Ok(call.into_pointer_value())
@@ -46,14 +46,15 @@ pub fn to_string<'ctx>(
             let b = val.into_int_value();
             let fn_val = runtime_decls::declare_bool_to_string(ctx.codegen);
             let call = ctx.codegen.builder.build_call(fn_val, &[b.into()], "bool_to_str")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .try_as_basic_value()
                 .unwrap_basic();
             Ok(call.into_pointer_value())
         }
-        _ => Err(CodegenError::Unsupported {
-            construct: format!("cannot convert type {} to string", ty)
-        })
+        _ => Err(CodegenError::unsupported(
+            format!("cannot convert type {} to string", ty),
+            None
+        ))
     }
 }
 
@@ -79,9 +80,10 @@ pub fn llvm_type<'ctx>(
             Ok(codegen.context.struct_type(&[ptr_type.into(), ptr_type.into()], false).into())
         }
         Type::Named(_) => Ok(codegen.context.ptr_type(Default::default()).into()),
-        _ => Err(CodegenError::Unsupported {
-            construct: format!("type {} not supported", ty)
-        })
+        _ => Err(CodegenError::unsupported(
+            format!("type {} not supported", ty),
+            None
+        ))
     }
 }
 
@@ -94,43 +96,48 @@ pub fn resolve_attribute_with_offset(
     let type_name = match obj_type {
         Type::Named(name) => name,
         _ => {
-            return Err(CodegenError::Unsupported {
-                construct: format!("attribute access on non‑named type: {:?}", obj_type),
-            });
+            return Err(CodegenError::unsupported(
+                format!("attribute access on non‑named type: {:?}", obj_type),
+                None
+            ));
         }
     };
     let info = ctx
         .registry
         .lookup_type(type_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("type '{}' not found", type_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported(
+            format!("type '{}' not found", type_name),
+            None
+        ))?;
     let attr_info = info
         .attributes
         .get(member_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("attribute '{}' not found", member_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported(
+            format!("attribute '{}' not found", member_name),
+            None
+        ))?;
     let attr_type = attr_info
         .declared_type
         .as_ref()
         .ok_or_else(|| {
-            CodegenError::LlvmVerification(format!("attribute '{}' has no declared type", member_name))
+            CodegenError::llvm_verification(format!("attribute '{}' has no declared type", member_name))
         })?
         .clone();
     let layout = ctx
         .codegen
         .type_layouts
         .get(type_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("no layout for type '{}'", type_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported(
+            format!("no layout for type '{}'", type_name),
+            None
+        ))?;
     let offset = *layout
         .field_offsets
         .get(member_name)
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("no offset for attribute '{}'", member_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported(
+            format!("no offset for attribute '{}'", member_name),
+            None
+        ))?;
     Ok((attr_type, offset))
 }
 
@@ -168,18 +175,20 @@ pub fn convert_to_protocol<'ctx>(
         Type::Named(name) => name,
         Type::Iterable(_) => "Iterable",
         _ => {
-            return Err(CodegenError::Unsupported {
-                construct: format!("cannot convert to protocol type: {}", protocol_ty),
-            });
+            return Err(CodegenError::unsupported(
+                format!("cannot convert to protocol type: {}", protocol_ty),
+                None
+            ));
         }
     };
 
     let concrete_name = match concrete_ty {
         Type::Named(name) => name,
         _ => {
-            return Err(CodegenError::Unsupported {
-                construct: format!("cannot convert from non-named type: {}", concrete_ty),
-            });
+            return Err(CodegenError::unsupported(
+                format!("cannot convert from non-named type: {}", concrete_ty),
+                None
+            ));
         }
     };
 
@@ -189,9 +198,10 @@ pub fn convert_to_protocol<'ctx>(
         .itables
         .get(&(concrete_name.clone(), (*protocol_name).to_string()))
         .ok_or_else(|| {
-            CodegenError::Unsupported {
-                construct: format!("itable not found for ({}, {})", concrete_name, protocol_name),
-            }
+            CodegenError::unsupported(
+                format!("itable not found for ({}, {})", concrete_name, protocol_name),
+                None
+            )
         })?;
     let itable_ptr = itable_global.as_pointer_value();
 
@@ -202,7 +212,7 @@ pub fn convert_to_protocol<'ctx>(
         .codegen
         .builder
         .build_alloca(fat_ptr_ty, "fat_ptr")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     let zero = ctx.codegen.context.i32_type().const_int(0, false);
     let one = ctx.codegen.context.i32_type().const_int(1, false);
@@ -212,31 +222,31 @@ pub fn convert_to_protocol<'ctx>(
         ctx.codegen
             .builder
             .build_gep(fat_ptr_ty, fat_ptr_alloca, &[zero, zero], "data_ptr_ptr")
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     ctx.codegen
         .builder
         .build_store(data_ptr_ptr, obj_ptr)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Store itable pointer at index 1.
     let itable_ptr_ptr = unsafe {
         ctx.codegen
             .builder
             .build_gep(fat_ptr_ty, fat_ptr_alloca, &[zero, one], "itable_ptr_ptr")
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     ctx.codegen
         .builder
         .build_store(itable_ptr_ptr, itable_ptr)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Load the fat pointer.
     let fat_ptr = ctx
         .codegen
         .builder
         .build_load(fat_ptr_ty, fat_ptr_alloca, "fat_ptr_val")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     Ok(fat_ptr)
 }
  
@@ -288,9 +298,10 @@ pub fn box_primitive<'ctx>(
         .functions
         .get("hulk_rt_alloc")
         .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: "hulk_rt_alloc not declared".into(),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported(
+            "hulk_rt_alloc not declared".into(),
+            None
+        ))?;
 
     // Allocate 16 bytes (tag + padding + payload)
     let size = ctx.codegen.context.i64_type().const_int(16, false);
@@ -298,7 +309,7 @@ pub fn box_primitive<'ctx>(
         .codegen
         .builder
         .build_call(alloc_fn, &[size.into()], "box_alloc")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let box_ptr = call
         .try_as_basic_value()
         .basic()
@@ -309,9 +320,10 @@ pub fn box_primitive<'ctx>(
     let tag = match ty {
         Type::Number => 0,
         Type::Boolean => 1,
-        _ => return Err(CodegenError::Unsupported {
-            construct: format!("boxing of type {} not supported", ty),
-        }),
+        _ => return Err(CodegenError::unsupported(
+            format!("boxing of type {} not supported", ty),
+            None
+        )),
     };
     let tag_ptr = unsafe {
         ctx.codegen
@@ -322,12 +334,12 @@ pub fn box_primitive<'ctx>(
                 &[ctx.codegen.context.i32_type().const_int(0, false)],
                 "tag_ptr",
             )
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     ctx.codegen
         .builder
         .build_store(tag_ptr, ctx.codegen.context.i8_type().const_int(tag, false))
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Store payload at offset 8
     let payload_ptr = unsafe {
@@ -339,7 +351,7 @@ pub fn box_primitive<'ctx>(
                 &[ctx.codegen.context.i32_type().const_int(8, false)],
                 "payload_ptr",
             )
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
 
     match ty {
@@ -349,11 +361,11 @@ pub fn box_primitive<'ctx>(
                 payload_ptr,
                 ctx.codegen.context.ptr_type(Default::default()),
                 "payload_typed_ptr",
-            ).map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             ctx.codegen
                 .builder
                 .build_store(payload_typed_ptr, float_val)
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         }
         Type::Boolean => {
             let int_val = value.into_int_value();
@@ -361,16 +373,16 @@ pub fn box_primitive<'ctx>(
                 int_val,
                 ctx.codegen.context.i64_type(),
                 "bool_ext",
-            ).map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             let payload_typed_ptr = ctx.codegen.builder.build_pointer_cast(
                 payload_ptr,
                 ctx.codegen.context.ptr_type(Default::default()),
                 "payload_typed_ptr",
-            ).map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             ctx.codegen
                 .builder
                 .build_store(payload_typed_ptr, ext)
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         }
         _ => unreachable!(),
     }

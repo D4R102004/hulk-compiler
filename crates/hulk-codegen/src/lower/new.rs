@@ -17,6 +17,7 @@ use super::lower_expr;
 pub fn lower_new<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     new_expr: &NewExpr<Type>,
+    span: Option<SourceSpan>,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     let type_name = &new_expr.type_name.name;
 
@@ -28,18 +29,20 @@ pub fn lower_new<'ctx>(
     // Look up type info and extract params (owned).
     let params = {
         let info = ctx.registry.lookup_type(type_name)
-            .ok_or_else(|| CodegenError::Unsupported {
-                construct: format!("type '{}' not found", type_name),
-            })?;
+            .ok_or_else(|| CodegenError::unsupported (
+                format!("type '{}' not found", type_name),
+                span,
+            ))?;
         info.params.clone()
     };
 
     // Look up layout and extract all needed fields into owned values.
     let (struct_ty, size, field_offsets, vtable_global) = {
         let layout = ctx.codegen.type_layouts.get(type_name)
-            .ok_or_else(|| CodegenError::Unsupported {
-                construct: format!("no layout for type '{}'", type_name),
-            })?;
+            .ok_or_else(|| CodegenError::unsupported (
+                format!("no layout for type '{}'", type_name),
+                span,
+            ))?;
         (
             layout.struct_ty,
             layout.size,
@@ -55,15 +58,16 @@ pub fn lower_new<'ctx>(
     let size_val = ctx.codegen.context.i64_type().const_int(size as u64, false);
     let alloc_fn = ctx.codegen.functions.get("hulk_rt_alloc")
         .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: "hulk_rt_alloc not declared".into(),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported (
+            "hulk_rt_alloc not declared".into(),
+            span,
+        ))?;
 
     let call = ctx.codegen.builder.build_call(alloc_fn, &[size_val.into()], "alloc")
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let obj_ptr = call.try_as_basic_value()
         .basic()
-        .ok_or_else(|| CodegenError::LlvmVerification("alloc returned void".into()))?
+        .ok_or_else(|| CodegenError::llvm_verification("alloc returned void".into()))?
         .into_pointer_value();
 
     // --- 2. Initialise header ------------------------------------------------
@@ -82,41 +86,42 @@ pub fn lower_new<'ctx>(
                 obj_ptr,
                 &[i32_type.const_int(0, false), i32_type.const_int(field_idx.into(), false)],
                 "field_ptr",
-            ).map_err(|e| CodegenError::LlvmVerification(e.to_string()))
+            ).map_err(|e| CodegenError::llvm_verification(e.to_string()))
         }
     };
 
     // ref_count = 1
     let ref_count_ptr = gep_field(0)?;
     ctx.codegen.builder.build_store(ref_count_ptr, i64_type.const_int(1, false))
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // gc_mark = false
     let gc_mark_ptr = gep_field(1)?;
     ctx.codegen.builder.build_store(gc_mark_ptr, i1_type.const_int(0, false))
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // next = null
     let next_ptr = gep_field(2)?;
     ctx.codegen.builder.build_store(next_ptr, ptr_type.const_null())
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // vtable = global
     let vtable_global = vtable_global
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("vtable for '{}' not built", type_name),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported (
+            format!("vtable for '{}' not built", type_name),
+            span,
+        ))?;
     let vtable_ptr = vtable_global.as_pointer_value();
     let vtable_ptr_ptr = gep_field(3)?;
     ctx.codegen.builder.build_store(vtable_ptr_ptr, vtable_ptr)
-        .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // --- 3. Bind constructor parameters --------------------------------------
 
     ctx.push_scope();
 
     if new_expr.args.len() != params.len() {
-        return Err(CodegenError::LlvmVerification("argument count mismatch".into()));
+        return Err(CodegenError::llvm_verification("argument count mismatch".into()));
     }
     for (i, (param_name, _)) in params.iter().enumerate() {
         let arg_val = lower_expr(ctx, &new_expr.args[i])?;
@@ -143,9 +148,10 @@ pub fn lower_new<'ctx>(
         .functions
         .get("hulk_rt_retain")
         .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: "hulk_rt_retain not declared".into(),
-        })?;
+        .ok_or_else(|| CodegenError::unsupported (
+            "hulk_rt_retain not declared".into(),
+            span,
+        ))?;
 
     // Now evaluate each initializer and store it at the correct offset.
     for (attr_name, init_expr) in attr_inits {
@@ -154,22 +160,25 @@ pub fn lower_new<'ctx>(
             .registry
             .lookup_type(type_name)
             .and_then(|info| info.attributes.get(&attr_name))
-            .ok_or_else(|| CodegenError::Unsupported {
-                construct: format!("attribute info for '{}' not found", attr_name),
-            })?;
+            .ok_or_else(|| CodegenError::unsupported (
+                format!("attribute info for '{}' not found", attr_name),
+                span,
+            ))?;
         let attr_ty = attr_info
             .declared_type
             .as_ref()
-            .ok_or_else(|| CodegenError::Unsupported {
-                construct: format!("attribute '{}' has no declared type", attr_name),
-            })?;
+            .ok_or_else(|| CodegenError::unsupported (
+                format!("attribute '{}' has no declared type", attr_name),
+                span,
+            ))?;
 
         // 2. Compute the byte offset of the attribute.
         let offset = *field_offsets
             .get(&attr_name)
-            .ok_or_else(|| CodegenError::Unsupported {
-                construct: format!("no offset for attribute '{}'", attr_name),
-            })?;
+            .ok_or_else(|| CodegenError::unsupported (
+                format!("no offset for attribute '{}'", attr_name),
+                span,
+            ))?;
 
         // 3. Lower the initializer expression.
         let val = lower_expr(ctx, init_expr)?;
@@ -185,7 +194,7 @@ pub fn lower_new<'ctx>(
                     &[offset_val.into()],
                     "field_ptr",
                 )
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         };
 
         // 5. Cast to the attribute's type pointer.
@@ -194,20 +203,20 @@ pub fn lower_new<'ctx>(
             .codegen
             .builder
             .build_pointer_cast(field_ptr, target_ptr_type, "field_typed_ptr")
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
         // 6. Store the value.
         ctx.codegen
             .builder
             .build_store(typed_field_ptr, val)
-            .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
         // 7. If the attribute is heap‑allocated, retain the stored value.
         if crate::lower::utils::is_heap_allocated_type(attr_ty, ctx.registry) {
             ctx.codegen
                 .builder
                 .build_call(retain_fn, &[val.into()], "retain_attr")
-                .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         }
     }
 

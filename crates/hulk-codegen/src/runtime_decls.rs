@@ -201,9 +201,10 @@ pub fn ensure_decl<'ctx>(
         "hulk_rt_dynamic_vector_append" => declare_dynamic_vector_append(ctx),
         "hulk_rt_dynamic_vector_to_vector" => declare_dynamic_vector_to_vector(ctx),
         other => {
-            return Err(CodegenError::Unsupported {
-                construct: format!("no on‑demand declaration recipe for `{other}`"),
-            });
+            return Err(CodegenError::unsupported(
+                format!("no on-demand declaration recipe for `{other}`"),
+                None
+            ));
         }
     };
     ctx.functions.insert(name.to_string(), f);

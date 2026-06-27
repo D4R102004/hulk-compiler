@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use hulk_ast::{DeclarationKind, Expr, ExprKind, Program, TypeMemberKind, VectorExpr};
+use hulk_ast::{DeclarationKind, Expr, ExprKind, Program, SourceSpan, TypeMemberKind, VectorExpr};
 use hulk_semantic::{Type, TypeRegistry};
 
 use crate::context::CodegenCtx;
@@ -332,7 +332,7 @@ fn build_itable_for_pair(
 ) -> Result<(), CodegenError> {
     let proto_info = registry
         .lookup_protocol(protocol_name)
-        .ok_or_else(|| CodegenError::LlvmVerification(format!("protocol `{}` not found", protocol_name)))?;
+        .ok_or_else(|| CodegenError::llvm_verification(format!("protocol `{}` not found", protocol_name)))?;
 
     // Use the flattened method table (includes inherited methods).
     let proto_methods = &proto_info.flattened_methods;
@@ -344,7 +344,7 @@ fn build_itable_for_pair(
     let mut fn_ptrs = Vec::new();
 
     for method_name in proto_methods.keys() {
-        let fn_val = get_method_function(ctx, type_name, method_name)?;
+        let fn_val = get_method_function(ctx, type_name, method_name, Some(proto_info.span))?;
         let fn_ptr = fn_val.as_global_value().as_pointer_value();
         fn_ptrs.push(fn_ptr.into());
     }
@@ -371,6 +371,7 @@ fn get_method_function<'ctx>(
     ctx: &CodegenCtx<'ctx>,
     type_name: &str,
     method_name: &str,
+    span: Option<SourceSpan>,
 ) -> Result<inkwell::values::FunctionValue<'ctx>, CodegenError> {
     if let Some(owner) = crate::layout::owning_type_for_method(type_name, method_name, registry) {
         let qualified_name = format!("{}::{}", owner, method_name);
@@ -388,15 +389,17 @@ fn get_method_function<'ctx>(
         ("Vector", "current") => "hulk_rt_vector_current",
         ("Range", "next") => "hulk_rt_range_next",
         ("Range", "current") => "hulk_rt_range_current",
-        _ => return Err(CodegenError::Unsupported {
-            construct: format!("method `{}` of type `{}` not found", method_name, type_name),
-        }),
+        _ => return Err(CodegenError::unsupported(
+            format!("method `{}` of type `{}` not found", method_name, type_name),
+            span
+        )),
     };
 
     ctx.functions
         .get(runtime_name)
         .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: format!("runtime function `{}` not declared", runtime_name),
-        })
-}
+        .ok_or_else(|| CodegenError::unsupported(
+            format!("runtime function `{}` not declared", runtime_name),
+            span
+        ))
+    }
