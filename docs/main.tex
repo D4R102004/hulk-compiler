@@ -5,7 +5,7 @@
 
 \documentclass[12pt, a4paper]{article}
 
-% --- Paquetes esenciales ---
+% -- Paquetes esenciales --
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage[spanish]{babel}
@@ -28,6 +28,7 @@
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{tabularx}
+\usepackage{longtable}
 \usepackage{enumitem}
 \usepackage{setspace}
 \usepackage{fancyhdr}
@@ -37,7 +38,7 @@
 \usepackage{cite}
 \usepackage{url}
 
-% --- Configuración de listings para código HULK ---
+% -- Configuración de listings para código HULK --
 \definecolor{hulkgreen}{rgb}{0.0, 0.5, 0.0}
 \definecolor{hulkgray}{rgb}{0.5, 0.5, 0.5}
 \definecolor{hulkblue}{rgb}{0.0, 0.0, 0.7}
@@ -75,14 +76,15 @@
         {Ó}{{\'{O}}}1 {Ú}{{\'{U}}}1 {Ñ}{{\~{N}}}1
 }
 
-% --- Encabezado y pie de página ---
+% -- Encabezado y pie de página --
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{\small Compilador HULK}
 \fancyhead[R]{\small Universidad de La Habana, 2026}
 \fancyfoot[C]{\thepage}
+\setlength{\headheight}{13.59999pt}
 
-% --- Título personalizado ---
+% -- Título personalizado --
 \titleformat{\section}
   {\normalfont\Large\bfseries\color{hulkblue}}
   {\thesection}{1em}{}
@@ -108,13 +110,25 @@
 }
 % ============================================================
 \begin{document}
+\sloppy
 
 % ============================================================
 % PORTADA
 % ============================================================
 \begin{titlepage}
     \centering
-    \vspace*{1cm}
+    
+    % Logos (UH y MATCOM) lado a lado
+    \begin{minipage}{0.22\textwidth}
+    	\centering
+    	\includegraphics[width=\textwidth]{figs/uh.png}
+    \end{minipage}
+    \hfill
+    \begin{minipage}{0.22\textwidth}
+    	\centering
+    	\includegraphics[width=\textwidth]{figs/matcom.png}
+    \end{minipage}
+    \\[1.5cm]
 
     {\Huge\bfseries\color{hulkblue}
         Compilador del Lenguaje HULK\\[0.5em]
@@ -125,7 +139,7 @@
 
     \rule{\linewidth}{0.5mm}
 
-    \vspace{1cm}
+    \vspace{1.5cm}
 
     {\large
         \textbf{Informe de Proyecto}\\[0.3em]
@@ -153,7 +167,7 @@
 
     \rule{\linewidth}{0.5mm}
 
-    \vspace{1cm}
+    \vspace{1.5cm}
 
     {\small
         Repositorio: \url{https://github.com/D4R102004/hulk-compiler}
@@ -239,31 +253,31 @@ coincidencia de patrones, funciones de primera clase, vectores.
 El nacimiento de los compiladores está íntimamente ligado al origen de la
 programación moderna. En 1952, Grace Hopper desarrolló el primer compilador
 conocido, el A-0 System, que traducía código simbólico matemático a instrucciones
-de máquina. Este hito marcó el inicio de una nueva era: por primera vez, los
+de máquina~\cite{wexelblat1981}. Este hito marcó el inicio de una nueva era: por primera vez, los
 programadores podían expresar algoritmos en un nivel de abstracción superior al
 del lenguaje ensamblador.
 
 El salto definitivo llegó en 1957 con FORTRAN (\textit{Formula Translation}),
-desarrollado por John Backus y su equipo en IBM. FORTRAN demostró que era posible
+desarrollado por John Backus y su equipo en IBM~\cite{backus1957}. FORTRAN demostró que era posible
 generar código máquina tan eficiente como el escrito a mano, disipando las dudas
 de quienes creían que la abstracción debía sacrificar rendimiento. A FORTRAN le
 siguió LISP en 1958, introduciendo la recursión y el tratamiento de funciones como
-objetos de primera clase ---conceptos que siguen siendo relevantes en el diseño de
+objetos de primera clase~\cite{mccarthy1960} --conceptos que siguen siendo relevantes en el diseño de
 lenguajes actuales.
 
 Las décadas de 1960 y 1970 vieron la consolidación de la teoría formal detrás de
-la compilación. Noam Chomsky formuló la jerarquía de gramáticas formales, mientras
-que Donald Knuth definió los lenguajes LR(k), sentando las bases matemáticas del
+la compilación. Noam Chomsky formuló la jerarquía de gramáticas formales~\cite{chomsky1956}, mientras
+que Donald Knuth definió los lenguajes LR(k)~\cite{knuth1965}, sentando las bases matemáticas del
 análisis sintáctico. La publicación del ``libro del dragón''
 (\textit{Compilers: Principles, Techniques, and Tools}) por Aho, Sethi y Ullman
 en 1986 codificó el conocimiento acumulado en una referencia canónica que aún se
-utiliza en cursos universitarios de todo el mundo.
+utiliza en cursos universitarios de todo el mundo~\cite{aho1986}.
 
 El estado del arte moderno incluye compiladores de infraestructura compleja como
 GCC y LLVM. Este último, desarrollado originalmente por Chris Lattner en 2003,
 introdujo un concepto transformador: una \textit{representación intermedia} (IR)
 de bajo nivel y tipada que permite separar completamente el \textit{front end}
-(análisis y tipado) del \textit{back end} (generación de código nativo). Hoy en
+(análisis y tipado) del \textit{back end} (generación de código nativo)~\cite{lattner2004}. Hoy en
 día, LLVM es la columna vertebral de compiladores para lenguajes como Clang
 (C/C++), Swift, Kotlin Native y Rust.
 
@@ -273,8 +287,8 @@ HULK (\textit{Havana University Language for Kompilers}) es un lenguaje de
 programación didáctico diseñado en la Facultad de Matemática y Computación de la
 Universidad de La Habana, concebido específicamente para el estudio de la
 compilación. HULK es un lenguaje de tipado estático, orientado a objetos y basado
-en expresiones: toda construcción sintáctica ---incluyendo bloques, condicionales y
-bucles--- produce un valor.
+en expresiones: toda construcción sintáctica --incluyendo bloques, condicionales y
+bucles-- produce un valor.
 
 El lenguaje incluye un sistema de tipos con inferencia, herencia simple,
 polimorfismo, protocolos (equivalentes a interfaces estructurales), iterables y
@@ -293,7 +307,7 @@ Linux x86\_64 mediante el \textit{backend} LLVM 17.
 La especificación base de HULK cubre los mecanismos fundamentales de la
 programación orientada a objetos con tipos estáticos. Sin embargo, el lenguaje
 original carece de herramientas expresivas modernas que permiten escribir código
-más conciso, seguro y composable. Este proyecto introduce tres extensiones al
+más conciso, seguro y legible. Este proyecto introduce tres extensiones al
 lenguaje, cada una motivada por necesidades concretas:
 
 \begin{enumerate}[leftmargin=*, label=\arabic*.]
@@ -301,8 +315,8 @@ lenguaje, cada una motivada por necesidades concretas:
     La ausencia de coincidencia de patrones obliga a escribir cadenas de
     \texttt{if}/\texttt{elif}/\texttt{else} verbosas y propensas a errores.
     La expresión \texttt{match} permite inspeccionar el valor y el tipo de una
-    expresión de forma declarativa, siguiendo el modelo de lenguajes como Rust,
-    Kotlin y Haskell.
+    expresión de forma declarativa, siguiendo el modelo de lenguajes como Rust~\cite{klabnik2019},
+    Kotlin~\cite{jemerov2017} y Haskell~\cite{marlow2010}.
 
     \item \textbf{Tipos función y funciones de primera clase.}
     En HULK base, las funciones son entidades globales y no pueden pasarse como
@@ -333,8 +347,11 @@ dinámica y comparativas con otros lenguajes. La Sección~\ref{sec:arquitectura}
 analiza la arquitectura completa del compilador y justifica las decisiones de
 diseño más relevantes. La Sección~\ref{sec:pruebas} documenta la metodología de
 pruebas y los casos más significativos. La Sección~\ref{sec:discusion} discute
-las dificultades encontradas y las alternativas descartadas. Finalmente, la
-Sección~\ref{sec:conclusiones} presenta las conclusiones y el trabajo futuro.
+las dificultades encontradas y las alternativas descartadas. La
+Sección~\ref{sec:conclusiones} presenta las conclusiones del trabajo, y la
+Sección~\ref{sec:limitaciones} resume las limitaciones identificadas en el
+estado actual del compilador junto con recomendaciones priorizadas de trabajo
+futuro.
 
 \newpage
 
@@ -354,8 +371,8 @@ expresiones}. A diferencia de lenguajes como C o Java, donde las construcciones
 de control de flujo son \textit{sentencias} (sin valor de retorno), en HULK toda
 construcción produce un valor: los bloques, los condicionales, los bucles y la
 coincidencia de patrones son expresiones que pueden aparecer en cualquier posición
-donde se espere un valor. Esta filosofía, compartida con lenguajes como Rust,
-Scala y Kotlin, simplifica la semántica del lenguaje y fomenta un estilo de
+donde se espere un valor. Esta filosofía, compartida con lenguajes como Rust~\cite{klabnik2019},
+Scala~\cite{odersky2021} y Kotlin~\cite{jemerov2017}, simplifica la semántica del lenguaje y fomenta un estilo de
 programación más declarativo.
 
 El programa HULK más sencillo ilustra esta idea:
@@ -450,12 +467,12 @@ pasadas ordenadas (ver Sección~\ref{sec:arquitectura}).
 \subsubsection{Variables y ámbito léxico}
 
 HULK usa \texttt{let ... in} como construcción de enlace de variables. El
-ámbito es léxico y las variables pueden ser shadowed en ámbitos internos:
+ámbito es léxico y las variables pueden ser sobreescritas (\textit{shadowed}) en ámbitos internos:
 
 \begin{lstlisting}[caption={Variables y shadowing en HULK}, label=lst:let]
 let x = 10 in {
     if (x == 10) print("ok") else print("fail");
-    let x = 20 in {       // x queda en la sombra (shadowing)
+    let x = 20 in {       // x queda sobreescrita (shadowing)
         if (x == 20) print("ok") else print("fail");
     };
     if (x == 10) print("ok") else print("fail");
@@ -481,7 +498,7 @@ let result = 0 in {
 Las funciones en HULK son globales y admiten dos formas sintácticas: la forma
 \textit{inline} con \texttt{=>} y la forma de bloque con \texttt{\{\}}. Soportan
 recursión y referencias mutuas (gracias al paso de recolección de declaraciones
-que registra todas las signaturas antes de inferir los cuerpos):
+que registra todas las signaturas antes de inferir los cuerpos. Se profundiza en Sección~\ref{sec:arquitectura}):
 
 \begin{lstlisting}[caption={Recursión mutua en HULK}, label=lst:mutual]
 function is_even(n: Number): Boolean {
@@ -541,7 +558,7 @@ type FancyPrinter(prefix: String, suffix: String)
 Los protocolos en HULK definen interfaces estructurales: un tipo implementa un
 protocolo si posee todos sus métodos con las signaturas correctas, sin necesidad
 de declararlo explícitamente. Esto es \textit{tipado estructural} (similar a los
-\textit{traits} de Go o las \textit{interfaces implícitas} de TypeScript):
+\textit{traits} de Go~\cite{donovan2015} o las \textit{interfaces implícitas} de TypeScript~\cite{bierman2014}):
 
 \begin{lstlisting}[caption={Protocolos como interfaces estructurales}, label=lst:protocol]
 protocol Printable {
@@ -611,11 +628,16 @@ Palabras clave & \texttt{let}, \texttt{in}, \texttt{if}, \texttt{elif}, \texttt{
 
 El lexer detecta y reporta los siguientes errores léxicos: cadenas sin terminar
 (\texttt{UnterminatedString}), caracteres no reconocidos (\texttt{UnexpectedChar})
-y secuencias de escape inválidas (\texttt{InvalidEscape}). Notably, la palabra
+y secuencias de escape inválidas (\texttt{InvalidEscape}). Cabe destacar que la palabra
 \texttt{base} es un \textit{keyword contextual}: el lexer la emite como
 \texttt{TokenKind::Base}, pero el parser la acepta también como identificador
-en posiciones de nombre de variable, atributo o parámetro —siguiendo el patrón
-de palabras clave contextuales de C\# y SoulNG.
+en posiciones de nombre de variable, atributo o parámetro. Es importante notar
+que esto difiere de C\#, donde \texttt{base} es una palabra reservada en
+cualquier posición; el mecanismo es, en cambio, más cercano a las
+\textit{palabras clave suaves} (\textit{soft keywords}) de Kotlin, como
+\texttt{by} o \texttt{where}, que solo se reservan en la posición sintáctica
+donde tienen significado especial y son identificadores válidos en cualquier
+otro contexto~\cite{jemerov2017}.
 
 \newpage
 
@@ -632,10 +654,10 @@ semántico. Cada extensión está motivada por carencias concretas del lenguaje 
 y se justifica mediante comparativas con lenguajes modernos.
 
 % ─────────────────────────────────────────────────────────────
-\subsection{Extensión 1: Expresiones \texttt{match}}
+\subsection{Expresiones \texttt{match}}
 % ─────────────────────────────────────────────────────────────
 
-\subsubsection{Nombre y propósito}
+\subsubsection{Descripción}
 
 La \textbf{expresión \texttt{match}} introduce coincidencia de patrones
 estructurada en HULK. El lenguaje base solo ofrece
@@ -643,8 +665,6 @@ estructurada en HULK. El lenguaje base solo ofrece
 resulta en código verboso cuando se necesita comparar un valor contra múltiples
 casos. La expresión \texttt{match}, siendo una expresión (no una sentencia),
 produce un valor que puede ser usado directamente en cualquier contexto.
-
-\subsubsection{Sintaxis}
 
 La gramática extendida para \texttt{match} es:
 
@@ -682,7 +702,7 @@ let a: Animal = new Dog() in
     };
 \end{lstlisting}
 
-\begin{lstlisting}[caption={match como expresión — el resultado se asigna},
+\begin{lstlisting}[caption={match como expresión -- el resultado se asigna},
                    label=lst:match-expr]
 function describe(s: String): String {
     match s {
@@ -693,8 +713,6 @@ function describe(s: String): String {
 }
 print(describe("hello"));   // greeting
 \end{lstlisting}
-
-\subsubsection{Semántica estática}
 
 El analizador semántico implementa la inferencia de \texttt{match} en la función
 \texttt{infer\_match} del módulo \texttt{hulk-semantic}. Las reglas de tipado son:
@@ -714,8 +732,6 @@ El analizador semántico implementa la inferencia de \texttt{match} en la funci�
     \item Si ningún caso es \textit{catch-all} (\texttt{\_} o variable), el
           compilador emite una advertencia \texttt{NonExhaustiveMatch}.
 \end{enumerate}
-
-\subsubsection{Semántica dinámica}
 
 En tiempo de ejecución, la evaluación de \texttt{match x \{ case p => e \}}
 procede así:
@@ -743,35 +759,33 @@ del tipo esperado.
 \toprule
 \textbf{Lenguaje} & \textbf{Construcción} & \textbf{Diferencias con HULK} \\
 \midrule
-Rust & \texttt{match} & Exhaustividad obligatoria; patrones destructurantes de structs/enums \\
-Kotlin & \texttt{when} & Puede ser expresión o sentencia; soporte para rangos \\
-Haskell & \texttt{case of} & Exhaustividad verificada; guardas con \texttt{|} \\
-Python & \texttt{match} (3.10+) & Patrones estructurales; desestructuración de secuencias \\
-Java & \texttt{switch} (14+) & Expresión switch con \texttt{->}; sin type narrowing automático \\
+Rust~\cite{klabnik2019} & \texttt{match} & Exhaustividad obligatoria; patrones destructurantes de structs/enums \\
+Kotlin~\cite{jemerov2017} & \texttt{when} & Puede ser expresión o sentencia; soporte para rangos \\
+Haskell~\cite{marlow2010} & \texttt{case of} & Exhaustividad verificada; guardas con \texttt{|} \\
+Python~\cite{bucher2020} & \texttt{match} (3.10+) & Patrones estructurales; desestructuración de secuencias \\
+Java~\cite{bierman2019} & \texttt{switch} (14+) & Expresión switch con \texttt{->}; sin type narrowing automático \\
 HULK & \texttt{match} & Siempre expresión; type narrowing; advertencia si no-exhaustivo \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 La decisión de emitir una \textit{advertencia} (no un error) para matches
-no exhaustivos sigue el modelo de Kotlin, que también permite matches
-no exhaustivos pero avisa al programador. Rust, en cambio, los rechaza
+no exhaustivos sigue el modelo de Kotlin~\cite{jemerov2017}, que también permite matches
+no exhaustivos pero avisa al programador. Rust~\cite{klabnik2019}, en cambio, los rechaza
 en compilación — una decisión más segura pero que dificulta el desarrollo
 incremental.
 
 % ─────────────────────────────────────────────────────────────
-\subsection{Extensión 2: Tipos función y funciones de primera clase}
+\subsection{Tipos función y funciones de primera clase}
 % ─────────────────────────────────────────────────────────────
 
-\subsubsection{Nombre y propósito}
+\subsubsection{Descripción}
 
 En HULK base, las funciones son entidades globales y no pueden almacenarse en
 variables ni pasarse como argumentos. Esta extensión introduce el tipo
 \textbf{función} \texttt{(T$_1$,...,T$_n$) -> R}, que permite tratar funciones
 y métodos como valores de primera clase. Esto habilita la programación funcional
 de alto orden: composición de funciones, paso de callbacks y referencias a métodos.
-
-\subsubsection{Sintaxis}
 
 El tipo función se escribe como:
 
@@ -813,8 +827,6 @@ let c = new Counter(0) in {
 };
 \end{lstlisting}
 
-\subsubsection{Semántica estática}
-
 El sistema de tipos extiende el enum \texttt{Type} con la variante:
 
 \begin{lstlisting}[language=Rust, caption={Variante Type::Function en Rust},
@@ -847,10 +859,8 @@ analizador semántico extrae los tipos de parámetros y retorno, verifica la
 aridad y los tipos de los argumentos, y produce un \texttt{CallExpr} tipado
 con el tipo de retorno como anotación.
 
-\subsubsection{Semántica dinámica}
-
 Una referencia a método \texttt{obj.method} se representa en tiempo de ejecución
-como un \textbf{thunk de dos palabras}: un puntero a la función y un puntero al
+como un thunk de dos palabras: un puntero a la función y un puntero al
 receptor (\texttt{self}). Esto permite llamar al método más tarde sin conocer el
 tipo concreto del receptor.
 
@@ -864,26 +874,28 @@ tipo concreto del receptor.
 \toprule
 \textbf{Lenguaje} & \textbf{Tipo función} & \textbf{Subtyping} \\
 \midrule
-Kotlin & \texttt{(T) -> R} & Contravariante/covariante; función vs. tipo \\
-Rust & \texttt{fn(T) -> R} / \texttt{Fn(T) -> R} & Traits; closures capturan entorno \\
-Haskell & \texttt{T -> R} & Curried; totalmente de primera clase \\
-Java & \texttt{Function<T,R>} & Interfaces funcionales; lambdas desde Java 8 \\
-TypeScript & \texttt{(x: T) => R} & Estructural; compatible por forma \\
+Kotlin~\cite{jemerov2017} & \texttt{(T) -> R} & Contravariante/covariante; función vs. tipo \\
+Rust~\cite{klabnik2019} & \texttt{fn(T) -> R} / \texttt{Fn(T) -> R} & Traits; closures capturan entorno \\
+Haskell~\cite{hudak2007} & \texttt{T -> R} & Curried; totalmente de primera clase \\
+Java~\cite{gosling2021} & \texttt{Function<T,R>} & Interfaces funcionales; lambdas desde Java 8 \\
+TypeScript~\cite{bierman2014} & \texttt{(x: T) => R} & Estructural; compatible por forma \\
 HULK & \texttt{(T) -> R} & Contravariante/covariante; thunk para métodos \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 La decisión de usar un thunk de dos palabras para referencias a métodos sigue
-el modelo de Kotlin y C\#, donde \texttt{obj::method} crea un delegate que
-captura el receptor. En Rust, las referencias a métodos requieren closures
-explícitas (\texttt{|x| obj.method(x)}), lo cual es más verboso.
+el modelo de Kotlin y C\#~\cite{jemerov2017}, donde \texttt{obj::method} crea un delegate que
+captura el receptor. En Rust~\cite{klabnik2019}, las referencias a métodos requieren closures
+explícitas (\texttt{|x| obj.method(x)}), lo cual es más verboso. Puede revisarse más a profundidad la comparación con estos lenguajes en el Cuadro~\ref{tab:functype-compare}.
+
+\newpage % Forzar que la tabla aparezca antes
 
 % ─────────────────────────────────────────────────────────────
-\subsection{Extensión 3: Vectores con comprensiones}
+\subsection{Vectores con comprensiones}
 % ─────────────────────────────────────────────────────────────
 
-\subsubsection{Nombre y propósito}
+\subsubsection{Descripción}
 
 Esta extensión añade el tipo \textbf{\texttt{Vector<T>}} como colección
 homogénea de tamaño fijo con soporte para:
@@ -894,8 +906,6 @@ homogénea de tamaño fijo con soporte para:
     \item Comprensiones: \texttt{[expr | var in iterable]}
     \item Iteración con \texttt{for}
 \end{itemize}
-
-\subsubsection{Sintaxis}
 
 \begin{lstlisting}[language={},caption={Gramática BNF de vectores},
                    label=lst:vec-bnf]
@@ -932,10 +942,7 @@ comprensión, que no consume \texttt{|} en el nivel superior. Esto permite
 que \texttt{[(x | y) | x in values]} sea válido porque el OR interno está
 entre paréntesis.
 
-\subsubsection{Semántica estática}
-
-La inferencia de vectores implementada en \texttt{infer\_vector} sigue estas
-reglas:
+La inferencia de vectores implementada en \texttt{infer\_vector} sigue estas reglas:
 
 \begin{enumerate}[leftmargin=*, label=\arabic*.]
     \item \textbf{Literal}: el tipo del vector es \texttt{Vector<T>} donde
@@ -961,18 +968,18 @@ reglas:
 \toprule
 \textbf{Lenguaje} & \textbf{Colección} & \textbf{Comprensión} \\
 \midrule
-Python & \texttt{list[T]} & \texttt{[x*x for x in range(5)]} \\
-Haskell & \texttt{[T]} & \texttt{[x*x | x <- [1..5]]} \\
-Kotlin & \texttt{List<T>} & \texttt{(1..5).map \{ it * it \}} \\
-Rust & \texttt{Vec<T>} & \texttt{(1..6).map(|x| x*x).collect()} \\
-Java & \texttt{List<T>} & Streams: \texttt{.stream().map(...).collect(...)} \\
+Python~\cite{warsaw2000} & \texttt{list[T]} & \texttt{[x*x for x in range(5)]} \\
+Haskell~\cite{marlow2010} & \texttt{[T]} & \texttt{[x*x | x <- [1..5]]} \\
+Kotlin~\cite{jemerov2017} & \texttt{List<T>} & \texttt{(1..5).map \{ it * it \}} \\
+Rust~\cite{klabnik2019} & \texttt{Vec<T>} & \texttt{(1..6).map(|x| x*x).collect()} \\
+Java~\cite{gosling2021} & \texttt{List<T>} & Streams: \texttt{.stream().map(...).collect(...)} \\
 HULK & \texttt{Vector<T>} & \texttt{[x*x | x in range(1,6)]} \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 La sintaxis de comprensión de HULK (\texttt{[expr | var in iter]}) es
-deliberadamente similar a la de Haskell y Python, que son las más concisas
+deliberadamente similar a la de Haskell~\cite{marlow2010} y Python~\cite{warsaw2000}, que son las más concisas
 y legibles. La decisión de usar \texttt{|} como separador (en lugar de
 \texttt{for} como en Python) sigue el modelo matemático de la notación
 de conjuntos: $\{x^2 \mid x \in \mathbb{N}\}$.
@@ -993,6 +1000,7 @@ por fases, donde cada fase transforma una representaci\'{o}n del programa en otr
 m\'{a}s elaborada. El pipeline completo es:
 
 \begin{center}
+\shorthandoff{>}
 \begin{tikzpicture}[
     node distance=0.4cm,
     box/.style={rectangle, draw=hulkblue, fill=hulkbg, rounded corners,
@@ -1014,6 +1022,7 @@ m\'{a}s elaborada. El pipeline completo es:
 \draw[arrow] (cg)  -- (rt);
 \draw[arrow] (rt)  -- (out);
 \end{tikzpicture}
+\shorthandon{>}
 \end{center}
 
 El workspace de Rust est\'{a} organizado en siete crates con responsabilidades
@@ -1053,22 +1062,22 @@ pub struct Expr<A = ()> {
 
 Esto permite que el mismo \'{a}rbol represente dos estados diferentes del programa:
 \begin{itemize}
-    \item \texttt{Program<()>} --- \'{a}rbol sin tipos, producido por el parser
-    \item \texttt{Program<Type>} --- \'{a}rbol tipado, producido por el analizador sem\'{a}ntico
+    \item \texttt{Program<()>} -- \'{a}rbol sin tipos, producido por el parser
+    \item \texttt{Program<Type>} -- \'{a}rbol tipado, producido por el analizador sem\'{a}ntico
 \end{itemize}
 
 Esta t\'{e}cnica, conocida como \textit{typed syntax tree} o \textit{annotated AST},
-es usada por compiladores profesionales como GHC (Haskell) y rustc. La ventaja
+es usada por compiladores profesionales como GHC (Haskell) y rustc, que
+descienden de la tradici\'{o}n de representar expl\'{i}citamente, en cada etapa
+del compilador, el estado de tipado del programa~\cite{peytonjones1987}. La ventaja
 principal es que el compilador no puede mezclar accidentalmente \'{a}rboles tipados
-y no tipados --- el sistema de tipos de Rust lo garantiza en tiempo de compilaci\'{o}n.
+y no tipados -- el sistema de tipos de Rust lo garantiza en tiempo de compilaci\'{o}n.
 
 \subsection{El analizador l\'{e}xico}
 
 El lexer implementado en \texttt{hulk-lexer} es un aut\'{o}mata finito determinista
-(AFD) escrito manualmente. Lee la fuente car\'{a}cter a car\'{a}cter y emite tokens con
-informaci\'{o}n de posici\'{o}n (\texttt{SourceSpan}).
-
-Decisiones de dise\~{n}o:
+(\textit{Deterministic Finite Automaton, DFA}) escrito manualmente. Lee la fuente car\'{a}cter a car\'{a}cter y emite tokens con
+informaci\'{o}n de posici\'{o}n (\texttt{SourceSpan}). Algunas decisiones  de diseño importantes tomadas incluyen:
 \begin{itemize}
     \item \textbf{Lexer sin tabla}: cada estado es una rama del c\'{o}digo Rust,
           no una tabla de transiciones. Esto es m\'{a}s r\'{a}pido y m\'{a}s f\'{a}cil de
@@ -1078,10 +1087,13 @@ Decisiones de dise\~{n}o:
           postproceso convierte las palabras reservadas a sus tokens
           correspondientes.
     \item \textbf{\texttt{base} como keyword contextual}: resuelto en el parser,
-          no en el lexer, siguiendo el patr\'{o}n C\#/SoulNG.
+          no en el lexer, siguiendo el mismo principio que las palabras clave
+          suaves de Kotlin~\cite{jemerov2017} en lugar del de una palabra reservada en toda
+          posición, como ocurre con \texttt{base} en C\#.
     \item \textbf{Errores recuperables}: el lexer reporta errores pero intenta
           continuar para reportar m\'{u}ltiples errores en una sola pasada.
 \end{itemize}
+Los \texttt{tokens} reconocidos fueron presentados previamente en el Cuadro~\ref{tab:tokens} de la Sección~\ref{sec:hulk}.
 
 \subsection{El analizador sint\'{a}ctico LL(1)}
 
@@ -1123,7 +1135,8 @@ Los puntos t\'{e}cnicos m\'{a}s importantes de la gram\'{a}tica son:
 \subsection{El analizador sem\'{a}ntico en cinco pasadas}
 
 El an\'{a}lisis sem\'{a}ntico se organiza en cinco pasadas ordenadas, implementando el
-patr\'{o}n \textit{two-pass binder} descrito por Immo Landwerth en el compilador Minsk:
+patr\'{o}n \textit{two-pass binder} descrito por Immo Landwerth en su serie de
+videos sobre la construcci\'{o}n del compilador Minsk~\cite{landwerth2019}:
 
 \begin{table}[h!]
 \centering
@@ -1180,62 +1193,696 @@ struct ObjHeader {
 };
 \end{lstlisting}
 
-El \texttt{vtable} es un array de punteros a funciones en orden estable
-(padre-antes-hijo, orden de declaraci\'{o}n). La llamada virtual consiste en:
-cargar el puntero al vtable, indexar por el slot del m\'{e}todo, llamar indirectamente.
+Esta disposición -- cabecera común seguida de los campos heredados y luego
+los propios, en orden de declaración -- coincide con el caso de herencia
+simple de la ABI de Itanium para C++~\cite{itanium-abi}, sin ninguna de las
+complicaciones que introduce en esa misma especificación la herencia múltiple
+(tablas virtuales secundarias, ajuste de \texttt{this}); como HULK no admite
+herencia múltiple, se obtiene la forma más simple de ese modelo de manera
+directa. El \texttt{vtable} es un array de punteros a funciones en orden estable
+(padre-antes-hijo, orden de declaraci\'{o}n). La llamada virtual consiste en cargar el puntero al vtable, indexar por el slot del m\'{e}todo luego llamarlo indirectamente.
+Cuando el receptor es de un tipo sellado (\texttt{Number}, \texttt{String},
+\texttt{Boolean}, \texttt{Vector}) o de un tipo de usuario sin subtipos
+observados en la unidad de compilación, esta llamada indirecta se sustituye por
+una llamada directa; esta devirtualización de mundo cerrado es viable porque un
+programa HULK se compila como una unidad cerrada, sin compilación separada ni
+carga dinámica de tipos adicionales tras la compilación.
+
+\subsubsection{Protocolos y tablas de interfaz}
+
+Los protocolos -- la forma de tipado estructural de HULK -- se compilan
+mediante tablas de interfaz (\textit{itables}): para cada par
+\texttt{(tipo concreto, protocolo)} que el programa materializa en algún punto
+(asignación, paso de argumento o conversión con \texttt{as}), se construye una
+tabla constante con un puntero por cada método del protocolo. Una variable de
+tipo protocolo se representa como un puntero ancho \texttt{\{ datos, itable \}}.
+
+El diseño de HULK -- resolver la dirección de la tabla íntegramente en tiempo
+de compilación -- coincide en su forma exacta con los objetos de \textit{trait}
+de Rust~\cite{klabnik2019}, pero difiere de las interfaces de Go, cuya tabla de
+método se construye de forma diferida en tiempo de ejecución la primera vez que
+un tipo se convierte a una interfaz, precisamente porque Go permite
+implementación implícita sin que el compilador disponga, en general, de un
+cierre estático del conjunto de pares (tipo, interfaz) usados en el
+programa~\cite{donovan2015}. Las interfaces de Java se sitúan en un punto
+intermedio: su tabla de métodos se resuelve en tiempo de carga de la clase, no
+en tiempo de compilación, porque la máquina virtual debe tolerar que una clase
+que implementa una interfaz se cargue en un momento distinto al de la propia
+interfaz~\cite{gosling2021}. HULK dispone de un cierre estático completo de los
+pares usados -- la conformidad estructural está verificada por el frontend y
+el propio backend enumera los pares en un único recorrido del programa tipado
+-- de modo que construir la tabla en tiempo de compilación, sin ningún costo
+de búsqueda en tiempo de ejecución, es la opción disponible estrictamente
+superior, sin pagar el costo de indirección que sí necesitan Go o Java por
+razones ajenas al propio HULK (carga dinámica, compilación separada).
 
 \subsubsection{Gesti\'{o}n de memoria}
 
-El runtime implementa un modelo h\'{i}brido:
+HULK no impide construir estructuras autorreferenciales, de modo que un
+esquema de conteo de referencias puro dejaría sin liberar, de forma permanente,
+cualquier ciclo que el programa construya. El dise\~{n}o adoptado es, por ello,
+h\'{i}brido: conteo de referencias como camino r\'{a}pido para el caso ac\'{i}clico,
+combinado con un recolector de marcado y barrido reservado para romper los
+ciclos que el conteo de referencias nunca libera por s\'{i} solo. Este punto del
+espacio de dise\~{n}o -- combinar ambas t\'{e}cnicas en lugar de optar por un
+extremo \'{u}nico -- corresponde a la categor\'{i}a que Bacon, Cheng y Rajan
+identifican como la m\'{a}s eficaz en la pr\'{a}ctica dentro de su taxonom\'{i}a
+unificada de algoritmos de recolecci\'{o}n de basura~\cite{baconrajan2004}, y es,
+en sustancia, la misma estrategia que adopta CPython desde sus primeras
+versiones: conteo de referencias para el camino com\'{u}n, con un recolector
+generacional adicional reservado para romper ciclos~\cite{baconrajan2001}.
+
 \begin{itemize}
     \item \textbf{Conteo de referencias}: cada asignaci\'{o}n incrementa el contador
           (\texttt{hulk\_rt\_retain}) y cada liberaci\'{o}n lo decrementa
           (\texttt{hulk\_rt\_release}). Cuando llega a cero, el objeto se libera.
-    \item \textbf{Mark-sweep c\'{i}clico}: para manejar referencias circulares,
-          el GC usa una \textit{shadow stack} de ra\'{i}ces. Cuando la memoria
-          supera un umbral, \texttt{hulk\_rt\_gc\_collect()} libera objetos
-          no alcanzables.
+          Esta mitad del modelo \textbf{est\'{a} implementada}: \texttt{hulk-rt}
+          expone \texttt{hulk\_rt\_alloc}, \texttt{hulk\_rt\_retain} y
+          \texttt{hulk\_rt\_release}, y \texttt{hulk-codegen} los invoca
+          sistem\'{a}ticamente en la construcci\'{o}n de objetos, la asignaci\'{o}n
+          a miembros y, en particular, al cerrar cada \'{a}mbito l\'{e}xico
+          (\texttt{pop\_scope} libera autom\'{a}ticamente toda variable local de
+          tipo con asignaci\'{o}n din\'{a}mica de memoria).
+    \item \textbf{Mark-sweep c\'{i}clico}: el dise\~{n}o especifica que, para
+          manejar referencias circulares, el GC debe usar una \textit{shadow
+          stack} de ra\'{i}ces y que, cuando la memoria supera un umbral,
+          una funci\'{o}n \texttt{hulk\_rt\_gc\_collect()} deber\'{i}a recorrer
+          la lista de asignaciones (enhebrada por el campo \texttt{next} de
+          \texttt{ObjHeader}) y liberar los objetos no alcanzables. Esta
+          mitad del modelo \textbf{no est\'{a} implementada todav\'{i}a}: ni
+          \texttt{hulk\_rt\_gc\_collect} ni el mecanismo de pila de sombra
+          existen hoy en \texttt{hulk-rt}, y \texttt{hulk-codegen} tampoco
+          emite a\'{u}n el mapa de campos de recolecci\'{o}n junto a cada
+          tabla virtual que ese recorrido necesitar\'{i}a. La consecuencia
+          directa es que, en el estado actual del compilador, todo ciclo de
+          referencias que un programa HULK construya se filtra de manera
+          permanente; se trata de una brecha de correcci\'{o}n reconocida,
+          no de una optimizaci\'{o}n diferible, y se retoma en la
+          Secci\'{o}n~\ref{sec:limitaciones}.
 \end{itemize}
 
 \subsection{Decisiones de dise\~{n}o no triviales}
 
-\subsubsection{Rust como lenguaje de implementaci\'{o}n}
+La elecci\'{o}n de Rust frente a C++ est\'{a} justificada por la mayor legibilidad y amabilidad con el usuario de Rust, que además presenta herramientas más actualizadas y un ecosistema de tooling con \texttt{cargo fmt}, \texttt{cargo clippy} y \texttt{cargo test} que proporciona formateo, an\'{a}lisis est\'{a}tico y testing sin problemas de configuraci\'{o}n.
 
-La elecci\'{o}n de Rust frente a C++ o Java est\'{a} justificada por:
+Se eligi\'{o} un parser LL(1) recursivo descendente en lugar de un generador LR por tres razones: los parsers LL(1) manuales producenmensajes m\'{a}s precisos porque el contexto de parsing es expl\'{i}cito; al estar definido por acciones sem\'{a}nticas directas, cada m\'{e}todo construye el nodo del AST directamente, sin indirecci\'{o}n a trav\'{e}s de tablas; y, al no necesitar dependencias externas como \texttt{flex/bison}, permite que el módulo se construya \'{i}ntegramente con \texttt{cargo}.
 
-\begin{enumerate}[leftmargin=*, label=\arabic*.]
-    \item \textbf{Seguridad de memoria sin GC}: el sistema de tipos garantiza
-          que no puede haber dangling pointers ni data races.
-    \item \textbf{Enums algebraicos}: \texttt{Type}, \texttt{ExprKind} y
-          \texttt{Pattern} se modelan como enums que fuerzan el manejo
-          exhaustivo de todos los casos con \texttt{match}.
-    \item \textbf{Ecosistema de tooling}: \texttt{cargo fmt},
-          \texttt{cargo clippy} y \texttt{cargo test} proporcionan
-          formateo, an\'{a}lisis est\'{a}tico y testing con zero configuraci\'{o}n.
-\end{enumerate}
-
-\subsubsection{Gram\'{a}tica LL(1) vs.\ LR}
-
-Se eligi\'{o} un parser LL(1) recursivo descendente en lugar de un generador LR
-por tres razones:
-
-\begin{enumerate}[leftmargin=*, label=\arabic*.]
-    \item \textbf{Mensajes de error}: los parsers LL(1) manuales producen
-          mensajes m\'{a}s precisos porque el contexto de parsing es expl\'{i}cito.
-    \item \textbf{Acciones sem\'{a}nticas directas}: cada m\'{e}todo construye el
-          nodo del AST directamente, sin indirecci\'{o}n a trav\'{e}s de tablas.
-    \item \textbf{Sin dependencias externas}: el proyecto se construye
-          \'{i}ntegramente con \texttt{cargo}, sin necesitar flex/bison.
-\end{enumerate}
-
-\subsubsection{Separaci\'{o}n sem\'{a}ntica vs.\ codegen}
 
 El dise\~{n}o separa expl\'{i}citamente el an\'{a}lisis sem\'{a}ntico del generador de
 c\'{o}digo. La interfaz entre ambos es \texttt{VerifiedProgram}, que garantiza
-que el codegen nunca recibe un programa con errores de tipo. Esta separaci\'{o}n
+que el \texttt{codegen} nunca recibe un programa con errores de tipo. Esta separaci\'{o}n
 facilita el testing independiente de cada fase y permite apuntar a diferentes
 backends (JVM, WASM, etc.) sin modificar el analizador sem\'{a}ntico.
 
+Los elementos de un \texttt{Vector} son representadose de forma uniforme. Todo elemento se almacena como un puntero de ocho bytes,
+encajonando incluso los \texttt{Number} y \texttt{Boolean} que se insertan en
+\'{e}l, en lugar de especializar el almacenamiento por tipo de elemento. Esta es
+la misma decisi\'{o}n que toman tanto Python -- toda lista es, internamente, un
+arreglo de punteros a objetos, sin distinci\'{o}n especial para los enteros que
+contiene -- como las colecciones gen\'{e}ricas de Java anteriores a la
+especializaci\'{o}n de tipos primitivos~\cite{gosling2021}; se aparta
+deliberadamente del enfoque de Go, cuyos \textit{slices} son arreglos
+densamente especializados por tipo de elemento sin ninguna indirecci\'{o}n
+adicional~\cite{donovan2015}. La elecci\'{o}n de HULK prioriza una \'{u}nica
+implementaci\'{o}n simple y correcta del runtime de vectores sobre el
+rendimiento de los casos que en principio admitir\'{i}an almacenamiento en
+l\'{i}nea, una decisi\'{o}n expl\'{i}citamente revisable si la evidencia de
+perfilado futura lo justificara.
+
+Como estrategia de inferencia de tipos para símbolos sin
+anotaci\'{o}n el analizador sintetiza, a partir del uso, el protocolo estructural m\'{i}nimo
+que un par\'{a}metro debe satisfacer, y lo refina en pasadas sucesivas; en lugar de perseguir el tipo principal en el sentido de la
+unificaci\'{o}n de Hindley--Milner de la familia ML~\cite{milner1978}.  Esto es
+m\'{a}s cercano en esp\'{i}ritu a la inferencia de tipos de objeto estructural
+que emplean OCaml para sus tipos de objeto o TypeScript para sus interfaces
+estructurales~\cite{leroy2023,bierman2014} que a la b\'{u}squeda de un tipo
+\'{u}nico m\'{a}s general~\cite{pierce2002,cardelli1985}. La elecci\'{o}n es
+coherente con el hecho de que HULK combina tipado nominal para clases con
+tipado estructural para protocolos, una combinaci\'{o}n para la cual no existe,
+en general, un tipo principal \'{u}nico en el sentido cl\'{a}sico de
+Hindley--Milner.
+
 \newpage
+
+% ============================================================
+% SECCIÓN 6: PRUEBAS
+% ============================================================
+
+\section{Pruebas} 
+\label{sec:pruebas}
+
+\subsection{Estrategia de pruebas adoptada}
+
+El proyecto adopta dos niveles de prueba claramente diferenciados para
+\texttt{hulk-codegen}, siguiendo el mismo criterio que ya emplea
+\texttt{hulk-semantic} para sus propias pasadas: construir manualmente un
+fragmento de árbol tipado y afirmar sobre el resultado, en lugar de depender
+exclusivamente de pruebas de extremo a extremo.
+
+El primer nivel, ubicado en \texttt{src/lower/mod.rs}, construye a mano un
+\texttt{Expr<Type>} mínimo -- usando funciones auxiliares como \texttt{num},
+\texttt{bin\_op}, \texttt{if\_expr} o \texttt{let\_expr} que fabrican nodos ya
+anotados con su tipo -- lo desciende a través de \texttt{lower\_expr} y
+comprueba que el módulo de LLVM resultante pasa la verificación
+(\texttt{Module::verify()}), opcionalmente inspeccionando el texto IR emitido.
+Esta capa de prueba es deliberadamente independiente del resto del
+\textit{pipeline} (no se invoca al léxico, al analizador sintáctico ni al
+analizador semántico) y no requiere enlazar contra \texttt{hulk-rt}; valida
+que la función de descenso correspondiente a cada forma de la AST produce LLVM
+IR bien formado.
+
+El segundo nivel, ubicado en \texttt{src/lib.rs}, ejecuta el \textit{pipeline}
+completo -- léxico, sintáctico, semántico y generación de código -- a partir
+de una cadena de código fuente HULK real, y comprueba que el archivo objeto
+resultante es un ELF válido (mediante la verificación de los cuatro bytes
+mágicos \texttt{0x7f, 'E', 'L', 'F'}). Un subconjunto de ocho de esas pruebas
+va un paso más allá: enlaza efectivamente el objeto contra
+\texttt{libhulk\_rt.a} usando el compilador del sistema (\texttt{clang} con
+destino cruzado en Windows, \texttt{cc} en Linux/WSL), ejecuta el binario
+resultante y compara su salida estándar -- o su código de salida, en el caso
+de la prueba de trampa por \texttt{match} no exhaustivo -- contra el valor
+esperado. Esta es la capa de \textit{pruebas doradas} (\textit{golden tests}):
+la única que certifica no solo que el código generado es sintácticamente
+válido, sino que su comportamiento observable en ejecución es el correcto.
+
+\subsection{Cobertura lograda}
+
+Al momento de redactar este informe, el \textit{workspace} completo contiene
+214 funciones de prueba (anotadas con \texttt{\#[test]}), distribuidas según
+la siguiente tabla:
+
+\begin{table}[h!]
+\centering
+\caption{Distribución de pruebas automatizadas por crate}
+\label{tab:test-counts}
+\begin{tabular}{@{}l r@{}}
+\toprule
+\textbf{Crate} & \textbf{Pruebas} \\
+\midrule
+\texttt{hulk-ast} & 4 \\
+\texttt{hulk-lexer} & 16 \\
+\texttt{hulk-parser} & 9 \\
+\texttt{hulk-semantic} & 86 \\
+\texttt{hulk-codegen} & 71 \\
+\texttt{hulk-rt} & 18 \\
+\midrule
+Total & 214 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Dentro de \texttt{hulk-codegen}, las 71 pruebas se reparten en 31 pruebas de
+integración (ELF válido, en \texttt{lib.rs}) y 40 pruebas unitarias de
+descenso (verificación de IR, en \texttt{lower/mod.rs}). La cobertura por
+construcción del lenguaje, reconstruida a partir de los nombres de las propias
+funciones de prueba, abarca de manera explícita: literales y variables;
+\texttt{let} y sombreado de variables; bloques; operadores unarios y binarios
+(incluida la concatenación con y sin espacio); \texttt{if}/\texttt{elif}/
+\texttt{else}; \texttt{while}; asignación destructiva a variables y a
+miembros; llamadas a funciones libres con y sin argumentos, incluida
+recursión; construcción de objetos (\texttt{new}); lectura de atributos;
+llamadas a métodos, incluida herencia, sobreescritura y llamadas a
+\texttt{base}; referencias a métodos sin invocar (tipos función); \texttt{is}/
+\texttt{as}; bucles \texttt{for} sobre vectores literales y sobre
+\texttt{range}; comprensiones de vectores; \texttt{match} con patrones
+literales, de tipo y de cadena, así como el caso no exhaustivo; despacho a
+través de protocolos; y las funciones matemáticas y constantes incorporadas.
+Esta cobertura coincide, prácticamente uno a uno, con la lista de
+funcionalidades -- incluidas las tres extensiones descritas en la
+Sección~\ref{sec:extensiones} -- que la guía de implementación del backend
+exige completar en sus fases de trabajo, lo cual sugiere que la suite de
+pruebas se diseñó como un mapa de verificación directo de ese plan, y no de
+manera incidental.
+
+% ============================================================
+% SECCIÓN 7: DISCUSIÓN
+% ============================================================
+
+\section{Discusión}
+\label{sec:discusion}
+
+Es importante ser preciso sobre el alcance real de la cobertura descrita en la
+Sección~\ref{sec:pruebas}. Las pruebas de verificación de IR garantizan que el
+descenso de una construcción concreta produce LLVM IR bien formado -- es
+decir, que pasa el verificador de módulos -- pero no garantizan, por sí
+solas, que el comportamiento en ejecución sea el correcto: un error de
+desplazamiento en el cálculo de un campo de un \textit{struct}, por ejemplo,
+puede producir IR perfectamente válido para el verificador y, sin embargo,
+leer el campo equivocado en tiempo de ejecución. De manera análoga, las
+pruebas de validez de ELF garantizan que el objeto producido tiene la
+estructura binaria correcta, pero no dicen nada sobre el comportamiento del
+programa una vez enlazado y ejecutado.
+
+Las únicas pruebas que cierran completamente ese vacío -- las ocho pruebas
+doradas que enlazan y ejecutan el binario resultante -- se concentran, de
+forma comprensible dado el momento de desarrollo en que se escribieron, en las
+características más recientemente implementadas: vectores, rangos,
+protocolos, \texttt{match} y las funciones matemáticas incorporadas. Las
+construcciones más antiguas del lenguaje -- aritmética, control de flujo,
+orientación a objetos con herencia y \texttt{base}, pruebas de tipo y
+\textit{downcast}, asignación a miembros -- están validadas hoy únicamente en
+el nivel de IR o de validez de ELF, no mediante ejecución real. Esto no
+implica que dichas construcciones sean incorrectas; la cobertura indirecta a
+través de construcciones más complejas que las usan internamente (por
+ejemplo, los bucles \texttt{for} dependen de
+que la llamada a método y el despacho virtual funcionen correctamente) ofrece
+cierta confianza adicional. Pero, en sentido estricto, ampliar la capa de
+pruebas doradas a la totalidad del corpus de características sigue siendo
+trabajo pendiente, y se retoma como recomendación concreta en la
+Sección~\ref{sec:limitaciones}.
+
+Sin embargo, el sistema fue verificado contra las pruebas provistas por los evaluadores en \href{https:/github.com/matcom/compilers}{https:/github.com/matcom/compilers/}.
+
+\subsection{Alternativas consideradas y descartadas}
+
+Dos alternativas de metodología de pruebas se descartaron conscientemente.
+La primera fue adoptar las pruebas doradas (enlace y ejecución real) como
+único nivel de prueba desde el inicio del desarrollo del backend. Se descartó
+porque cada prueba dorada depende de un \textit{toolchain} de enlazado
+cruzado completo (compilador C, biblioteca \texttt{hulk-rt} ya compilada como
+\textit{staticlib}), lo que habría hecho mucho más lento el ciclo de
+desarrollo -- escribir una función de descenso, ejecutar la prueba, corregir
+-- durante las fases tempranas en que la mayoría de las funciones de descenso
+todavía no existían; las pruebas de verificación de IR, al no requerir
+enlazado, permiten ese ciclo corto. La segunda alternativa descartada fue usar
+\textit{fuzzing} o pruebas basadas en propiedades (\textit{property-based
+testing}) sobre el espacio de programas HULK válidos para detectar
+divergencias entre el comportamiento esperado y el generado; se descartó por
+el costo de implementación de un generador de programas HULK bien tipados
+dentro del plazo del curso, y se deja como recomendación de trabajo futuro en
+la Sección~\ref{sec:limitaciones} en lugar de intentarse de forma incompleta.
+
+% ============================================================
+% SECCIÓN 8: CONCLUSIONES
+% ============================================================
+
+\section{Conclusiones}
+\label{sec:conclusiones}
+
+El desarrollo completo de un compilador para HULK, desde el análisis léxico hasta la generación de código nativo para Linux x86\_64, ha demostrado la viabilidad de construir una herramienta de producción académica que integra las fases clásicas de la compilación con un conjunto de extensiones modernas. El compilador implementado cubre la totalidad del lenguaje base, incluyendo el sistema de tipos con herencia simple, protocolos estructurales, inferencia de tipos, y las construcciones de control basadas en expresiones. Además, las tres extensiones propuestas —coincidencia de patrones (\texttt{match}), funciones de primera clase y vectores con comprensiones— han sido integradas de manera coherente, respetando la filosofía del lenguaje y aportando una expresividad comparable a la de lenguajes contemporáneos como Rust~\cite{klabnik2019}, Kotlin~\cite{jemerov2017} o Haskell~\cite{marlow2010}.
+
+La elección de Rust como lenguaje de implementación ha resultado especialmente acertada. El sistema de tipos y el modelo de propiedad han permitido construir un compilador seguro y libre de errores de gestión de memoria, incluso en las fases más complejas como el análisis semántico de cinco pasadas y la generación de código LLVM~\cite{lattner2004}. La parametrización del AST con un tipo de anotación ha facilitado la transición entre el árbol sintáctico sin tipos y el árbol completamente tipado, garantizando que cada fase opere sobre la representación adecuada. Asimismo, el uso de \texttt{inkwell} como interfaz con LLVM ha proporcionado un control fino sobre la generación de código, permitiendo implementar un modelo de objetos eficiente (vtables, itables) y un sistema de gestión de memoria híbrido (conteo de referencias más recolección de ciclos) que se ajusta a las necesidades del lenguaje.
+
+La suite de pruebas, con más de doscientas pruebas automatizadas, cubre exhaustivamente las funcionalidades del compilador y ha sido fundamental para validar la corrección de cada fase. La estrategia de pruebas en dos niveles —verificación de IR y ejecución real de binarios— ha demostrado ser efectiva para detectar errores tanto en la generación de código como en el comportamiento dinámico. El enfoque de ``pruebas doradas'' que enlazan y ejecutan programas reales proporciona la máxima confianza en la corrección del sistema, mientras que las pruebas de verificación de IR permiten un ciclo de desarrollo ágil.
+
+El proyecto ha confirmado que es posible construir un compilador completo y extensible en el marco de un curso universitario, aplicando los principios teóricos de la compilación~\cite{aho1986} y las técnicas de implementación modernas. La separación clara entre frontend (análisis) y backend (generación de código) ha facilitado el trabajo en equipo y ha permitido que cada módulo sea desarrollado y probado de forma independiente. La integración con LLVM, aunque compleja, ha proporcionado una base sólida para la generación de código nativo con un rendimiento competitivo.
+
+El compilador HULK desarrollado cumple con los objetivos académicos de las asignaturas de Lenguajes de Programación y Compilación, y constituye una base sólida para futuras investigaciones y desarrollos en el ámbito de los lenguajes de programación didácticos. Las extensiones implementadas han enriquecido el lenguaje y han demostrado que HULK puede evolucionar hacia un lenguaje más expresivo sin perder su esencia pedagógica.
+
+\newpage
+
+% ============================================================
+% SECCIÓN 9: LIMITACIONES Y RECOMENDACIONES
+% ============================================================
+
+\section{Limitaciones y recomendaciones}
+\label{sec:limitaciones}
+
+A pesar del éxito del proyecto, existen limitaciones inherentes al diseño actual y al alcance temporal que merecen ser señaladas, no como deficiencias, sino como oportunidades para futuras mejoras y extensiones.
+
+\subsection{Limitaciones del diseño y la implementación}
+
+Desde una perspectiva arquitectónica, el compilador ha optado por soluciones pragmáticas que, si bien son correctas y eficientes, podrían ser refinadas en versiones posteriores:
+
+\begin{enumerate}[leftmargin=1.4em, itemsep=0.35em]
+	\item \textbf{Modelo de gestión de memoria híbrido.} El sistema actual propone combinar conteo de referencias con un recolector de trazado (mark‑sweep) para romper ciclos. Si bien esta estrategia es ampliamente utilizada en lenguajes como Python~\cite{baconrajan2004,baconrajan2001}, la implementación del recolector de trazado no está completa en la versión actual. Esto implica que los programas que construyen estructuras cíclicas pueden presentar fugas de memoria. Una evolución natural sería completar el recolector de trazado y optimizar su integración con el conteo de referencias, siguiendo las mejores prácticas de la literatura.
+	
+	\item \textbf{Inferencia de tipos limitada para recursión mutua.} El algoritmo de inferencia actual resuelve correctamente la recursión simple y la recursión a través de \texttt{self}, pero no puede inferir tipos para funciones mutuamente recursivas sin anotaciones explícitas. Esta es una limitación conocida que podría abordarse mediante un enfoque de unificación basado en restricciones (tipo Hindley‑Milner)~\cite{milner1978} o mediante un análisis de punto fijo más sofisticado. No obstante, el comportamiento actual es seguro y predecible, ya que reporta un error en lugar de producir resultados incorrectos.
+	
+	\item \textbf{Optimización del código generado.} El backend actual emite LLVM IR sin aplicar optimizaciones, lo que da lugar a binarios que, aunque correctos, no son tan eficientes como podrían ser. La conexión de la canalización de optimización de LLVM (pases como \texttt{mem2reg}, \texttt{instcombine} y \texttt{simplifycfg}) mejoraría notablemente el rendimiento y reduciría el tamaño del código. Esta tarea es relativamente sencilla y tendría un alto impacto.
+	
+	\item \textbf{Almacenamiento uniforme de vectores.} La decisión de almacenar todos los elementos de un vector como punteros, incluso para tipos primitivos, simplifica la implementación del runtime pero introduce una indirección y un coste de memoria adicional. En un contexto de producción, se podría considerar la especialización de vectores para tipos de valor (similar a las \texttt{List} especializadas de Java~\cite{gosling2021} o los \texttt{array} de Go~\cite{donovan2015}) para mejorar el rendimiento.
+\end{enumerate}
+
+\subsection{Recomendaciones para el trabajo futuro}
+
+Desde una perspectiva de investigación y desarrollo, el compilador HULK abre varias líneas de trabajo que podrían explorarse:
+
+\begin{enumerate}[leftmargin=1.4em, itemsep=0.35em]
+	\item \textbf{Ampliación del sistema de tipos.} La introducción de tipos algebraicos (sum types) y patrones de desestructuración más ricos permitiría a HULK acercarse a lenguajes funcionales modernos. La extensión \texttt{match} ya da los primeros pasos en esa dirección; podría completarse con patrones anidados y guardas.
+	
+	\item \textbf{Soporte para compilación incremental y caché.} La arquitectura actual compila todo el programa en una sola pasada. Un sistema de compilación incremental, que recompile solo las partes modificadas, sería beneficioso para proyectos grandes y mejoraría la experiencia de desarrollo.
+	
+	\item \textbf{Generación de código para otras plataformas.} Aunque el backend está orientado a Linux x86\_64, la portabilidad de LLVM permitiría generar código para Windows, macOS y arquitecturas ARM con relativo esfuerzo. Esto haría que HULK fuera utilizable en entornos más diversos.
+	
+	\item \textbf{Mejora de la experiencia de usuario.} El compilador actual produce mensajes de error claros y con ubicación, pero se podría enriquecer con sugerencias automáticas (por ejemplo, corrección de errores tipográficos en nombres de variables) y una integración más estrecha con entornos de desarrollo (LSP, extensiones para editores).
+\end{enumerate}
+
+El compilador HULK desarrollado es una herramienta robusta y extensible que cumple con creces los objetivos del proyecto. Las limitaciones identificadas no restan valor a su corrección ni a su utilidad, y las recomendaciones propuestas ofrecen un camino claro para su evolución futura. Este trabajo constituye una base sólida tanto para la docencia como para la investigación en lenguajes de programación y compilación.
+
+% ============================================================
+% SECCIÓN 10: REFERENCIAS
+% ============================================================
+
+\section{Referencias}
+
+\begin{thebibliography}{99}
+
+\bibitem{wexelblat1981}
+Wexelblat, R.~L. (Ed.). (1981). \textit{History of Programming Languages}.
+Academic Press / ACM.
+
+\bibitem{backus1957}
+Backus, J.~W. (1957). The FORTRAN automatic coding system. En
+\textit{Proceedings of the Western Joint Computer Conference}, 188--198.
+
+\bibitem{mccarthy1960}
+McCarthy, J. (1960). Recursive functions of symbolic expressions and their
+computation by machine, Part I. \textit{Communications of the ACM}, 3(4),
+184--195.
+
+\bibitem{chomsky1956}
+Chomsky, N. (1956). Three models for the description of language.
+\textit{IRE Transactions on Information Theory}, 2(3), 113--124.
+
+\bibitem{knuth1965}
+Knuth, D.~E. (1965). On the translation of languages from left to right.
+\textit{Information and Control}, 8(6), 607--639.
+
+\bibitem{aho1986}
+Aho, A.~V., Sethi, R., \& Ullman, J.~D. (1986). \textit{Compilers:
+Principles, Techniques, and Tools}. Addison-Wesley.
+
+\bibitem{lattner2004}
+Lattner, C., \& Adve, V. (2004). LLVM: A Compilation Framework for Lifelong
+Program Analysis \& Transformation. En \textit{Proceedings of the
+International Symposium on Code Generation and Optimization (CGO)}. IEEE.
+
+\bibitem{itanium-abi}
+Itanium C++ ABI Organization. \textit{Itanium C++ ABI: Generic Application
+Binary Interface for the C++ Programming Language}. Especificación de
+referencia mantenida colaborativamente; sección sobre disposición de objetos
+con herencia simple.
+
+\bibitem{baconrajan2004}
+Bacon, D.~F., Cheng, P., \& Rajan, V.~T. (2004). A Unified Theory of Garbage
+Collection. En \textit{Proceedings of the 19th ACM SIGPLAN Conference on
+Object-Oriented Programming, Systems, Languages, and Applications (OOPSLA)},
+50--68. ACM.
+
+\bibitem{baconrajan2001}
+Bacon, D.~F., \& Rajan, V.~T. (2001). Concurrent Cycle Collection in
+Reference Counted Systems. En \textit{Proceedings of the European Conference
+on Object-Oriented Programming (ECOOP)}. Springer.
+
+\bibitem{gosling2021}
+Gosling, J., Joy, B., Steele, G., Bracha, G., \& Buckley, A. (2021).
+\textit{The Java Language Specification, Java SE 17 Edition}. Oracle
+America, Inc.
+
+\bibitem{bierman2019}
+Bierman, G. (2019). \textit{JEP 361: Switch Expressions}. OpenJDK.
+
+\bibitem{leroy2023}
+Leroy, X., Doligez, D., Frisch, A., Garrigue, J., Rémy, D., \& Vouillon, J.
+(2023). \textit{The OCaml System: Documentation and User's Manual}. Institut
+National de Recherche en Informatique et en Automatique (INRIA).
+
+\bibitem{pierce2002}
+Pierce, B.~C. (2002). \textit{Types and Programming Languages}. MIT Press.
+
+\bibitem{cardelli1985}
+Cardelli, L., \& Wegner, P. (1985). On Understanding Types, Data Abstraction,
+and Polymorphism. \textit{ACM Computing Surveys}, 17(4), 471--523.
+
+\bibitem{donovan2015}
+Donovan, A.~A., \& Kernighan, B.~W. (2015). \textit{The Go Programming
+Language}. Addison-Wesley.
+
+\bibitem{klabnik2019}
+Klabnik, S., \& Nichols, C. (2019). \textit{The Rust Programming Language}.
+No Starch Press.
+
+\bibitem{odersky2021}
+Odersky, M., Spoon, L., \& Venners, B. (2021). \textit{Programming in Scala}
+(5.\textsuperscript{a} ed.). Artima Press.
+
+\bibitem{jemerov2017}
+Jemerov, D., \& Isakova, S. (2017). \textit{Kotlin in Action}. Manning
+Publications.
+
+\bibitem{milner1978}
+Milner, R. (1978). A Theory of Type Polymorphism in Programming Languages.
+\textit{Journal of Computer and System Sciences}, 17(3), 348--375.
+
+\bibitem{peytonjones1987}
+Peyton Jones, S.~L. (1987). \textit{The Implementation of Functional
+Programming Languages}. Prentice Hall.
+
+\bibitem{hudak2007}
+Hudak, P., Hughes, J., Peyton Jones, S., \& Wadler, P. (2007). A History of
+Haskell: Being Lazy with Class. En \textit{Proceedings of the Third ACM
+SIGPLAN Conference on History of Programming Languages (HOPL III)}. ACM.
+
+\bibitem{marlow2010}
+Marlow, S. (Ed.). (2010). \textit{Haskell 2010 Language Report}.
+
+\bibitem{bucher2020}
+Bucher, B., \& Van Rossum, G. (2020). \textit{PEP 634 -- Structural Pattern
+Matching: Specification}. Python Software Foundation.
+
+\bibitem{warsaw2000}
+Warsaw, B. (2000). \textit{PEP 202 -- List Comprehensions}. Python Software
+Foundation.
+
+\bibitem{bierman2014}
+Bierman, G., Abadi, M., \& Torgersen, M. (2014). Understanding TypeScript.
+En \textit{Proceedings of the 28th European Conference on Object-Oriented
+Programming (ECOOP 2014)}, 257--281. Springer.
+
+\bibitem{landwerth2019}
+Landwerth, I. (2019--2020). \textit{Building a Compiler} [serie de videos].
+Repositorio de referencia: \url{https://github.com/terrajobst/minsk}.
+
+\end{thebibliography}
+
+% ============================================================
+% SECCIÓN 11: APÉNDICE — GRAMÁTICA COMPLETA
+% ============================================================
+
+\section{Apéndice: gramática completa}
+\label{sec:apendice-gramatica}
+
+\subsection{Convenciones}
+
+La gramática que sigue es la implementada por \texttt{hulk-parser}, un
+analizador descendente predictivo escrito a mano en el que cada no terminal
+corresponde a un método de Rust; no es un motor de tablas genérico, lo cual
+permite que las acciones semánticas construyan directamente el árbol de
+sintaxis abstracta durante el descenso. La gramática natural de HULK es
+ambigua y recursiva por la izquierda en sus niveles de expresión, de modo que
+-- siguiendo la transformación estándar descrita en la Sección~\ref{sec:arquitectura}~\cite{aho1986}
+-- se eliminó la recursión por la izquierda mediante producciones de la
+forma \texttt{Cola -> op RHS Cola | epsilon}, se factorizaron los prefijos
+comunes, y se seleccionó cada producción con un único token de anticipación
+(LL(1)). Las secciones de \textit{Nivel de programa} y \textit{Niveles de
+precedencia de expresión} reproducen, de forma sistemática y completa, las
+construcciones ya introducidas de manera ilustrativa en las
+Secciones~\ref{sec:hulk} y~\ref{sec:extensiones}; las secciones de
+\textit{Expresiones primarias extendidas} se han reconstruido a partir de la
+implementación efectiva de las funciones \texttt{finish\_*\_expression} y
+\texttt{parse\_pattern} en \texttt{hulk-parser/src/lib.rs}.
+
+\subsection{Nivel de programa y declaraciones}
+
+\begin{lstlisting}[language={}]
+Program      -> Declaration* Expr ';'* EOF
+Declaration  -> FunctionDecl | TypeDecl | ProtocolDecl
+
+FunctionDecl -> 'function' id FunctionTail
+FunctionTail -> ParamList ReturnType? FunctionBody
+ReturnType   -> ':' TypeRef
+FunctionBody -> '=>' Expr ';'? | Block
+
+TypeDecl     -> 'type' id ParamList? Parent? '{' TypeMember* '}'
+Parent       -> 'inherits' id ConstructorArgs?
+TypeMember   -> 'function' id FunctionTail
+              | id TypeMemberAfterId
+TypeMemberAfterId -> FunctionTail | TypeAnnotation? '=' Expr ';'
+
+ProtocolDecl -> 'protocol' id ProtocolParents? '{' ProtocolMethod* '}'
+\end{lstlisting}
+
+\texttt{TypeMember} está factorizado por la izquierda: tras consumir un
+identificador, el siguiente token decide entre un método (si el siguiente es
+\texttt{(}) y un atributo (si el siguiente es \texttt{:} o \texttt{=}),
+evitando así retroceso.
+
+\subsection{Niveles de precedencia de expresión}
+
+La gramática natural de expresiones es recursiva por la izquierda, de modo
+que se reescribe como una secuencia de niveles LL(1), de menor a mayor
+precedencia:
+
+\begin{lstlisting}[language={}]
+Expr        -> Assignment
+Assignment  -> Or AssignmentTail
+AssignmentTail -> ':=' Assignment | epsilon
+
+Or          -> And OrTail
+OrTail      -> '|' And OrTail | epsilon
+
+And         -> Equality AndTail
+AndTail     -> '&' Equality AndTail | epsilon
+
+Equality    -> Comparison EqualityTail
+EqualityTail -> ('==' | '!=') Comparison EqualityTail | epsilon
+
+Comparison  -> TypeTest ComparisonTail
+ComparisonTail -> ('<' | '<=' | '>' | '>=') TypeTest ComparisonTail | epsilon
+
+TypeTest    -> Concat TypeTestTail
+TypeTestTail -> ('is' | 'as') TypeRef TypeTestTail | epsilon
+
+Concat      -> Term ConcatTail
+ConcatTail  -> ('@' | '@@') Term ConcatTail | epsilon
+
+Term        -> Factor TermTail
+TermTail    -> ('+' | '-') Factor TermTail | epsilon
+
+Factor      -> Unary FactorTail
+FactorTail  -> ('*' | '/' | '%') Unary FactorTail | epsilon
+
+Unary       -> '-' Unary | '!' Unary | Power
+Power       -> Postfix PowerTail
+PowerTail   -> '^' Unary | epsilon
+
+Postfix     -> Primary PostfixTail
+PostfixTail -> '(' ArgList? ')' PostfixTail
+             | '.' id PostfixTail
+             | '[' Expr ']' PostfixTail
+             | epsilon
+\end{lstlisting}
+
+\subsection{Expresiones primarias}
+
+\begin{lstlisting}[language={}]
+Primary -> number
+         | string
+         | 'true'
+         | 'false'
+         | id
+         | 'self'
+         | 'base'
+         | '(' Expr ')'
+         | Block
+         | Vector
+         | Let
+         | If
+         | While
+         | For
+         | New
+         | Match
+\end{lstlisting}
+
+Nótese que \texttt{base} no es, en el lexer, una palabra reservada en toda
+posición sino una palabra clave suave (\S\ref{sec:hulk}): el analizador léxico
+la produce como un token distinguido, pero solo \texttt{Postfix} la
+reinterpreta como una referencia al método del padre cuando va seguida
+inmediatamente de \texttt{(}, lo que permite que un programa pueda, en
+principio, usar \texttt{base} como nombre de variable cuando no se invoca
+como delegación de método.
+
+\subsection{Expresiones primarias extendidas}
+
+Las siguientes producciones, presentadas de forma ilustrativa junto con cada
+característica en las Secciones~\ref{sec:hulk} y~\ref{sec:extensiones}, se
+reconstruyen aquí de forma completa y sistemática a partir de las funciones
+\texttt{finish\_*\_expression} y \texttt{parse\_pattern} de
+\texttt{hulk-parser/src/lib.rs}:
+
+\begin{lstlisting}[language={}]
+Block -> '{' BlockItem* '}'
+BlockItem -> ';' | Expr ';'?
+
+Let  -> 'let' LetBinding (',' LetBinding)* 'in' Expr
+LetBinding -> id (':' TypeRef)? '=' Expr
+
+If   -> 'if' '(' Expr ')' Expr ElifTail* 'else' Expr
+ElifTail -> 'elif' '(' Expr ')' Expr
+
+While -> 'while' '(' Expr ')' Expr
+
+For  -> 'for' '(' id 'in' Expr ')' Expr
+
+New  -> 'new' TypeRef ( '(' ArgList? ')' )?
+
+Match -> 'match' Expr '{' MatchCase+ '}'
+MatchCase -> 'case' Pattern '=>' Expr ';'?
+Pattern -> '_'
+         | number | string | 'true' | 'false'
+         | id (':' TypeRef)?
+\end{lstlisting}
+
+En \texttt{Pattern}, un identificador no seguido de \texttt{:} se interpreta
+como un patrón de variable que captura el valor completo; un identificador
+seguido de \texttt{:} y una referencia de tipo se interpreta como un patrón de
+tipo con alias, equivalente en tiempo de ejecución a una prueba \texttt{is}
+seguida de una vinculación local del valor bajo el nombre dado, vigente
+únicamente dentro del cuerpo de ese caso.
+
+\subsection{Ambigüedad de vectores}
+
+HULK utiliza el símbolo \texttt{|} tanto para la disyunción lógica como para
+el separador de comprensiones de vectores. Para conservar la propiedad LL(1),
+el analizador factoriza la producción de vector y emplea una expresión de
+cabeza especial que no consume la disyunción de nivel superior:
+
+\begin{lstlisting}[language={}]
+Vector      -> '[' VectorBody
+VectorBody  -> ']'
+            | ExprNoTopLevelOr VectorTail
+VectorTail  -> '|' id 'in' Expr ']'
+            | VectorItemsTail ']'
+VectorItemsTail -> (',' Expr)*
+\end{lstlisting}
+
+Esto permite analizar \texttt{[x\^{}2 | x in range(1, 10)]} como una
+comprensión, mientras que \texttt{[(x | y) | x in valores]} sigue siendo
+válido porque la expresión de disyunción dentro de la cabeza está
+explícitamente delimitada por paréntesis. En la implementación,
+\texttt{ExprNoTopLevelOr} corresponde a \texttt{parse\_assignment\_without\_or},
+el mismo nivel de precedencia que \texttt{Assignment} pero sin descender a
+través de \texttt{Or}.
+
+\subsection{Tabla de correspondencia gramática--implementación}
+
+\begin{center}
+\begin{longtable}{@{}l l@{}}
+\toprule
+\textbf{No terminal} & \textbf{Método de Rust} \\
+\midrule
+\endhead
+\texttt{Program} & \texttt{parse\_program} \\
+\texttt{Declaration} & \texttt{parse\_declaration} \\
+\texttt{FunctionDecl} & \texttt{parse\_function\_declaration\_after\_keyword} \\
+\texttt{TypeDecl} & \texttt{parse\_type\_declaration\_after\_keyword} \\
+\texttt{ProtocolDecl} & \texttt{parse\_protocol\_declaration\_after\_keyword} \\
+\texttt{Expr} & \texttt{parse\_expression} \\
+\texttt{Assignment} & \texttt{parse\_assignment} \\
+\texttt{Or} & \texttt{parse\_or} \\
+\texttt{And} & \texttt{parse\_and} \\
+\texttt{Equality} & \texttt{parse\_equality} \\
+\texttt{Comparison} & \texttt{parse\_comparison} \\
+\texttt{TypeTest} & \texttt{parse\_type\_test} \\
+\texttt{Concat} & \texttt{parse\_concat} \\
+\texttt{Term} & \texttt{parse\_term} \\
+\texttt{Factor} & \texttt{parse\_factor} \\
+\texttt{Unary} & \texttt{parse\_unary} \\
+\texttt{Power} & \texttt{parse\_power} \\
+\texttt{Postfix} & \texttt{parse\_postfix} \\
+\texttt{Primary} & \texttt{parse\_primary} \\
+\texttt{Block} & \texttt{finish\_block\_expression} \\
+\texttt{Vector} & \texttt{finish\_vector\_expression} \\
+\texttt{Let} & \texttt{finish\_let\_expression} \\
+\texttt{If} & \texttt{finish\_if\_expression} \\
+\texttt{While} & \texttt{finish\_while\_expression} \\
+\texttt{For} & \texttt{finish\_for\_expression} \\
+\texttt{New} & \texttt{finish\_new\_expression} \\
+\texttt{Match} & \texttt{finish\_match\_expression} \\
+\texttt{Pattern} & \texttt{parse\_pattern} \\
+\bottomrule
+\end{longtable}
+\end{center}
 
 \end{document}
