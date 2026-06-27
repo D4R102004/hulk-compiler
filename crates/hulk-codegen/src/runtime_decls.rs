@@ -78,6 +78,14 @@ pub fn declare_downcast_fail<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx
 
 // ─── Vector builtin methods ───────────────────────────────────────────────
 
+/// Declares `hulk_rt_vector_new(len: i64) -> ptr`.
+pub fn declare_vector_new<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    let i64_type = ctx.context.i64_type();
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let fn_type = ptr_type.fn_type(&[i64_type.into()], false);
+    ctx.module.add_function("hulk_rt_vector_new", fn_type, None)
+}
+
 /// Declares `hulk_rt_vector_size(vec: ptr) -> i64`.
 pub fn declare_vector_size<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
     let ptr_type = ctx.context.ptr_type(Default::default());
@@ -308,6 +316,10 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
     ctx.functions.insert("hulk_rt_string_equals".to_string(), str_eq);
 
     // ─── Vector builtin methods ───────────────────────────────────────────
+
+    let vec_new = declare_vector_new(ctx);
+    ctx.functions.insert("Vector::new".to_string(), vec_new);
+    ctx.functions.insert("hulk_rt_vector_new".to_string(), vec_new);
 
     let vec_size = declare_vector_size(ctx);
     ctx.functions.insert("Vector::size".to_string(), vec_size);
