@@ -8,6 +8,7 @@ use hulk_semantic::Type;
 use crate::error::CodegenError;
 use crate::lower::call::lower_method_call;
 use crate::lower::LowerCtx;
+use crate::runtime_decls::ensure_decl;
 use super::lower_expr;
 
 /// Lowers a `for` loop.
@@ -189,14 +190,7 @@ pub fn lower_vector_comprehension<'ctx>(
     let elem_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &elem_ty)?;
 
     // Create a dynamic vector.
-    let dyn_new_fn = ctx
-        .codegen
-        .functions
-        .get("hulk_rt_dynamic_vector_new")
-        .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: "hulk_rt_dynamic_vector_new not declared".into(),
-        })?;
+    let dyn_new_fn = ensure_decl(ctx.codegen, "hulk_rt_dynamic_vector_new")?;
     let dyn_vec = ctx
         .codegen
         .builder
@@ -272,14 +266,7 @@ pub fn lower_vector_comprehension<'ctx>(
     }
 
     // Append to dynamic vector.
-    let append_fn = ctx
-        .codegen
-        .functions
-        .get("hulk_rt_dynamic_vector_append")
-        .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: "hulk_rt_dynamic_vector_append not declared".into(),
-        })?;
+    let append_fn = ensure_decl(ctx.codegen, "hulk_rt_dynamic_vector_append")?;
     ctx.codegen
         .builder
         .build_call(append_fn, &[dyn_vec.into(), head_val.into()], "append")
@@ -294,14 +281,7 @@ pub fn lower_vector_comprehension<'ctx>(
     // ── Exit block ──────────────────────────────────────────────────────
     ctx.codegen.builder.position_at_end(exit_bb);
 
-    let to_vec_fn = ctx
-        .codegen
-        .functions
-        .get("hulk_rt_dynamic_vector_to_vector")
-        .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: "hulk_rt_dynamic_vector_to_vector not declared".into(),
-        })?;
+    let to_vec_fn = ensure_decl(ctx.codegen, "hulk_rt_dynamic_vector_to_vector")?;
     let result = ctx
         .codegen
         .builder

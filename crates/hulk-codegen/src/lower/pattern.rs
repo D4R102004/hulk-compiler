@@ -16,6 +16,7 @@ use hulk_semantic::Type;
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
 use crate::lower::utils::llvm_type;
+use crate::runtime_decls::ensure_decl;
 use super::lower_expr;
 
 /// Lowers a `match` expression.
@@ -188,14 +189,7 @@ pub fn lower_match<'ctx>(
     // if the match is non‑exhaustive.
     if let Some(fail) = fail_bb {
         ctx.codegen.builder.position_at_end(fail);
-        let fail_fn = ctx
-            .codegen
-            .functions
-            .get("hulk_rt_match_fail")
-            .cloned()
-            .ok_or_else(|| CodegenError::Unsupported {
-                construct: "hulk_rt_match_fail not declared".into(),
-            })?;
+        let fail_fn = ensure_decl(ctx.codegen, "hulk_rt_match_fail")?;
         ctx.codegen
             .builder
             .build_call(fail_fn, &[], "match_fail_call")
@@ -268,14 +262,7 @@ fn lower_pattern<'ctx>(
                         span: hulk_ast::SourceSpan::new(0, 0),
                     };
                     let lit_val = lower_expr(ctx, &lit_expr)?;
-                    let str_eq_fn = ctx
-                        .codegen
-                        .functions
-                        .get("hulk_rt_string_equals")
-                        .cloned()
-                        .ok_or_else(|| CodegenError::Unsupported {
-                            construct: "hulk_rt_string_equals not declared".into(),
-                        })?;
+                    let str_eq_fn = ensure_decl(ctx.codegen, "hulk_rt_string_equals")?;
                     let call = ctx.codegen.builder.build_call(
                         str_eq_fn,
                         &[scrutinee_val.clone().into(), lit_val.into()],
@@ -304,14 +291,7 @@ fn lower_pattern<'ctx>(
             let target_vtable_ptr = target_vtable.as_pointer_value();
 
             // Call downcast_check.
-            let downcast_fn = ctx
-                .codegen
-                .functions
-                .get("hulk_rt_downcast_check")
-                .cloned()
-                .ok_or_else(|| CodegenError::Unsupported {
-                    construct: "hulk_rt_downcast_check not declared".into(),
-                })?;
+            let downcast_fn = ensure_decl(ctx.codegen, "hulk_rt_downcast_check")?;
             let obj_ptr = scrutinee_val.clone().into_pointer_value();
             let call = ctx.codegen.builder.build_call(
                 downcast_fn,

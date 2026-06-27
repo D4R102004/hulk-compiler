@@ -5,6 +5,7 @@ use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
+use crate::runtime_decls::ensure_decl;
 use super::lower_expr;
 
 /// Lowers a type test expression (`expr is Type`).
@@ -17,7 +18,7 @@ pub fn lower_typetest<'ctx>(
     let obj_ptr = lower_object_pointer(ctx, &type_test.expr)?;
     let target_vtable = resolve_vtable(ctx, &type_test.type_name.name)?;
 
-    let check_fn = get_downcast_check(ctx)?;
+    let check_fn = ensure_decl(ctx.codegen, "hulk_rt_downcast_check")?;
     let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![obj_ptr.into(), target_vtable.into()];
     let call_site = ctx
         .codegen
@@ -39,7 +40,7 @@ pub fn lower_downcast<'ctx>(
     let obj_ptr = lower_object_pointer(ctx, &downcast.expr)?;
     let target_vtable = resolve_vtable(ctx, &downcast.type_name.name)?;
 
-    let check_fn = get_downcast_check(ctx)?;
+    let check_fn = ensure_decl(ctx.codegen, "hulk_rt_downcast_check")?;
     let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![obj_ptr.into(), target_vtable.into()];
     let call_site = ctx
         .codegen
@@ -64,7 +65,7 @@ pub fn lower_downcast<'ctx>(
     // ─── Trap block ──────────────────────────────────────────────────────
 
     ctx.codegen.builder.position_at_end(trap_bb);
-    let fail_fn = get_downcast_fail(ctx)?;
+    let fail_fn = ensure_decl(ctx.codegen, "hulk_rt_downcast_fail")?;
     ctx.codegen
         .builder
         .build_call(fail_fn, &[], "downcast_fail")
@@ -124,30 +125,4 @@ fn resolve_vtable<'ctx>(
             construct: format!("vtable for '{}' not built", type_name),
         })?;
     Ok(vtable_global.as_pointer_value())
-}
-
-/// Returns the `hulk_rt_downcast_check` function declaration.
-fn get_downcast_check<'ctx>(
-    ctx: &LowerCtx<'_, 'ctx>,
-) -> Result<inkwell::values::FunctionValue<'ctx>, CodegenError> {
-    ctx.codegen
-        .functions
-        .get("hulk_rt_downcast_check")
-        .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: "hulk_rt_downcast_check not declared".into(),
-        })
-}
-
-/// Returns the `hulk_rt_downcast_fail` function declaration.
-fn get_downcast_fail<'ctx>(
-    ctx: &LowerCtx<'_, 'ctx>,
-) -> Result<inkwell::values::FunctionValue<'ctx>, CodegenError> {
-    ctx.codegen
-        .functions
-        .get("hulk_rt_downcast_fail")
-        .cloned()
-        .ok_or_else(|| CodegenError::Unsupported {
-            construct: "hulk_rt_downcast_fail not declared".into(),
-        })
 }

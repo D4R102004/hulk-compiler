@@ -3,7 +3,7 @@
 use inkwell::values::{BasicValueEnum, BasicMetadataValueEnum};
 use inkwell::types::BasicType;
 use hulk_ast::{CallExpr, SourceSpan};
-use hulk_semantic::{Type, TypedExpr, TypeRegistry};
+use hulk_semantic::{Type, TypedExpr};
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
@@ -39,21 +39,35 @@ pub fn lower_call<'ctx>(
 
         hulk_ast::ExprKind::Variable(name) => {
             if let Some(fn_val) = ctx.codegen.functions.get(name).copied() {
-                // Get the function signature from registry.
-                let sig = ctx.registry.lookup_function(name)
-                    .ok_or_else(|| CodegenError::Unsupported {
-                        construct: format!("function '{}' not in registry", name),
-                    })?;
+                // Extract the parameter types from the callee's own annotation.
+                // The type checker has already resolved this to Type::Function.
+                let param_types = match &call.callee.anno {
+                    Type::Function { params, .. } => params,
+                    other => {
+                        return Err(CodegenError::Unsupported {
+                            construct: format!(
+                                "call to variable `{}` with non-function type `{:?}`",
+                                name, other
+                            ),
+                        });
+                    }
+                };
 
-                // Lower and box arguments if needed.
-                let call_args = lower_and_box_args(ctx, &call.args, &sig.params)?;
+                // Lower each argument, boxing if the parameter type is Object.
+                let mut args = Vec::with_capacity(call.args.len());
+                for (arg_expr, param_ty) in call.args.iter().zip(param_types) {
+                    let mut arg_val = lower_expr(ctx, arg_expr)?;
+                    if matches!(param_ty, Type::Object) {
+                        arg_val = crate::lower::utils::ensure_boxed(ctx, arg_val, &arg_expr.anno, param_ty)?;
+                    }
+                    args.push(arg_val.into());
+                }
 
                 let call_site = ctx
                     .codegen
                     .builder
-                    .build_call(fn_val, &call_args, "call")
+                    .build_call(fn_val, &args, "call")
                     .map_err(|e| CodegenError::LlvmVerification(e.to_string()))?;
-
                 let result = call_site
                     .try_as_basic_value()
                     .unwrap_basic();

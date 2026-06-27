@@ -178,7 +178,37 @@ pub fn declare_dynamic_vector_to_vector<'ctx>(ctx: &CodegenCtx<'ctx>) -> Functio
     ctx.module.add_function("hulk_rt_dynamic_vector_to_vector", fn_type, None)
 }
 
-// ─── Declare all runtime functions ───────────────────────────────────────────
+// ─── Group Declarations ───────────────────────────────────────────
+
+/// Returns the existing declaration for `name` if this module already has
+/// one, or declares it now (caching the result) if not.
+///
+/// Several runtime symbols are only needed by some HULK programs.
+/// This mirrors the reachability pruning in `itables::build_itables`.
+pub fn ensure_decl<'ctx>(
+    ctx: &mut CodegenCtx<'ctx>,
+    name: &str,
+) -> Result<inkwell::values::FunctionValue<'ctx>, CodegenError> {
+    if let Some(f) = ctx.functions.get(name) {
+        return Ok(*f);
+    }
+    let f = match name {
+        "hulk_rt_match_fail" => declare_match_fail(ctx),
+        "hulk_rt_downcast_check" => declare_downcast_check(ctx),
+        "hulk_rt_downcast_fail" => declare_downcast_fail(ctx),
+        "hulk_rt_string_equals" => declare_string_equals(ctx),
+        "hulk_rt_dynamic_vector_new" => declare_dynamic_vector_new(ctx),
+        "hulk_rt_dynamic_vector_append" => declare_dynamic_vector_append(ctx),
+        "hulk_rt_dynamic_vector_to_vector" => declare_dynamic_vector_to_vector(ctx),
+        other => {
+            return Err(CodegenError::Unsupported {
+                construct: format!("no on‑demand declaration recipe for `{other}`"),
+            });
+        }
+    };
+    ctx.functions.insert(name.to_string(), f);
+    Ok(f)
+}
 
 /// Declares all standard runtime functions and inserts them into `ctx.functions`.
 ///
@@ -211,14 +241,10 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
     let bool_to_str = declare_bool_to_string(ctx);
     ctx.functions.insert("hulk_rt_bool_to_string".to_string(), bool_to_str);
 
-    let downcast_check = declare_downcast_check(ctx);
-    ctx.functions.insert("hulk_rt_downcast_check".to_string(), downcast_check);
-
-    let downcast_fail = declare_downcast_fail(ctx);
-    ctx.functions.insert("hulk_rt_downcast_fail".to_string(), downcast_fail);
+    let str_eq = declare_string_equals(ctx);
+    ctx.functions.insert("hulk_rt_string_equals".to_string(), str_eq);
 
     // ─── Vector builtin methods ───────────────────────────────────────────
-    // Insert under both qualified and raw names.
 
     let vec_size = declare_vector_size(ctx);
     ctx.functions.insert("Vector::size".to_string(), vec_size);
@@ -249,25 +275,4 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
     let range_current = declare_range_current(ctx);
     ctx.functions.insert("Range::current".to_string(), range_current);
     ctx.functions.insert("hulk_rt_range_current".to_string(), range_current);
-
-    // ─── Match fail trap ──────────────────────────────────────────────────
-
-    let match_fail = declare_match_fail(ctx);
-    ctx.functions.insert("hulk_rt_match_fail".to_string(), match_fail);
-
-    // ─── String equality ──────────────────────────────────────────────────
-
-    let str_eq = declare_string_equals(ctx);
-    ctx.functions.insert("hulk_rt_string_equals".to_string(), str_eq);
-
-    // ─── Dynamic vector helpers (comprehensions) ─────────────────────────
-
-    let dyn_new = declare_dynamic_vector_new(ctx);
-    ctx.functions.insert("hulk_rt_dynamic_vector_new".to_string(), dyn_new);
-
-    let dyn_append = declare_dynamic_vector_append(ctx);
-    ctx.functions.insert("hulk_rt_dynamic_vector_append".to_string(), dyn_append);
-
-    let dyn_to_vec = declare_dynamic_vector_to_vector(ctx);
-    ctx.functions.insert("hulk_rt_dynamic_vector_to_vector".to_string(), dyn_to_vec);
 }
