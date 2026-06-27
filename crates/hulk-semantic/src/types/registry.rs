@@ -96,6 +96,7 @@ pub struct FunctionSignature {
     pub params: Vec<(String, Type)>,
     pub return_type: Type,
     pub span: SourceSpan,
+    pub is_constant: bool,  // true for PI, E, etc.
 }
 
 // -----------------------------------------------------------------------------
@@ -321,6 +322,7 @@ pub fn seeded_registry() -> TypeRegistry {
             params: vec![("x".to_string(), Type::Object)],
             return_type: Type::Object,
             span: SourceSpan::new(0, 0),
+            is_constant: false,
         },
     );
 
@@ -332,6 +334,7 @@ pub fn seeded_registry() -> TypeRegistry {
                 params: vec![("x".to_string(), Type::Number)],
                 return_type: Type::Number,
                 span: SourceSpan::new(0, 0),
+                is_constant: false,
             },
         );
     }
@@ -346,6 +349,7 @@ pub fn seeded_registry() -> TypeRegistry {
             ],
             return_type: Type::Number,
             span: SourceSpan::new(0, 0),
+            is_constant: false,
         },
     );
 
@@ -356,6 +360,7 @@ pub fn seeded_registry() -> TypeRegistry {
             params: Vec::new(),
             return_type: Type::Number,
             span: SourceSpan::new(0, 0),
+            is_constant: false,
         },
     );
 
@@ -369,6 +374,7 @@ pub fn seeded_registry() -> TypeRegistry {
             ],
             return_type: Type::Named("Range".to_string()),
             span: SourceSpan::new(0, 0),
+            is_constant: false,
         },
     );
 
@@ -380,6 +386,7 @@ pub fn seeded_registry() -> TypeRegistry {
                 params: Vec::new(),
                 return_type: Type::Number,
                 span: SourceSpan::new(0, 0),
+                is_constant: true, // treated as constants
             },
         );
     }

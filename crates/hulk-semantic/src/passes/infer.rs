@@ -505,12 +505,12 @@ impl<'a> InferState<'a> {
         } else {
             // Check if it is a function in the registry.
             if let Some(sig) = self.registry.lookup_function(name) {
-                if sig.params.is_empty() {
-                    // Zero-arity: treat as constant
+                if sig.is_constant {
+                    // Constants are values, not callables.
                     let ty = sig.return_type.clone();
                     return typed_expr(ExprKind::Variable(name.to_string()), ty, span);
                 } else {
-                    // Non-zero-arity: treat as a function value
+                    // All other functions are callables.
                     let param_types = sig.params.iter().map(|(_, ty)| ty.clone()).collect();
                     let return_type = sig.return_type.clone();
                     let func_type = Type::Function {
