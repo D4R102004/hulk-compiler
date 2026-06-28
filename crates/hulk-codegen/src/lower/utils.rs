@@ -412,11 +412,29 @@ pub fn ensure_boxed<'ctx>(
     Ok(value)
 }
 
-// src/lower/utils.rs — new shared helper
+// Returns `true` if the type is a protocol or an Iterable, which are both represented as fat pointers.
 pub fn is_protocol_or_iterable(ty: &Type, registry: &TypeRegistry) -> bool {
     match ty {
         Type::Named(_) => registry.is_protocol(ty),
         Type::Iterable(_) => true,
         _ => false,
+    }
+}
+
+/// If `val` is a fat‑pointer struct (protocol or Iterable), extract its
+/// first field (the object data pointer). Otherwise, return `val` unchanged.
+pub fn object_pointer_from_fat_ptr<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    val: BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+    if is_protocol_or_iterable(ty, ctx.registry) {
+        let struct_val = val.into_struct_value();
+        let data_ptr = ctx.codegen.builder
+            .build_extract_value(struct_val, 0, "fat_data")
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+        Ok(data_ptr)
+    } else {
+        Ok(val)
     }
 }

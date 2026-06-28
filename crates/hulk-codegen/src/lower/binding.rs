@@ -111,7 +111,7 @@ pub fn lower_let<'ctx>(
     }
 
     let body_val = lower_expr(ctx, &let_expr.body)?;
-    ctx.pop_scope();
+    ctx.pop_scope()?;
     Ok(body_val)
 }
 

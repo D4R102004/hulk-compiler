@@ -180,7 +180,7 @@ pub fn lower_match<'ctx>(
             .build_store(result_alloca, boxed_body_val)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-        ctx.pop_scope();
+        ctx.pop_scope()?;
 
         // Jump to the merge block.
         ctx.codegen

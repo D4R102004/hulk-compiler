@@ -230,7 +230,7 @@ pub fn lower_new<'ctx>(
 
     // --- 5. Clean up and return ----------------------------------------------
 
-    ctx.pop_scope();
+    ctx.pop_scope()?;
     Ok(obj_ptr.into())
 }
 

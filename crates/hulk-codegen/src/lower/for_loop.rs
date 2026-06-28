@@ -154,7 +154,7 @@ pub fn lower_for<'ctx>(
         .build_store(result_alloca, body_val)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-    ctx.pop_scope();
+    ctx.pop_scope()?;
 
     // Jump back to condition.
     ctx.codegen

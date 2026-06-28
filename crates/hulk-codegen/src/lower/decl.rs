@@ -125,7 +125,7 @@ fn define_function(
     // Lower the function body.
     let body_value = lower_expr(&mut lower_ctx, &func.body)?;
     
-    lower_ctx.pop_scope(); // Pop the function's parameter scope.
+    lower_ctx.pop_scope()?; // Pop the function's parameter scope.
     
     // Return the body value.
     lower_ctx.codegen.builder
