@@ -4,6 +4,7 @@ use inkwell::FloatPredicate;
 use inkwell::values::BasicValueEnum;
 use hulk_ast::TypeRef;
 use hulk_semantic::{Type, TypeRegistry};
+use hulk_rt::{TAG_BOX, TAG_NUMBER, TAG_BOOLEAN};
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
@@ -26,6 +27,12 @@ pub mod field_indices {
 
 /// Total number of header fields in the LLVM struct type.
 pub const HEADER_FIELD_COUNT: usize = 5;
+// Header (32) + Original_tag (1) + Padding (7) + Payload (8)
+    const BOX_SIZE: u64 = 48;
+// The size of the header portion of a boxed object, in bytes.
+    const BOX_HEADER_SIZE: u64 = 32;
+// The offset of the payload portion of a boxed object, in bytes.
+    const PAYLOAD_OFFSET: u64 = BOX_HEADER_SIZE + 8; // 40
 
 // ====================================================================================
 // Shared helper functions
@@ -315,90 +322,72 @@ pub fn box_primitive<'ctx>(
         .functions
         .get("hulk_rt_alloc")
         .cloned()
-        .ok_or_else(|| CodegenError::unsupported(
-            "hulk_rt_alloc not declared",
-            None
-        ))?;
+        .ok_or_else(|| CodegenError::unsupported("hulk_rt_alloc not declared", None))?;
 
-    // Allocate 16 bytes (tag + padding + payload)
-    let size = ctx.codegen.context.i64_type().const_int(16, false);
-    let call = ctx
-        .codegen
-        .builder
+    let i64_type = ctx.codegen.context.i64_type();
+    let i8_type = ctx.codegen.context.i8_type();
+    let ptr_type = ctx.codegen.context.ptr_type(Default::default());
+
+    let size = i64_type.const_int(BOX_SIZE, false);
+    let call = ctx.codegen.builder
         .build_call(alloc_fn, &[size.into()], "box_alloc")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    let box_ptr = call
-        .try_as_basic_value()
-        .basic()
-        .unwrap()
-        .into_pointer_value();
+    let box_ptr = call.try_as_basic_value().basic().unwrap().into_pointer_value();
 
-    // Store tag
-    let tag = match ty {
-        Type::Number => 0,
-        Type::Boolean => 1,
-        _ => return Err(CodegenError::unsupported(
-            format!("boxing of type {} not supported", ty),
-            None
-        )),
+    // Byte‑offset GEP helper.
+    let byte_ptr = |offset: u64, name: &str| unsafe {
+        ctx.codegen.builder
+            .build_gep(i8_type, box_ptr, &[i64_type.const_int(offset, false)], name)
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))
     };
-    let tag_ptr = unsafe {
-        ctx.codegen
-            .builder
-            .build_gep(
-                ctx.codegen.context.i8_type(),
-                box_ptr,
-                &[ctx.codegen.context.i32_type().const_int(0, false)],
-                "tag_ptr",
-            )
-            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
-    };
-    ctx.codegen
-        .builder
-        .build_store(tag_ptr, ctx.codegen.context.i8_type().const_int(tag, false))
+
+    // ── Header ──────────────────────────────────────────────────────
+    // ref_count = 1
+    ctx.codegen.builder.build_store(byte_ptr(0, "ref_count_ptr")?, i64_type.const_int(1, false))
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    // gc_mark = false
+    ctx.codegen.builder.build_store(byte_ptr(8, "gc_mark_ptr")?, i8_type.const_int(0, false))
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    // type_tag = TAG_BOX
+    ctx.codegen.builder.build_store(byte_ptr(9, "box_type_tag_ptr")?, i8_type.const_int(TAG_BOX as u64, false))
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    // next = null
+    ctx.codegen.builder.build_store(byte_ptr(16, "next_ptr")?, ptr_type.const_null())
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    // vtable = null
+    ctx.codegen.builder.build_store(byte_ptr(24, "vtable_ptr")?, ptr_type.const_null())
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-    // Store payload at offset 8
-    let payload_ptr = unsafe {
-        ctx.codegen
-            .builder
-            .build_gep(
-                ctx.codegen.context.i8_type(),
-                box_ptr,
-                &[ctx.codegen.context.i32_type().const_int(8, false)],
-                "payload_ptr",
-            )
-            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+    // Store tag
+    let original_tag = match ty {
+        Type::Number => TAG_NUMBER,
+        Type::Boolean => TAG_BOOLEAN,
+        _ => return Err(CodegenError::unsupported(
+            format!("boxing of type {} not supported", ty), None,
+        )),
     };
+    ctx.codegen.builder
+        .build_store(
+            byte_ptr(BOX_HEADER_SIZE, "original_tag_ptr")?, 
+            i8_type.const_int(original_tag as u64, false))
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    // ─── payload (offset) ────────────────────────────────────────
+    let payload_ptr = byte_ptr(PAYLOAD_OFFSET, "payload_ptr")?;
+    let payload_typed_ptr = ctx.codegen.builder
+        .build_pointer_cast(payload_ptr, ptr_type, "payload_typed_ptr")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     match ty {
         Type::Number => {
-            let float_val = value.into_float_value();
-            let payload_typed_ptr = ctx.codegen.builder.build_pointer_cast(
-                payload_ptr,
-                ctx.codegen.context.ptr_type(Default::default()),
-                "payload_typed_ptr",
-            ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            ctx.codegen
-                .builder
-                .build_store(payload_typed_ptr, float_val)
+            ctx.codegen.builder.build_store(payload_typed_ptr, value.into_float_value())
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         }
         Type::Boolean => {
-            let int_val = value.into_int_value();
-            let ext = ctx.codegen.builder.build_int_z_extend(
-                int_val,
-                ctx.codegen.context.i64_type(),
-                "bool_ext",
-            ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            let payload_typed_ptr = ctx.codegen.builder.build_pointer_cast(
-                payload_ptr,
-                ctx.codegen.context.ptr_type(Default::default()),
-                "payload_typed_ptr",
-            ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            ctx.codegen
-                .builder
-                .build_store(payload_typed_ptr, ext)
+            let ext = ctx.codegen.builder
+                .build_int_z_extend(value.into_int_value(), i64_type, "bool_ext")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            ctx.codegen.builder.build_store(payload_typed_ptr, ext)
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         }
         _ => unreachable!(),

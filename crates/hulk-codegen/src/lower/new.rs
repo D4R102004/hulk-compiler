@@ -108,12 +108,12 @@ pub fn lower_new<'ctx>(
     ctx.codegen.builder.build_store(tag_ptr, i8_type.const_int(TAG_OBJECT as u64, false))
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-    // next = null (field index 3)
+    // next = null
     let next_ptr = gep_field(field_indices::NEXT)?;
     ctx.codegen.builder.build_store(next_ptr, ptr_type.const_null())
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-    // vtable = global (field index 4)
+    // vtable = global
     let vtable_global = vtable_global
         .ok_or_else(|| CodegenError::unsupported (
             format!("vtable for '{}' not built", type_name),
