@@ -2,9 +2,11 @@
 
 use hulk_ast::{NewExpr, TypeDecl, TypeMemberKind, SourceSpan};
 use hulk_semantic::{Type, TypeRegistry};
+use hulk_rt::TAG_OBJECT;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
+use crate::lower::utils::field_indices;
 use super::lower_expr;
 
 /// Lowers a `new T(args)` expression.
@@ -76,6 +78,7 @@ pub fn lower_new<'ctx>(
     let i32_type = ctx.codegen.context.i32_type();
     let i64_type = ctx.codegen.context.i64_type();
     let i1_type = ctx.codegen.context.bool_type();
+    let i8_type = ctx.codegen.context.i8_type();      // for type_tag
     let ptr_type = ctx.codegen.context.ptr_type(Default::default());
 
     // Helper: GEP into the struct at field index `field_idx` (0‑based).
@@ -91,28 +94,33 @@ pub fn lower_new<'ctx>(
     };
 
     // ref_count = 1
-    let ref_count_ptr = gep_field(0)?;
+    let ref_count_ptr = gep_field(field_indices::REF_COUNT)?;
     ctx.codegen.builder.build_store(ref_count_ptr, i64_type.const_int(1, false))
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // gc_mark = false
-    let gc_mark_ptr = gep_field(1)?;
+    let gc_mark_ptr = gep_field(field_indices::GC_MARK)?;
     ctx.codegen.builder.build_store(gc_mark_ptr, i1_type.const_int(0, false))
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-    // next = null
-    let next_ptr = gep_field(2)?;
+    // type_tag = TAG_OBJECT – identifies this as a plain user object.
+    let tag_ptr = gep_field(field_indices::TYPE_TAG)?;
+    ctx.codegen.builder.build_store(tag_ptr, i8_type.const_int(TAG_OBJECT as u64, false))
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    // next = null (field index 3)
+    let next_ptr = gep_field(field_indices::NEXT)?;
     ctx.codegen.builder.build_store(next_ptr, ptr_type.const_null())
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-    // vtable = global
+    // vtable = global (field index 4)
     let vtable_global = vtable_global
         .ok_or_else(|| CodegenError::unsupported (
             format!("vtable for '{}' not built", type_name),
             span,
         ))?;
     let vtable_ptr = vtable_global.as_pointer_value();
-    let vtable_ptr_ptr = gep_field(3)?;
+    let vtable_ptr_ptr = gep_field(field_indices::VTABLE)?;
     ctx.codegen.builder.build_store(vtable_ptr_ptr, vtable_ptr)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 

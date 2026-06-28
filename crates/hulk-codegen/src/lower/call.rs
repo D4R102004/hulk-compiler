@@ -8,8 +8,7 @@ use hulk_semantic::{Type, TypedExpr};
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
 use crate::lower::builtins::lower_builtin_call;
-use crate::lower::utils::llvm_type;
-use crate::lower::utils::is_protocol_or_iterable as is_protocol_type;
+use crate::lower::utils::{field_indices, llvm_type, is_protocol_or_iterable as is_protocol_type};
 use crate::layout::has_subtypes;
 use super::lower_expr;
 
@@ -253,7 +252,7 @@ fn lower_class_method_call<'ctx>(
             .build_gep(
                 layout.struct_ty,
                 obj_ptr,
-                &[i32_type.const_int(0, false), i32_type.const_int(3, false)],
+                &[i32_type.const_int(0, false), i32_type.const_int(field_indices::VTABLE as u64, false)],
                 "vtable_ptr_ptr",
             )
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?

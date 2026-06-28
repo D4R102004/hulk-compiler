@@ -19,6 +19,7 @@ pub const TAG_NUMBER: u8 = 4;         // used inside HulkBox
 pub const TAG_BOOLEAN: u8 = 5;        // used inside HulkBox
 pub const TAG_DYN_VEC: u8 = 6;        // used for dynamic vectors (comprehensions)
 pub const TAG_LITERAL_STRING: u8 = 7; // used for string literals (immutable, immortal)
+pub const TAG_OBJECT: u8 = 8;         // used for object instances
 
 // ─── Object header ─────────────────────────────────────────────────────
 #[repr(C)]

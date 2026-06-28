@@ -16,7 +16,7 @@ use hulk_semantic::{topological_order, TypeInfo, TypeRegistry};
 
 use crate::context::CodegenCtx;
 use crate::error::CodegenError;
-use crate::lower::utils::llvm_type;
+use crate::lower::utils::{HEADER_FIELD_COUNT, llvm_type};
 
 /// Layout information for a single HULK type.
 #[derive(Clone)]
@@ -184,11 +184,13 @@ fn build_struct_type<'ctx>(
     let i1_type = context.bool_type(); // gc_mark in memory
     let ptr_type = context.ptr_type(Default::default());
 
+    let i8_type = context.i8_type();
     let mut field_tys = vec![
-        i64_type.into(),
-        i1_type.into(),
-        ptr_type.into(),
-        ptr_type.into(),
+        i64_type.into(),  // ref_count
+        i1_type.into(),   // gc_mark
+        i8_type.into(),   // type_tag
+        ptr_type.into(),  // next
+        ptr_type.into(),  // vtable
     ];
 
     // Append all attribute types.
@@ -199,9 +201,9 @@ fn build_struct_type<'ctx>(
     // ─── 3. Compute offsets for each attribute ─────────────────────────────
 
     let mut field_offsets = HashMap::new();
-    // Header fields have indices 0..3; attributes start at index 4.
+    // Header fields have indices 0..HEADER_FIELD_COUNT-1; attributes start at index HEADER_FIELD_COUNT.
     for (idx, name) in attr_names.iter().enumerate() {
-        let field_idx = 4 + idx;
+        let field_idx = HEADER_FIELD_COUNT + idx;
         let offset = data_layout
             .offset_of_element(&struct_ty, field_idx as u32)
             .ok_or_else(|| CodegenError::llvm_verification(format!("offset computation failed for '{}'", name)))?;

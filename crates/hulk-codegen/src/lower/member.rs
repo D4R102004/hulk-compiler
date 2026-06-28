@@ -5,7 +5,7 @@ use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
-use crate::lower::utils::resolve_attribute_with_offset;
+use crate::lower::utils::{field_indices, resolve_attribute_with_offset};
 use super::lower_expr;
 
 /// Lowers a member access expression.
@@ -149,7 +149,7 @@ fn lower_method_reference<'ctx>(
             .build_gep(
                 struct_ty,
                 obj_ptr,
-                &[i32_type.const_int(0, false), i32_type.const_int(3, false)],
+                &[i32_type.const_int(0, false), i32_type.const_int(field_indices::VTABLE as u64, false)],
                 "vtable_ptr_ptr",
             )
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?

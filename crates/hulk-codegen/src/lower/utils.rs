@@ -1,4 +1,4 @@
-//! Shared helper functions used by multiple lowering submodules.
+//! Shared helper functions and constants used by multiple lowering submodules.
 
 use inkwell::FloatPredicate;
 use inkwell::values::BasicValueEnum;
@@ -9,6 +9,27 @@ use crate::error::CodegenError;
 use crate::lower::LowerCtx;
 use crate::CodegenCtx;
 use crate::runtime_decls;
+
+// ===================================================================================
+// Header layout for all heap-allocated HULK objects.
+// Matches `hulk_rt::ObjHeader` exactly.
+// ===================================================================================
+
+/// Field indices into the LLVM struct type of the object header.
+pub mod field_indices {
+    pub const REF_COUNT: u32 = 0;
+    pub const GC_MARK:   u32 = 1;
+    pub const TYPE_TAG:  u32 = 2;
+    pub const NEXT:      u32 = 3;
+    pub const VTABLE:    u32 = 4;
+}
+
+/// Total number of header fields in the LLVM struct type.
+pub const HEADER_FIELD_COUNT: usize = 5;
+
+// ====================================================================================
+// Shared helper functions
+// ====================================================================================
 
 /// Compares two floating-point values.
 pub fn cmp_float<'ctx>(
