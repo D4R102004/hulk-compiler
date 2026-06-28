@@ -9,8 +9,8 @@ use std::process;
 
 use clap::Parser as clapParser;
 use hulk_codegen::{compile, CodegenOptions};
-use hulk_lexer::Lexer;
-use hulk_parser::Parser;
+use hulk_lexer::{Lexer, LexError};
+use hulk_parser::{Parser, ParseErrorKind};
 use hulk_semantic::analyze;
 
 /// The HULK compiler.
@@ -37,25 +37,44 @@ fn main() {
 
     // Lex the source code.
     let tokens = Lexer::new(&source).tokenize().unwrap_or_else(|err| {
-        eprintln!("error: {:?}", err);
-        // Grader contract: exit 1 = lexical error.
+        // WHY: grader contract requires (line,col) TYPE: message format
+        let (line, col, msg) = match &err {
+            LexError::UnexpectedChar { ch, span } =>
+                (span.line, span.col, format!("unexpected character '{}'", ch)),
+            LexError::UnterminatedString { span } =>
+                (span.line, span.col, "unterminated string literal".to_string()),
+            LexError::InvalidEscape { ch, span } =>
+                (span.line, span.col, format!("invalid escape sequence '\\{}'", ch)),
+        };
+        eprintln!("({},{}) LEXICAL: {}", line, col, msg);
         process::exit(1);
     });
 
     // Parse the token stream into an AST.
     let program = Parser::new(tokens).parse_program().unwrap_or_else(|err| {
-        eprintln!("error: {}", err);
-        // Grader contract: exit 2 = syntactic error.
+        // WHY: grader contract requires (line,col) TYPE: message format
+        let msg = match &err.kind {
+            ParseErrorKind::UnexpectedToken { expected, found } =>
+                format!("expected {}, found {}", expected, found),
+            ParseErrorKind::ExpectedExpression { found } =>
+                format!("expected expression, found {}", found),
+            ParseErrorKind::ExpectedIdentifier { found } =>
+                format!("expected identifier, found {}", found),
+            ParseErrorKind::InvalidAssignmentTarget =>
+                "invalid assignment target".to_string(),
+            ParseErrorKind::Message(message) =>
+                message.clone(),
+        };
+        eprintln!("({},{}) SYNTACTIC: {}", err.span.line, err.span.col, msg);
         process::exit(2);
     });
 
     match analyze(&program) {
         Err(errors) => {
-            // Print every semantic error (not just the first).
             for error in &errors {
-                eprintln!("{}", error);
+                // WHY: grader contract requires (line,col) TYPE: message format
+                eprintln!("({},{}) SEMANTIC: {}", error.span.line, error.span.col, error.kind);
             }
-            // Grader contract: exit 3 = semantic error.
             process::exit(3);
         }
         Ok(verified) => {
