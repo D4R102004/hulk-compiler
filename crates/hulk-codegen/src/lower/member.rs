@@ -58,7 +58,7 @@ fn load_attribute<'ctx>(
     let field_ptr_i8 = unsafe {
         ctx.codegen
             .builder
-            .build_gep(ptr_type, obj, &[offset_val], "field_ptr")
+            .build_gep(ctx.codegen.context.i8_type(), obj, &[offset_val], "field_ptr")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
 
