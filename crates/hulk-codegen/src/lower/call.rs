@@ -67,6 +67,20 @@ pub fn lower_call<'ctx>(
                     let mut arg_val = lower_expr(ctx, arg_expr)?;
                     if matches!(param_ty, Type::Object) {
                         arg_val = crate::lower::utils::ensure_boxed(ctx, arg_val, &arg_expr.anno, param_ty)?;
+                    } else if let Type::Named(_) = &param_ty {
+                        // WHY: Go/Kotlin interface boxing pattern — when passing a Named
+                        // concrete class where a Named protocol is expected, build the
+                        // fat pointer { data_ptr, itable_ptr } at the call site.
+                        // is_protocol() returns true only for protocol types, not classes.
+                        if ctx.registry.is_protocol(param_ty) {
+                            if let Type::Named(_) = &arg_expr.anno {
+                                if !ctx.registry.is_protocol(&arg_expr.anno) {
+                                    arg_val = crate::lower::utils::convert_to_protocol(
+                                        ctx, arg_val, &arg_expr.anno, param_ty,
+                                    )?;
+                                }
+                            }
+                        }
                     }
                     args.push(arg_val.into());
                 }
@@ -669,6 +683,20 @@ fn lower_and_box_args<'ctx>(
         let mut arg_val = lower_expr(ctx, arg_expr)?;
         if matches!(param_ty, Type::Object) {
             arg_val = crate::lower::utils::ensure_boxed(ctx, arg_val, &arg_expr.anno, param_ty)?;
+        } else if let Type::Named(_) = &param_ty {
+            // WHY: Go/Kotlin interface boxing pattern — when passing a Named
+            // concrete class where a Named protocol is expected, build the
+            // fat pointer { data_ptr, itable_ptr } at the call site.
+            // is_protocol() returns true only for protocol types, not classes.
+            if ctx.registry.is_protocol(param_ty) {
+                if let Type::Named(_) = &arg_expr.anno {
+                    if !ctx.registry.is_protocol(&arg_expr.anno) {
+                        arg_val = crate::lower::utils::convert_to_protocol(
+                            ctx, arg_val, &arg_expr.anno, param_ty,
+                        )?;
+                    }
+                }
+            }
         }
         call_args.push(arg_val.into());
     }
