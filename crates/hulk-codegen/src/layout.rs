@@ -52,7 +52,23 @@ impl<'ctx> TypeLayout<'ctx> {
 /// It also records method slot indices based on the flattened method order.
 ///
 /// The layouts are stored in `ctx.type_layouts` for later use.
-pub fn build_layouts(registry: &TypeRegistry, ctx: &mut CodegenCtx) -> Result<(), CodegenError> {
+pub fn build_layouts(
+    program: &hulk_ast::Program<hulk_semantic::Type>,
+    registry: &TypeRegistry,
+    ctx: &mut CodegenCtx,
+) -> Result<(), CodegenError> {
+    // WHY: collect.rs overwrites seeded "Vector"/"Range" entries when the
+    // user declares a type with that name. We must not skip user-declared
+    // types even if they share a name with a builtin container type.
+    let user_declared_types: std::collections::HashSet<&str> = program
+        .declarations
+        .iter()
+        .filter_map(|d| match &d.kind {
+            hulk_ast::DeclarationKind::Type(t) => Some(t.name.as_str()),
+            _ => None,
+        })
+        .collect();
+
     let mut layouts = HashMap::new();
 
     // Compute topological order of types (parents before children).
@@ -66,8 +82,8 @@ pub fn build_layouts(registry: &TypeRegistry, ctx: &mut CodegenCtx) -> Result<()
         // Skip builtin value types and other special types that have no user‑defined layout.
         if info.is_builtin_value
             || type_name == "Object"
-            || type_name == "Vector"
-            || type_name == "Range"
+            || (type_name == "Vector" && !user_declared_types.contains(type_name.as_str()))
+            || (type_name == "Range"  && !user_declared_types.contains(type_name.as_str()))
             || type_name == "Number"
             || type_name == "String"
             || type_name == "Boolean"

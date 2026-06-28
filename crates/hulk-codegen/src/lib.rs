@@ -92,7 +92,7 @@ pub fn compile(
     codegen.builder.position_at_end(entry_bb);
 
     // Build type layouts
-    layout::build_layouts(&verified.registry, &mut codegen)?;
+    layout::build_layouts(&verified.typed_program, &verified.registry, &mut codegen)?;
 
     // Declare all functions (free and methods)
     lower::decl::declare_functions(&mut codegen, &verified.typed_program, &verified.registry)?;
