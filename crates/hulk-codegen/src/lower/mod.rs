@@ -598,7 +598,7 @@ mod tests {
         let expr = string_lit("hello");
         let ir = lower_expr_to_ir(expr);
         assert_ir_contains(&ir, "@str_data_0 = private unnamed_addr constant [5 x i8] c\"hello\"");
-        assert_ir_contains(&ir, "@str_0 = private unnamed_addr constant { i64, ptr } { i64 5, ptr @str_data_0 }");
+        assert_ir_contains(&ir, "@str_0 = private unnamed_addr constant { i64, i8, i8, [6 x i8], ptr, ptr, i64, ptr } { i64 -1, i8 0, i8 0, [6 x i8] zeroinitializer, ptr null, ptr null, i64 5, ptr @str_data_0 }");
  }
 
     // ─── Variables and Let ──────────────────────────────────────────────
