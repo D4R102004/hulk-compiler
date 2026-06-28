@@ -4,9 +4,11 @@
 //! and reports any errors with precise source locations.
 
 use std::fs;
+use std::path::PathBuf;
 use std::process;
 
 use clap::Parser as clapParser;
+use hulk_codegen::{compile, CodegenOptions};
 use hulk_lexer::Lexer;
 use hulk_parser::Parser;
 use hulk_semantic::analyze;
@@ -62,8 +64,12 @@ fn main() {
                 eprintln!("warning: {}", warning);
             }
 
-            // Print the fully typed AST (each expression now carries a Type).
-            println!("{:#?}", verified.typed_program);
+            // Grader contract: produce ./output executable on success.
+            let opts = CodegenOptions::with_output_path(PathBuf::from("./output"));
+            if let Err(err) = compile(&verified, &opts) {
+                eprintln!("error: {}", err);
+                process::exit(4); // exit 4 = internal codegen error
+            }
         }
     }
 }
