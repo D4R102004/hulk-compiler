@@ -186,6 +186,7 @@ name = "hulk-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "hulk-codegen",
  "hulk-lexer",
  "hulk-parser",
  "hulk-semantic",
@@ -198,6 +199,7 @@ dependencies = [
  "hulk-ast",
  "hulk-lexer",
  "hulk-parser",
+ "hulk-rt",
  "hulk-semantic",
  "indexmap",
  "inkwell",

@@ -11,13 +11,14 @@ use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // ─── Type tags ─────────────────────────────────────────────────────────
-const TAG_STRING: u8 = 0;
-const TAG_VECTOR: u8 = 1;
-const TAG_BOX: u8   = 2;
-const TAG_RANGE: u8 = 3;
-const TAG_NUMBER: u8 = 4;   // used inside HulkBox
-const TAG_BOOLEAN: u8 = 5;  // used inside HulkBox
-const TAG_DYN_VEC: u8 = 6;  // used for dynamic vectors (comprehensions)
+pub const TAG_STRING: u8 = 0;
+pub const TAG_VECTOR: u8 = 1;
+pub const TAG_BOX: u8   = 2;
+pub const TAG_RANGE: u8 = 3;
+pub const TAG_NUMBER: u8 = 4;         // used inside HulkBox
+pub const TAG_BOOLEAN: u8 = 5;        // used inside HulkBox
+pub const TAG_DYN_VEC: u8 = 6;        // used for dynamic vectors (comprehensions)
+pub const TAG_LITERAL_STRING: u8 = 7; // used for string literals (immutable, immortal)
 
 // ─── Object header ─────────────────────────────────────────────────────
 #[repr(C)]
@@ -103,6 +104,21 @@ unsafe fn hulk_rt_string_from_bytes(data: &[u8]) -> *mut HulkString {
     });
     string_ptr
 }
+
+fn is_immortal_ptr(ptr: *mut std::ffi::c_void) -> bool {
+    if ptr.is_null() { return false; }
+    unsafe {
+        let header = ptr as *mut ObjHeader;
+        (*header).type_tag == TAG_LITERAL_STRING
+    }
+}
+
+fn is_immortal_header(header: *mut ObjHeader) -> bool {
+    if header.is_null() { return false; }
+    unsafe {
+        (*header).type_tag == TAG_LITERAL_STRING
+    }
+} 
 
 // ─── Base runtime functions ──────────────────────────────────────────────
 
@@ -239,7 +255,7 @@ pub extern "C" fn hulk_rt_print(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_
     unsafe {
         let header = obj as *mut ObjHeader;
         match (*header).type_tag {
-            TAG_STRING => {
+            TAG_STRING | TAG_LITERAL_STRING => {
                 let s = obj as *mut HulkString;
                 let len = (*s).len as usize;
                 let data = std::slice::from_raw_parts((*s).data, len);
@@ -308,7 +324,10 @@ pub extern "C" fn hulk_rt_alloc(size: i64) -> *mut std::ffi::c_void {
 /// Useful for managing the lifetime of objects in a reference-counted memory model.
 #[no_mangle]
 pub extern "C" fn hulk_rt_retain(ptr: *mut std::ffi::c_void) {
-    if ptr.is_null() { return; }
+    if
+        ptr.is_null() ||
+        is_immortal_ptr(ptr) // Retain is a no-op for immortal types.
+    { return; }
     unsafe {
         let header = ptr as *mut ObjHeader;
         (*header).ref_count += 1;
@@ -319,7 +338,10 @@ pub extern "C" fn hulk_rt_retain(ptr: *mut std::ffi::c_void) {
 /// If the reference count reaches zero, the object is deallocated.
 #[no_mangle]
 pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
-    if ptr.is_null() { return; }
+    if
+        ptr.is_null() ||
+        is_immortal_ptr(ptr) // Retain is a no-op for immortal types.
+    { return; }
     unsafe {
         let header = ptr as *mut ObjHeader;
         (*header).ref_count -= 1;
@@ -359,6 +381,7 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
                 }
                 _ => {
                     // Fallback for unknown tags (should not happen)
+                    if is_immortal_header(header) { return; } // Do not deallocate immortal objects
                     let layout = Layout::from_size_align(32, 8).unwrap();
                     dealloc(ptr as *mut u8, layout);
                 }
