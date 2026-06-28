@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::Parser as clapParser;
-use hulk_codegen::{compile, CodegenOptions};
+use hulk_codegen::{compile, link_output, CodegenOptions};
 use hulk_lexer::{Lexer, LexError};
 use hulk_parser::{Parser, ParseErrorKind};
 use hulk_semantic::analyze;
@@ -88,6 +88,11 @@ fn main() {
             if let Err(err) = compile(&verified, &opts) {
                 eprintln!("error: {}", err);
                 process::exit(4); // exit 4 = internal codegen error
+            }
+            let obj_path = opts.output_path.with_extension("o");
+            if let Err(err) = link_output(&obj_path, &opts.output_path) {
+                eprintln!("error: {}", err);
+                process::exit(4);
             }
         }
     }

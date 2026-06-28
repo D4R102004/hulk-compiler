@@ -136,12 +136,58 @@ pub fn compile(
     codegen.module.verify()
         .map_err(|e| error::CodegenError::llvm_verification(e.to_string()))?;
 
-    // Emit object file and link (using existing emit logic).
+    // Emit object file.
     let obj_path = opts.output_path.with_extension("o");
     emit::write_object_file(&codegen.target_machine, &codegen.module, &obj_path)?;
 
-    // TODO: Link with hulk-rt.
+    Ok(())
+}
 
+/// Links the compiled object file with hulk-rt to produce the final executable.
+/// Called by the CLI after compile() succeeds.
+/// WHY: linking is a CLI concern — compile() only emits object code.
+pub fn link_output(
+    obj_path: &std::path::Path,
+    output_path: &std::path::Path,
+) -> Result<(), error::CodegenError> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| error::CodegenError::link("cc", None, format!("cannot get cwd: {e}")))?;
+
+    // WHY: the binary may be invoked as target/release/hulk-cli (dev)
+    // or as ./hulk copied to repo root (grader). Probe both.
+    let rt_lib_dir = [
+        std::env::current_exe().ok()
+            .and_then(|exe| exe.parent().map(|p| p.to_path_buf())),
+        Some(cwd.join("target").join("release")),
+        Some(cwd.join("target").join("debug")),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|p| p.join("libhulk_rt.a").exists())
+    .ok_or_else(|| error::CodegenError::link(
+        "cc", None,
+        "cannot find libhulk_rt.a — run make build first".to_string(),
+    ))?;
+
+    let cc_output = std::process::Command::new("cc")
+        .arg(obj_path)
+        .arg(format!("-L{}", rt_lib_dir.display()))
+        .arg("-lhulk_rt")
+        .arg("-lm")
+        .arg("-o")
+        .arg(output_path)
+        .output()
+        .map_err(|e| error::CodegenError::link(
+            "cc", None, format!("failed to invoke cc: {e}")
+        ))?;
+
+    if !cc_output.status.success() {
+        return Err(error::CodegenError::link(
+            "cc",
+            cc_output.status.code(),
+            String::from_utf8_lossy(&cc_output.stderr).into_owned(),
+        ));
+    }
     Ok(())
 }
 

@@ -177,6 +177,29 @@ pub extern "C" fn hulk_rt_string_concat_space(
     }
 }
 
+/// Returns true if two HULK strings have identical byte content.
+///
+/// # Safety
+/// Both pointers must point to valid `HulkString` objects.
+#[no_mangle]
+pub extern "C" fn hulk_rt_string_equals(
+    a: *mut std::ffi::c_void,
+    b: *mut std::ffi::c_void,
+) -> bool {
+    if a.is_null() && b.is_null() { return true; }
+    if a.is_null() || b.is_null() { return false; }
+    unsafe {
+        let sa = a as *mut HulkString;
+        let sb = b as *mut HulkString;
+        let len_a = (*sa).len as usize;
+        let len_b = (*sb).len as usize;
+        if len_a != len_b { return false; }
+        let slice_a = std::slice::from_raw_parts((*sa).data, len_a);
+        let slice_b = std::slice::from_raw_parts((*sb).data, len_b);
+        slice_a == slice_b
+    }
+}
+
 /// Converts a 64-bit floating-point number to its string representation.
 ///
 /// # Parameters
@@ -387,6 +410,16 @@ pub extern "C" fn hulk_rt_vector_new(len: i64) -> *mut HulkVector {
     }
 
     vec_ptr
+}
+
+/// Returns the number of elements in a HulkVector.
+///
+/// # Safety
+/// `vec` must be a valid, aligned pointer to a live `HulkVector`.
+#[no_mangle]
+pub unsafe extern "C" fn hulk_rt_vector_size(vec: *mut HulkVector) -> i64 {
+    if vec.is_null() { return 0; }
+    (*vec).len
 }
 
 /// Retrieves the element at the given index from a HulkVector.
