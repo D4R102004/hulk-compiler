@@ -193,7 +193,11 @@ fn lower_class_method_call<'ctx>(
 
     // 5. Devirtualization: if the type has no subtypes, we can call the method directly.
     if !has_subtypes(type_name, ctx.registry) {
-        let qualified_name = format!("{}::{}", type_name, method_name);
+        // WHY: use owning_type_for_method — TypeInfo.methods is merged/flattened,
+        // so type_name::method may not exist; the body lives in the declaring type.
+        let owner = crate::layout::owning_type_for_method(type_name, method_name, ctx.registry)
+            .unwrap_or_else(|| type_name.to_string());
+        let qualified_name = format!("{}::{}", owner, method_name);
         if let Some(fn_val) = ctx.codegen.functions.get(&qualified_name) {
             let call_site = ctx
                 .codegen
@@ -263,7 +267,11 @@ fn lower_class_method_call<'ctx>(
         .into_pointer_value();
 
     // 9. Retrieve the method's declared LLVM function type from the module.
-    let qualified_name = format!("{}::{}", type_name, method_name);
+    // WHY: use owning_type_for_method — the function was declared under the
+    // defining type, not the receiver type (which may have inherited it).
+    let fn_owner = crate::layout::owning_type_for_method(type_name, method_name, ctx.registry)
+        .unwrap_or_else(|| type_name.to_string());
+    let qualified_name = format!("{}::{}", fn_owner, method_name);
     let fn_decl = ctx
         .codegen
         .functions

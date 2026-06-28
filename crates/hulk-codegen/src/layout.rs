@@ -257,13 +257,20 @@ pub fn owning_type_for_method(
     method_name: &str,
     registry: &TypeRegistry,
 ) -> Option<String> {
+    // WHY: TypeInfo.methods is the merged/flattened set (all ancestor methods
+    // are copied into each descendant by the hierarchy pass). contains_key always
+    // returns true for type_name itself. We need defined_in to find the actual
+    // declaring type.
     let mut current = type_name.to_string();
     loop {
-        let info = registry.lookup_type(&current)?;
-        if info.methods.contains_key(method_name) {
-            return Some(current);
+        if registry.types.get(&current)
+            .and_then(|info| info.methods.get(method_name))
+            .is_some_and(|sig| sig.defined_in == current)
+        {
+            return Some(current.to_string());
         }
-        current = info.parent.as_ref()?.name.clone();
+        let parent = registry.lookup_type(&current)?.parent.as_ref()?.name.clone();
+        current = parent;
     }
 }
 
