@@ -83,7 +83,7 @@ unsafe fn hulk_rt_string_from_bytes(data: &[u8]) -> *mut HulkString {
     }
 
     let data_layout = Layout::array::<u8>(len as usize).unwrap();
-    let data_ptr = alloc(data_layout) as *mut u8;
+    let data_ptr = alloc(data_layout);
     if data_ptr.is_null() {
         dealloc(string_ptr as *mut u8, string_layout);
         return ptr::null_mut();
@@ -316,7 +316,7 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
                     let data = (*s).data;
                     let len = (*s).len as usize;
                     let data_layout = Layout::array::<u8>(len).unwrap();
-                    dealloc(data as *mut u8, data_layout);
+                    dealloc(data, data_layout);
                     let string_layout = Layout::new::<HulkString>();
                     dealloc(s as *mut u8, string_layout);
                 }
@@ -390,10 +390,13 @@ pub extern "C" fn hulk_rt_vector_new(len: i64) -> *mut HulkVector {
 }
 
 /// Retrieves the element at the given index from a HulkVector.
-/// 
+///
 /// Note: This function does not perform bounds checking; the caller must ensure that `index` is valid.
+///
+/// # Safety
+/// `vec` must be null or a valid, aligned pointer to a live `HulkVector`.
 #[no_mangle]
-pub extern "C" fn hulk_rt_vector_get(vec: *mut HulkVector, index: i64) -> *mut std::ffi::c_void {
+pub unsafe extern "C" fn hulk_rt_vector_get(vec: *mut HulkVector, index: i64) -> *mut std::ffi::c_void {
     if vec.is_null() || index < 0 { return ptr::null_mut(); }
     unsafe {
         let data = (*vec).data;
@@ -404,8 +407,11 @@ pub extern "C" fn hulk_rt_vector_get(vec: *mut HulkVector, index: i64) -> *mut s
 }
 
 /// Sets the element at the given index in a HulkVector to a new value, managing reference counts appropriately.
+///
+/// # Safety
+/// `vec` must be null or a valid, aligned pointer to a live `HulkVector`.
 #[no_mangle]
-pub extern "C" fn hulk_rt_vector_set(
+pub unsafe extern "C" fn hulk_rt_vector_set(
     vec: *mut HulkVector,
     index: i64,
     value: *mut std::ffi::c_void,
@@ -432,11 +438,14 @@ pub extern "C" fn hulk_rt_vector_set(
     }
 }
 
-/// Advances the current index of the vector for iteration. 
-/// 
+/// Advances the current index of the vector for iteration.
+///
 /// Returns true if there is a next element, false otherwise.
+///
+/// # Safety
+/// `vec` must be null or a valid, aligned pointer to a live `HulkVector`.
 #[no_mangle]
-pub extern "C" fn hulk_rt_vector_next(vec: *mut HulkVector) -> bool {
+pub unsafe extern "C" fn hulk_rt_vector_next(vec: *mut HulkVector) -> bool {
     if vec.is_null() { return false; }
     unsafe {
         let idx = (*vec).current_index + 1; // Vectors are 0-indexed
@@ -450,11 +459,14 @@ pub extern "C" fn hulk_rt_vector_next(vec: *mut HulkVector) -> bool {
 }
 
 /// Returns the current element in the vector based on the current index.
-/// 
+///
 /// Note: The caller must ensure that `hulk_rt_vector_next` has been called
 /// and returned true before calling this function.
+///
+/// # Safety
+/// `vec` must be null or a valid, aligned pointer to a live `HulkVector`.
 #[no_mangle]
-pub extern "C" fn hulk_rt_vector_current(vec: *mut HulkVector) -> *mut std::ffi::c_void {
+pub unsafe extern "C" fn hulk_rt_vector_current(vec: *mut HulkVector) -> *mut std::ffi::c_void {
     if vec.is_null() { return ptr::null_mut(); }
     unsafe {
         let idx = (*vec).current_index;
@@ -482,8 +494,12 @@ pub extern "C" fn hulk_rt_dynamic_vector_new() -> *mut HulkDynamicVector {
     Box::into_raw(Box::new(vec))
 }
 
+/// Appends a value to a dynamic vector, retaining it.
+///
+/// # Safety
+/// `vec` must be null or a valid, aligned pointer to a live `HulkDynamicVector`.
 #[no_mangle]
-pub extern "C" fn hulk_rt_dynamic_vector_append(
+pub unsafe extern "C" fn hulk_rt_dynamic_vector_append(
     vec: *mut HulkDynamicVector,
     value: *mut std::ffi::c_void,
 ) {
@@ -497,8 +513,12 @@ pub extern "C" fn hulk_rt_dynamic_vector_append(
     }
 }
 
+/// Converts a dynamic vector into a fixed-size `HulkVector`, consuming the dynamic vector.
+///
+/// # Safety
+/// `dyn_vec` must be null or a valid, aligned pointer to a live `HulkDynamicVector`.
 #[no_mangle]
-pub extern "C" fn hulk_rt_dynamic_vector_to_vector(
+pub unsafe extern "C" fn hulk_rt_dynamic_vector_to_vector(
     dyn_vec: *mut HulkDynamicVector,
 ) -> *mut HulkVector {
     if dyn_vec.is_null() { return ptr::null_mut(); }
@@ -546,10 +566,13 @@ pub extern "C" fn hulk_rt_range_new(min: f64, max: f64) -> *mut HulkRange {
 }
 
 /// Advances the current value of the range for iteration.
-/// 
+///
 /// Returns true if there is a next value, false otherwise.
+///
+/// # Safety
+/// `rng` must be null or a valid, aligned pointer to a live `HulkRange`.
 #[no_mangle]
-pub extern "C" fn hulk_rt_range_next(rng: *mut HulkRange) -> bool {
+pub unsafe extern "C" fn hulk_rt_range_next(rng: *mut HulkRange) -> bool {
     if rng.is_null() { return false; }
     unsafe {
         (*rng).current += 1.0;
@@ -558,11 +581,14 @@ pub extern "C" fn hulk_rt_range_next(rng: *mut HulkRange) -> bool {
 }
 
 /// Returns the current value of the range.
-/// 
+///
 /// Note: The caller must ensure that `hulk_rt_range_next` has been called
 /// and returned true before calling this function.
+///
+/// # Safety
+/// `rng` must be null or a valid, aligned pointer to a live `HulkRange`.
 #[no_mangle]
-pub extern "C" fn hulk_rt_range_current(rng: *mut HulkRange) -> f64 {
+pub unsafe extern "C" fn hulk_rt_range_current(rng: *mut HulkRange) -> f64 {
     if rng.is_null() { return 0.0; }
     unsafe { (*rng).current }
 }
@@ -861,8 +887,11 @@ mod tests {
         let rng = hulk_rt_range_new(1.0, 5.0);
         assert!(!rng.is_null());
         let mut values = Vec::new();
-        while hulk_rt_range_next(rng) {
-            values.push(hulk_rt_range_current(rng));
+        // SAFETY: rng is non-null (checked above) and points to a valid HulkRange.
+        unsafe {
+            while hulk_rt_range_next(rng) {
+                values.push(hulk_rt_range_current(rng));
+            }
         }
         assert_eq!(values, vec![1.0, 2.0, 3.0, 4.0]);
         hulk_rt_release(rng as *mut std::ffi::c_void);
@@ -873,7 +902,8 @@ mod tests {
     fn range_empty() {
         let rng = hulk_rt_range_new(5.0, 5.0);
         assert!(!rng.is_null());
-        assert!(!hulk_rt_range_next(rng));
+        // SAFETY: rng is non-null (checked above) and points to a valid HulkRange.
+        assert!(unsafe { !hulk_rt_range_next(rng) });
         hulk_rt_release(rng as *mut std::ffi::c_void);  
     }
 
@@ -893,7 +923,7 @@ mod tests {
     #[test]
     fn rand_returns_in_range() {
         let r = hulk_rt_rand();
-        assert!(r >= 0.0 && r < 1.0);
+        assert!((0.0..1.0).contains(&r));
     }
 
     // ─── Print tests ──────────────────────────────────────────────────
@@ -937,7 +967,7 @@ mod tests {
     fn print_returns_its_argument() {
         let s = hulk_rt_number_to_string(99.0);
         let result = hulk_rt_print(s);
-        assert_eq!(result, s as *mut std::ffi::c_void);
+        assert_eq!(result, s);
         hulk_rt_release(s);
     }
 
