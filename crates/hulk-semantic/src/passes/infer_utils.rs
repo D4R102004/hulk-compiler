@@ -521,6 +521,7 @@ fn lookup_member_type(ty: &Type, member_name: &str, registry: &TypeRegistry) -> 
 }
 
 /// Resolves a syntactic `TypeRef` to a semantic `Type` without an inference state.
+#[allow(clippy::only_used_in_recursion)]
 fn resolve_type_ref_static(tr: &TypeRef, registry: &TypeRegistry) -> Type {
     match tr.name.as_str() {
         "Number" => Type::Number,

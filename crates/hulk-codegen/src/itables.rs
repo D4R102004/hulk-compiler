@@ -129,7 +129,7 @@ fn collect_used_pairs(
                     let expected_ty = binding
                         .type_annotation
                         .as_ref()
-                        .and_then(|tr| Some(resolve_type_ref_to_type(tr, registry)));
+                        .map(|tr| resolve_type_ref_to_type(tr, registry));
                     walk_expr(
                         &binding.initializer,
                         expected_ty.as_ref(),
@@ -267,7 +267,7 @@ fn collect_used_pairs(
                 let return_ty = f
                     .return_type
                     .as_ref()
-                    .and_then(|tr| Some(resolve_type_ref_to_type(tr, registry)));
+                    .map(|tr| resolve_type_ref_to_type(tr, registry));
                 walk_expr(
                     &f.body,
                     return_ty.as_ref(),
@@ -284,7 +284,7 @@ fn collect_used_pairs(
                             let expected_ty = attr
                                 .type_annotation
                                 .as_ref()
-                                .and_then(|tr| Some(resolve_type_ref_to_type(tr, registry)));
+                                .map(|tr| resolve_type_ref_to_type(tr, registry));
                             walk_expr(
                                 &attr.initializer,
                                 expected_ty.as_ref(),
@@ -297,7 +297,7 @@ fn collect_used_pairs(
                             let return_ty = m
                                 .return_type
                                 .as_ref()
-                                .and_then(|tr| Some(resolve_type_ref_to_type(tr, registry)));
+                                .map(|tr| resolve_type_ref_to_type(tr, registry));
                             walk_expr(
                                 &m.body,
                                 return_ty.as_ref(),
@@ -346,7 +346,7 @@ fn build_itable_for_pair(
     for method_name in proto_methods.keys() {
         let fn_val = get_method_function(ctx, registry, type_name, method_name, Some(proto_info.span))?;
         let fn_ptr = fn_val.as_global_value().as_pointer_value();
-        fn_ptrs.push(fn_ptr.into());
+        fn_ptrs.push(fn_ptr);
     }
 
     // Create a global array of pointers.

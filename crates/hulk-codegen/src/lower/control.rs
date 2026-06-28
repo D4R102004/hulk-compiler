@@ -57,7 +57,7 @@ pub fn lower_if<'ctx>(
     if_expr: &IfExpr<Type>,
     result_type: &Type,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
-    let result_ty = utils::llvm_type(&ctx.codegen, ctx.registry, result_type)?;
+    let result_ty = utils::llvm_type(ctx.codegen, ctx.registry, result_type)?;
     let result_alloca = ctx.codegen.builder.build_alloca(result_ty, "if_result")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
@@ -149,7 +149,7 @@ pub fn lower_while<'ctx>(
     while_expr: &WhileExpr<Type>,
     result_type: &Type,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
-    let result_ty = utils::llvm_type(&ctx.codegen, ctx.registry, result_type)?;
+    let result_ty = utils::llvm_type(ctx.codegen, ctx.registry, result_type)?;
     let result_alloca = ctx.codegen.builder.build_alloca(result_ty, "while_result")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 

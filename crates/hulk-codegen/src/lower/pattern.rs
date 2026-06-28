@@ -19,6 +19,8 @@ use crate::lower::utils::llvm_type;
 use crate::runtime_decls::ensure_decl;
 use super::lower_expr;
 
+type PatternMatchResult<'ctx> = (IntValue<'ctx>, Vec<(String, BasicValueEnum<'ctx>, Type)>, bool);
+
 /// Lowers a `match` expression.
 ///
 /// The scrutinee is evaluated once. Each case is tested sequentially; the first
@@ -226,7 +228,7 @@ fn lower_pattern<'ctx>(
     scrutinee_val: &BasicValueEnum<'ctx>,
     scrutinee_ty: &Type,
     span: Option<SourceSpan>,
-) -> Result<(IntValue<'ctx>, Vec<(String, BasicValueEnum<'ctx>, Type)>, bool), CodegenError> {
+) -> Result<PatternMatchResult<'ctx>, CodegenError> {
     let bool_ty = ctx.codegen.context.bool_type();
     let true_val = bool_ty.const_int(1, false);
 
@@ -244,7 +246,7 @@ fn lower_pattern<'ctx>(
                     let c = ctx.codegen.context.f64_type().const_float(*n);
                     ctx.codegen.builder.build_float_compare(
                         FloatPredicate::OEQ,
-                        scrutinee_val.clone().into_float_value(),
+                        scrutinee_val.into_float_value(),
                         c,
                         "lit_cmp",
                     ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?
@@ -253,7 +255,7 @@ fn lower_pattern<'ctx>(
                     let c = ctx.codegen.context.bool_type().const_int(if *b { 1 } else { 0 }, false);
                     ctx.codegen.builder.build_int_compare(
                         inkwell::IntPredicate::EQ,
-                        scrutinee_val.clone().into_int_value(),
+                        scrutinee_val.into_int_value(),
                         c,
                         "lit_cmp",
                     ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?
@@ -268,7 +270,7 @@ fn lower_pattern<'ctx>(
                     let str_eq_fn = ensure_decl(ctx.codegen, "hulk_rt_string_equals")?;
                     let call = ctx.codegen.builder.build_call(
                         str_eq_fn,
-                        &[scrutinee_val.clone().into(), lit_val.into()],
+                        &[(*scrutinee_val).into(), lit_val.into()],
                         "str_eq",
                     ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
                     call.try_as_basic_value().basic().unwrap().into_int_value()
@@ -296,7 +298,7 @@ fn lower_pattern<'ctx>(
 
             // Call downcast_check.
             let downcast_fn = ensure_decl(ctx.codegen, "hulk_rt_downcast_check")?;
-            let obj_ptr = scrutinee_val.clone().into_pointer_value();
+            let obj_ptr = scrutinee_val.into_pointer_value();
             let call = ctx.codegen.builder.build_call(
                 downcast_fn,
                 &[obj_ptr.into(), target_vtable_ptr.into()],

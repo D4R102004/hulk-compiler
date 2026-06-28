@@ -168,11 +168,12 @@ fn build_struct_type<'ctx>(
     let i1_type = context.bool_type(); // gc_mark in memory
     let ptr_type = context.ptr_type(Default::default());
 
-    let mut field_tys = Vec::new();
-    field_tys.push(i64_type.into());
-    field_tys.push(i1_type.into());
-    field_tys.push(ptr_type.into());
-    field_tys.push(ptr_type.into());
+    let mut field_tys = vec![
+        i64_type.into(),
+        i1_type.into(),
+        ptr_type.into(),
+        ptr_type.into(),
+    ];
 
     // Append all attribute types.
     field_tys.extend(attr_tys);
@@ -230,7 +231,7 @@ pub fn build_vtables(ctx: &mut CodegenCtx, registry: &TypeRegistry) -> Result<()
                 .cloned()
                 .ok_or_else(|| CodegenError::llvm_verification(format!("method '{}' not declared", qualified_name)))?;
                         let fn_ptr = fn_value.as_global_value().as_pointer_value();
-            fn_ptrs.push(fn_ptr.into());
+            fn_ptrs.push(fn_ptr);
         }
 
         let ptr_type = ctx.context.ptr_type(Default::default());
@@ -269,7 +270,7 @@ pub fn owning_type_for_method(
 // Determines if a given type has any subtypes in the current compilation unit
 pub fn has_subtypes(type_name: &str, registry: &TypeRegistry) -> bool {
     registry.types.values().any(|info| {
-        info.parent.as_ref().map_or(false, |p| p.name == type_name)
+        info.parent.as_ref().is_some_and(|p| p.name == type_name)
     })
 }
 

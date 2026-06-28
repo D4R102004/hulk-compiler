@@ -142,7 +142,7 @@ pub fn lower_binary<'ctx>(
             let call = ctx.codegen.builder.build_call(pow_fn, &[lf.into(), rf.into()], "pow")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .try_as_basic_value().unwrap_basic();
-            call.into()
+            call
         }
 
         // ─── Comparison operators ──────────────────────────────────────
@@ -198,7 +198,7 @@ pub fn lower_binary<'ctx>(
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .try_as_basic_value()
                 .unwrap_basic();
-            call.into()
+            call
         }
     };
 

@@ -252,7 +252,7 @@ fn lower_class_method_call<'ctx>(
     let fn_ptr_ptr = unsafe {
         ctx.codegen
             .builder
-            .build_gep(ptr_type, vtable_ptr, &[slot_val.into()], "fn_ptr_ptr")
+            .build_gep(ptr_type, vtable_ptr, &[slot_val], "fn_ptr_ptr")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     let fn_ptr = ctx
@@ -589,7 +589,7 @@ fn lower_protocol_call<'ctx>(
     let fn_ptr_ptr = unsafe {
         ctx.codegen
             .builder
-            .build_gep(ptr_type, itable_ptr, &[slot_val.into()], "fn_ptr_ptr")
+            .build_gep(ptr_type, itable_ptr, &[slot_val], "fn_ptr_ptr")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     let fn_ptr = ctx

@@ -58,7 +58,7 @@ fn load_attribute<'ctx>(
     let field_ptr_i8 = unsafe {
         ctx.codegen
             .builder
-            .build_gep(ptr_type, obj, &[offset_val.into()], "field_ptr")
+            .build_gep(ptr_type, obj, &[offset_val], "field_ptr")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
 
@@ -92,7 +92,7 @@ fn resolve_method(
     };
     ctx.registry
         .lookup_type(type_name)
-        .map_or(false, |info| {
+        .is_some_and(|info| {
             let methods = if !info.flattened_methods.is_empty() {
                 &info.flattened_methods
             } else {
@@ -166,7 +166,7 @@ fn lower_method_reference<'ctx>(
     let fn_ptr_ptr = unsafe {
         ctx.codegen
             .builder
-            .build_gep(ptr_type, vtable_ptr, &[slot_val.into()], "fn_ptr_ptr")
+            .build_gep(ptr_type, vtable_ptr, &[slot_val], "fn_ptr_ptr")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     let fn_ptr = ctx
