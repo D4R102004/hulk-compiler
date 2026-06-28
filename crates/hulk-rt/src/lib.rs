@@ -249,7 +249,7 @@ pub extern "C" fn hulk_rt_bool_to_string(b: bool) -> *mut std::ffi::c_void {
 pub extern "C" fn hulk_rt_print(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
     use std::io::Write;
     if obj.is_null() {
-        print!("null");
+        println!("null");
         return obj;
     }
     unsafe {
@@ -259,20 +259,22 @@ pub extern "C" fn hulk_rt_print(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_
                 let s = obj as *mut HulkString;
                 let len = (*s).len as usize;
                 let data = std::slice::from_raw_parts((*s).data, len);
-                let _ = std::io::stdout().write(data);
+                let mut out = std::io::stdout().lock();
+                let _ = out.write_all(data);
+                let _ = out.write_all(b"\n");
             }
             TAG_BOX => {
                 let boxed = obj as *mut HulkBox;
                 match (*boxed).original_tag {
                     TAG_NUMBER => {
                         let val = f64::from_bits((*boxed).payload as u64);
-                        print!("{}", val);
+                        println!("{}", val);
                     }
                     TAG_BOOLEAN => {
                         let val = (*boxed).payload != 0;
-                        print!("{}", val);
+                        println!("{}", val);
                     }
-                    _ => print!("<unknown box>"),
+                    _ => println!("<unknown box>"),
                 }
             }
             TAG_VECTOR => {
@@ -288,9 +290,9 @@ pub extern "C" fn hulk_rt_print(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_
                         print!("<obj@{:p}>", elem);
                     }
                 }
-                print!("]");
+                println!("]");
             }
-            _ => print!("<object>"),
+            _ => println!("<object>"),
         }
     }
     obj
@@ -330,6 +332,9 @@ pub extern "C" fn hulk_rt_retain(ptr: *mut std::ffi::c_void) {
     { return; }
     unsafe {
         let header = ptr as *mut ObjHeader;
+        // WHY: ref_count == -1 is the immortal sentinel (CPython PEP 683 pattern).
+        // String literals live in read-only .rodata; attempting to write would SIGSEGV.
+        if (*header).ref_count == -1 { return; }
         (*header).ref_count += 1;
     }
 }
@@ -344,6 +349,9 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
     { return; }
     unsafe {
         let header = ptr as *mut ObjHeader;
+        // WHY: ref_count == -1 is the immortal sentinel (CPython PEP 683 pattern).
+        // String literals live in read-only .rodata; attempting to write would SIGSEGV.
+        if (*header).ref_count == -1 { return; }
         (*header).ref_count -= 1;
         if (*header).ref_count == 0 {
             match (*header).type_tag {
@@ -991,7 +999,7 @@ mod tests {
         let output = capture_stdout(|| {
             let _ = hulk_rt_print(s);
         });
-        assert_eq!(output, "42");
+        assert_eq!(output, "42\n");
         hulk_rt_release(s);
     }
 
@@ -1002,7 +1010,7 @@ mod tests {
         let output = capture_stdout(|| {
             let _ = hulk_rt_print(s);
         });
-        assert_eq!(output, "true");
+        assert_eq!(output, "true\n");
         hulk_rt_release(s);
     }
 
@@ -1014,7 +1022,7 @@ mod tests {
             let _ = hulk_rt_print(s);
         });
         // Note: the formatting may vary; we accept exact representation.
-        assert!(output == "123.45", "output was: {:?}", output);
+        assert!(output == "123.45\n", "output was: {:?}", output);
         hulk_rt_release(s);
     }
 
