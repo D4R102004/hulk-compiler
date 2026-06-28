@@ -191,7 +191,7 @@ pub fn lower_new<'ctx>(
                 .build_in_bounds_gep(
                     ctx.codegen.context.i8_type(),
                     obj_ptr,
-                    &[offset_val.into()],
+                    &[offset_val],
                     "field_ptr",
                 )
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?

@@ -16,12 +16,13 @@
 //! between the two operands.
 
 use inkwell::FloatPredicate;
+use inkwell::IntPredicate;
 use hulk_ast::{BinaryOp, UnaryExpr, BinaryExpr, UnaryOp};
 use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
-use crate::runtime_decls::{declare_string_concat, declare_string_concat_space};
+use crate::runtime_decls::{self, declare_string_concat, declare_string_concat_space};
 use crate::lower::utils::{cmp_float, to_string};
 use super::lower_expr;
 
@@ -142,16 +143,16 @@ pub fn lower_binary<'ctx>(
             let call = ctx.codegen.builder.build_call(pow_fn, &[lf.into(), rf.into()], "pow")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .try_as_basic_value().unwrap_basic();
-            call.into()
+            call
         }
 
         // ─── Comparison operators ──────────────────────────────────────
 
         BinaryOp::Equal => {
-            cmp_float(ctx, FloatPredicate::OEQ, left, right, "eq")?
+            lower_equality(ctx, true, left, right, &binary.left.anno)?
         }
         BinaryOp::NotEqual => {
-            cmp_float(ctx, FloatPredicate::ONE, left, right, "ne")?
+            lower_equality(ctx, false, left, right, &binary.left.anno)?
         }
         BinaryOp::Less => {
             cmp_float(ctx, FloatPredicate::OLT, left, right, "lt")?
@@ -198,9 +199,72 @@ pub fn lower_binary<'ctx>(
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .try_as_basic_value()
                 .unwrap_basic();
-            call.into()
+            call
         }
     };
 
     Ok(result)
+}
+
+/// Lowers `==` and `!=` with type-dispatched LLVM instructions.
+///
+/// WHY: rustc codegen dispatch pattern — the static type determines
+/// which LLVM instruction to emit. Never call into_float_value()
+/// without verifying the operand is Number (f64):
+/// - Number  → build_float_compare (OEQ/ONE)
+/// - Boolean → build_int_compare   (EQ/NE on i1)
+/// - String  → hulk_rt_string_equals(ptr, ptr) -> i1, negated for !=
+/// - _       → reference equality: ptr-to-int then build_int_compare
+fn lower_equality<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    is_eq: bool,
+    left: inkwell::values::BasicValueEnum<'ctx>,
+    right: inkwell::values::BasicValueEnum<'ctx>,
+    left_type: &Type,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+    match left_type {
+        Type::Number => {
+            let pred = if is_eq { FloatPredicate::OEQ } else { FloatPredicate::ONE };
+            cmp_float(ctx, pred, left, right, if is_eq { "eq" } else { "ne" })
+        }
+        Type::Boolean => {
+            let pred = if is_eq { IntPredicate::EQ } else { IntPredicate::NE };
+            Ok(ctx.codegen.builder
+                .build_int_compare(pred,
+                    left.into_int_value(), right.into_int_value(), "bool_eq")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+                .into())
+        }
+        Type::String => {
+            let str_eq_fn = runtime_decls::declare_string_equals(ctx.codegen);
+            let result = ctx.codegen.builder
+                .build_call(str_eq_fn, &[left.into(), right.into()], "str_eq")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+                .try_as_basic_value()
+                .unwrap_basic();
+            if is_eq {
+                Ok(result)
+            } else {
+                Ok(ctx.codegen.builder
+                    .build_not(result.into_int_value(), "str_ne")
+                    .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+                    .into())
+            }
+        }
+        _ => {
+            // WHY: Named/Object/protocol fat pointers — reference equality
+            let i64_ty = ctx.codegen.context.i64_type();
+            let li = ctx.codegen.builder
+                .build_ptr_to_int(left.into_pointer_value(), i64_ty, "lp_int")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            let ri = ctx.codegen.builder
+                .build_ptr_to_int(right.into_pointer_value(), i64_ty, "rp_int")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            let pred = if is_eq { IntPredicate::EQ } else { IntPredicate::NE };
+            Ok(ctx.codegen.builder
+                .build_int_compare(pred, li, ri, "ptr_eq")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+                .into())
+        }
+    }
 }

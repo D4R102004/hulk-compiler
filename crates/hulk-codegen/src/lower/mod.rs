@@ -476,7 +476,7 @@ mod tests {
         codegen.builder.position_at_end(entry_bb);
 
         // 5. Build layouts for user‑defined types.
-        layout::build_layouts(&verified.registry, &mut codegen).expect("build layouts");
+        layout::build_layouts(&verified.typed_program, &verified.registry, &mut codegen).expect("build layouts");
 
         // 6. Declare free functions and methods.
         lower::decl::declare_functions(&mut codegen, &verified.typed_program, &verified.registry)

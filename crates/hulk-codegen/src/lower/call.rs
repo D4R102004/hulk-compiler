@@ -67,6 +67,20 @@ pub fn lower_call<'ctx>(
                     let mut arg_val = lower_expr(ctx, arg_expr)?;
                     if matches!(param_ty, Type::Object) {
                         arg_val = crate::lower::utils::ensure_boxed(ctx, arg_val, &arg_expr.anno, param_ty)?;
+                    } else if let Type::Named(_) = &param_ty {
+                        // WHY: Go/Kotlin interface boxing pattern — when passing a Named
+                        // concrete class where a Named protocol is expected, build the
+                        // fat pointer { data_ptr, itable_ptr } at the call site.
+                        // is_protocol() returns true only for protocol types, not classes.
+                        if ctx.registry.is_protocol(param_ty) {
+                            if let Type::Named(_) = &arg_expr.anno {
+                                if !ctx.registry.is_protocol(&arg_expr.anno) {
+                                    arg_val = crate::lower::utils::convert_to_protocol(
+                                        ctx, arg_val, &arg_expr.anno, param_ty,
+                                    )?;
+                                }
+                            }
+                        }
                     }
                     args.push(arg_val.into());
                 }
@@ -193,7 +207,11 @@ fn lower_class_method_call<'ctx>(
 
     // 5. Devirtualization: if the type has no subtypes, we can call the method directly.
     if !has_subtypes(type_name, ctx.registry) {
-        let qualified_name = format!("{}::{}", type_name, method_name);
+        // WHY: use owning_type_for_method — TypeInfo.methods is merged/flattened,
+        // so type_name::method may not exist; the body lives in the declaring type.
+        let owner = crate::layout::owning_type_for_method(type_name, method_name, ctx.registry)
+            .unwrap_or_else(|| type_name.to_string());
+        let qualified_name = format!("{}::{}", owner, method_name);
         if let Some(fn_val) = ctx.codegen.functions.get(&qualified_name) {
             let call_site = ctx
                 .codegen
@@ -252,7 +270,7 @@ fn lower_class_method_call<'ctx>(
     let fn_ptr_ptr = unsafe {
         ctx.codegen
             .builder
-            .build_gep(ptr_type, vtable_ptr, &[slot_val.into()], "fn_ptr_ptr")
+            .build_gep(ptr_type, vtable_ptr, &[slot_val], "fn_ptr_ptr")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     let fn_ptr = ctx
@@ -263,7 +281,11 @@ fn lower_class_method_call<'ctx>(
         .into_pointer_value();
 
     // 9. Retrieve the method's declared LLVM function type from the module.
-    let qualified_name = format!("{}::{}", type_name, method_name);
+    // WHY: use owning_type_for_method — the function was declared under the
+    // defining type, not the receiver type (which may have inherited it).
+    let fn_owner = crate::layout::owning_type_for_method(type_name, method_name, ctx.registry)
+        .unwrap_or_else(|| type_name.to_string());
+    let qualified_name = format!("{}::{}", fn_owner, method_name);
     let fn_decl = ctx
         .codegen
         .functions
@@ -589,7 +611,7 @@ fn lower_protocol_call<'ctx>(
     let fn_ptr_ptr = unsafe {
         ctx.codegen
             .builder
-            .build_gep(ptr_type, itable_ptr, &[slot_val.into()], "fn_ptr_ptr")
+            .build_gep(ptr_type, itable_ptr, &[slot_val], "fn_ptr_ptr")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
     };
     let fn_ptr = ctx
@@ -661,6 +683,20 @@ fn lower_and_box_args<'ctx>(
         let mut arg_val = lower_expr(ctx, arg_expr)?;
         if matches!(param_ty, Type::Object) {
             arg_val = crate::lower::utils::ensure_boxed(ctx, arg_val, &arg_expr.anno, param_ty)?;
+        } else if let Type::Named(_) = &param_ty {
+            // WHY: Go/Kotlin interface boxing pattern — when passing a Named
+            // concrete class where a Named protocol is expected, build the
+            // fat pointer { data_ptr, itable_ptr } at the call site.
+            // is_protocol() returns true only for protocol types, not classes.
+            if ctx.registry.is_protocol(param_ty) {
+                if let Type::Named(_) = &arg_expr.anno {
+                    if !ctx.registry.is_protocol(&arg_expr.anno) {
+                        arg_val = crate::lower::utils::convert_to_protocol(
+                            ctx, arg_val, &arg_expr.anno, param_ty,
+                        )?;
+                    }
+                }
+            }
         }
         call_args.push(arg_val.into());
     }

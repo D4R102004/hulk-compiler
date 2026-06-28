@@ -7,4 +7,5 @@ edition.workspace = true
 hulk-lexer = { path = "../hulk-lexer" }
 hulk-parser = { path = "../hulk-parser" }
 hulk-semantic = { path = "../hulk-semantic" }
+hulk-codegen = { path = "../hulk-codegen" }
 clap = { version = "4", features = ["derive"] }

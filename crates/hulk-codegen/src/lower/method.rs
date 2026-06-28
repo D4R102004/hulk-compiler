@@ -48,6 +48,13 @@ fn declare_methods_for_type(
     let self_ty = ctx.context.ptr_type(Default::default());
 
     for (method_name, method_sig) in methods {
+        // WHY: canonical OOP codegen pattern — each type only declares LLVM
+        // functions for methods it owns. Inherited methods (defined_in != type_name)
+        // are resolved via vtable dispatch; their bodies live in the declaring type.
+        if method_sig.defined_in != *type_name {
+            continue;
+        }
+
         let qualified_name = format!("{}::{}", type_name, method_name);
 
         // Map parameter types (excluding `self` which is implicit).
@@ -109,6 +116,13 @@ fn define_methods_for_type(
     let self_ty = ctx.context.ptr_type(Default::default());
 
     for (method_name, method_sig) in methods {
+        // WHY: canonical OOP codegen pattern — each type only defines LLVM
+        // functions for methods it owns. Inherited methods (defined_in != type_name)
+        // are resolved via vtable dispatch; their bodies live in the declaring type.
+        if method_sig.defined_in != *type_name {
+            continue;
+        }
+
         let qualified_name = format!("{}::{}", type_name, method_name);
         let fn_value = ctx
             .functions

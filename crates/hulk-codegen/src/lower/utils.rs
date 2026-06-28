@@ -144,11 +144,7 @@ pub fn resolve_attribute_with_offset(
 /// Returns `true` if values of `ty` are stored as heap pointers and must be
 /// reference‑counted.
 pub fn is_heap_allocated_type(ty: &Type, _registry: &TypeRegistry) -> bool {
-    match ty {
-        Type::String | Type::Object | Type::Vector(_) | Type::Iterable(_) => true,
-        Type::Named(_) => true,
-        _ => false,
-    }
+    matches!(ty, Type::String | Type::Object | Type::Vector(_) | Type::Iterable(_) | Type::Named(_))
 }
 
 /// Converts a concrete object pointer to a protocol fat pointer.

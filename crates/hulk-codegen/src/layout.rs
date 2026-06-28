@@ -52,7 +52,23 @@ impl<'ctx> TypeLayout<'ctx> {
 /// It also records method slot indices based on the flattened method order.
 ///
 /// The layouts are stored in `ctx.type_layouts` for later use.
-pub fn build_layouts(registry: &TypeRegistry, ctx: &mut CodegenCtx) -> Result<(), CodegenError> {
+pub fn build_layouts(
+    program: &hulk_ast::Program<hulk_semantic::Type>,
+    registry: &TypeRegistry,
+    ctx: &mut CodegenCtx,
+) -> Result<(), CodegenError> {
+    // WHY: collect.rs overwrites seeded "Vector"/"Range" entries when the
+    // user declares a type with that name. We must not skip user-declared
+    // types even if they share a name with a builtin container type.
+    let user_declared_types: std::collections::HashSet<&str> = program
+        .declarations
+        .iter()
+        .filter_map(|d| match &d.kind {
+            hulk_ast::DeclarationKind::Type(t) => Some(t.name.as_str()),
+            _ => None,
+        })
+        .collect();
+
     let mut layouts = HashMap::new();
 
     // Compute topological order of types (parents before children).
@@ -66,8 +82,8 @@ pub fn build_layouts(registry: &TypeRegistry, ctx: &mut CodegenCtx) -> Result<()
         // Skip builtin value types and other special types that have no user‑defined layout.
         if info.is_builtin_value
             || type_name == "Object"
-            || type_name == "Vector"
-            || type_name == "Range"
+            || (type_name == "Vector" && !user_declared_types.contains(type_name.as_str()))
+            || (type_name == "Range"  && !user_declared_types.contains(type_name.as_str()))
             || type_name == "Number"
             || type_name == "String"
             || type_name == "Boolean"
@@ -168,11 +184,12 @@ fn build_struct_type<'ctx>(
     let i1_type = context.bool_type(); // gc_mark in memory
     let ptr_type = context.ptr_type(Default::default());
 
-    let mut field_tys = Vec::new();
-    field_tys.push(i64_type.into());
-    field_tys.push(i1_type.into());
-    field_tys.push(ptr_type.into());
-    field_tys.push(ptr_type.into());
+    let mut field_tys = vec![
+        i64_type.into(),
+        i1_type.into(),
+        ptr_type.into(),
+        ptr_type.into(),
+    ];
 
     // Append all attribute types.
     field_tys.extend(attr_tys);
@@ -230,7 +247,7 @@ pub fn build_vtables(ctx: &mut CodegenCtx, registry: &TypeRegistry) -> Result<()
                 .cloned()
                 .ok_or_else(|| CodegenError::llvm_verification(format!("method '{}' not declared", qualified_name)))?;
                         let fn_ptr = fn_value.as_global_value().as_pointer_value();
-            fn_ptrs.push(fn_ptr.into());
+            fn_ptrs.push(fn_ptr);
         }
 
         let ptr_type = ctx.context.ptr_type(Default::default());
@@ -256,20 +273,27 @@ pub fn owning_type_for_method(
     method_name: &str,
     registry: &TypeRegistry,
 ) -> Option<String> {
+    // WHY: TypeInfo.methods is the merged/flattened set (all ancestor methods
+    // are copied into each descendant by the hierarchy pass). contains_key always
+    // returns true for type_name itself. We need defined_in to find the actual
+    // declaring type.
     let mut current = type_name.to_string();
     loop {
-        let info = registry.lookup_type(&current)?;
-        if info.methods.contains_key(method_name) {
-            return Some(current);
+        if registry.types.get(&current)
+            .and_then(|info| info.methods.get(method_name))
+            .is_some_and(|sig| sig.defined_in == current)
+        {
+            return Some(current.to_string());
         }
-        current = info.parent.as_ref()?.name.clone();
+        let parent = registry.lookup_type(&current)?.parent.as_ref()?.name.clone();
+        current = parent;
     }
 }
 
 // Determines if a given type has any subtypes in the current compilation unit
 pub fn has_subtypes(type_name: &str, registry: &TypeRegistry) -> bool {
     registry.types.values().any(|info| {
-        info.parent.as_ref().map_or(false, |p| p.name == type_name)
+        info.parent.as_ref().is_some_and(|p| p.name == type_name)
     })
 }
 
