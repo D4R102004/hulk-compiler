@@ -43,6 +43,7 @@ pub mod vector;
 pub mod for_loop;
 pub mod pattern;
 pub mod builtins;
+pub mod index;
 
 // ─── Lowering context ────────────────────────────────────────────────────
 
@@ -191,7 +192,8 @@ pub fn lower_expr<'ctx>(
         ExprKind::Variable(name) => binding::lower_variable(ctx, name, Some(expr.span)),
         ExprKind::SelfRef => binding::lower_variable(ctx, "self", Some(expr.span)),
         ExprKind::Vector(vector) => vector::lower_vector(ctx, vector, &expr.anno, expr.span),
-
+        ExprKind::Index(index_expr) => index::lower_index_get(ctx, index_expr, &expr.anno, expr.span),
+        
         // ─── Unary and binary operators ──────────────────────────────────
 
         ExprKind::Unary(unary) => operators::lower_unary(ctx, unary),
@@ -220,14 +222,6 @@ pub fn lower_expr<'ctx>(
         ExprKind::TypeTest(type_test) => type_ops::lower_typetest(ctx, type_test),
         ExprKind::Downcast(downcast) => type_ops::lower_downcast(ctx, downcast),
 
-        // ─── Deferred to later phases ────────────────────────────────────
-
-        ExprKind::Index(_) => {
-            Err(CodegenError::unsupported (
-                "indexing not yet supported",
-                Some(expr.span)
-            ))
-        }
         // ─── Catch-all for unhandled cases ───────────────────────────────
         _ => Err(CodegenError::unsupported (
             format!("lowering of {:?} not yet implemented or unsupported", expr.kind),

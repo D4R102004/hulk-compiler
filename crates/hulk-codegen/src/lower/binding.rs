@@ -14,13 +14,14 @@
 //! - A plain `Block` does not introduce a new scope (handled in `control.rs`).
 
 use inkwell::values::BasicValueEnum;
-use hulk_ast::{AssignExpr, LetExpr, SourceSpan};
+use hulk_ast::{AssignExpr, AssignTarget, LetExpr, SourceSpan};
 use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
 use crate::lower::utils::{resolve_attribute_with_offset, resolve_type_ref_to_type, convert_to_protocol, is_heap_allocated_type, is_protocol_or_iterable};
 use crate::lower::builtins::lookup_constant;
+use crate::lower::index;
 use super::lower_expr;
 
 /// Lowers a variable reference.
@@ -142,7 +143,7 @@ pub fn lower_assign<'ctx>(
     assign: &AssignExpr<Type>,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     match &assign.target {
-        hulk_ast::AssignTarget::Variable(name) => {
+        AssignTarget::Variable(name) => {
             // 1. Look up the variable's LLVM pointer and semantic type.
             let (ptr, _llvm_ty, target_ty) = ctx.lookup_var(name, Some(assign.value.span))?;
 
@@ -207,7 +208,7 @@ pub fn lower_assign<'ctx>(
             // 7. The assignment expression returns the stored value.
             Ok(stored_val)
         }
-        hulk_ast::AssignTarget::Member { object, field } => {
+        AssignTarget::Member { object, field } => {
             // 1. Lower the object expression to get a pointer.
             let obj_val = lower_expr(ctx, object)?;
             let obj_ptr = obj_val.into_pointer_value();
@@ -290,6 +291,9 @@ pub fn lower_assign<'ctx>(
             // 9. Assignment expression returns the value.
             Ok(val)
         }
-        _ => Err(CodegenError::unsupported("invalid assignment to non-variable target", Some(assign.value.span),))
+        AssignTarget::Index { object, index } => {
+            // Delegate to the index lowering utility.
+            index::lower_index_set(ctx, object, index, &assign.value, assign.value.span)
+        }
     }
 }
