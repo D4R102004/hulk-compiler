@@ -27,9 +27,9 @@ pub struct CodegenCtx<'ctx> {
     string_literal_count: u32,
     /// Type layouts for user‑defined classes.
     pub type_layouts: HashMap<String, TypeLayout<'ctx>>,
-    /// The target machine this module is built for. Owned here rather than re-created 
-    /// at emission time) so struct-layout queries in `layout.rs` and the final 
-    /// `write_object_file` call always agree on exactly the same data layout — there's 
+    /// The target machine this module is built for. Owned here rather than re-created
+    /// at emission time) so struct-layout queries in `layout.rs` and the final
+    /// `write_object_file` call always agree on exactly the same data layout — there's
     /// only ever one `TargetMachine` per compilation.
     pub target_machine: TargetMachine,
     /// Itable globals: (type_name, protocol_name) -> GlobalValue
@@ -60,5 +60,5 @@ impl<'ctx> CodegenCtx<'ctx> {
         let id = self.string_literal_count;
         self.string_literal_count += 1;
         id
-     }
+    }
 }

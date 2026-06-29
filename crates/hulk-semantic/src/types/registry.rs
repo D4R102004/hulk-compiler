@@ -96,7 +96,7 @@ pub struct FunctionSignature {
     pub params: Vec<(String, Type)>,
     pub return_type: Type,
     pub span: SourceSpan,
-    pub is_constant: bool,  // true for PI, E, etc.
+    pub is_constant: bool, // true for PI, E, etc.
 }
 
 // -----------------------------------------------------------------------------

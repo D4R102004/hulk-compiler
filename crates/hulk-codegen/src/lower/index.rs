@@ -3,8 +3,8 @@
 //! This module handles the code generation for reading an element from a vector
 //! using the bracket syntax. It lowers the object and index expressions,
 //! calls the runtime `hulk_rt_vector_get` function, and unboxes the result
-//! if the element type is a primitive (`Number` or `Boolean`). The runtime 
-//! stores elements as boxed `Object*` pointers, so we must unbox primitive 
+//! if the element type is a primitive (`Number` or `Boolean`). The runtime
+//! stores elements as boxed `Object*` pointers, so we must unbox primitive
 //! values to their raw representation before returning them.
 //!
 //! # Related
@@ -16,10 +16,10 @@ use inkwell::values::BasicValueEnum;
 use hulk_ast::{IndexExpr, SourceSpan};
 use hulk_semantic::Type;
 
-use crate::error::CodegenError;
-use crate::lower::LowerCtx;
-use crate::lower::utils::ensure_unboxed;
 use super::lower_expr;
+use crate::error::CodegenError;
+use crate::lower::utils::ensure_unboxed;
+use crate::lower::LowerCtx;
 
 /// Lowers a vector indexing expression `object[index]`.
 ///
@@ -72,10 +72,7 @@ pub fn lower_index_get<'ctx>(
         .get("hulk_rt_vector_get")
         .copied()
         .ok_or_else(|| {
-            CodegenError::unsupported(
-                "hulk_rt_vector_get not declared in module",
-                Some(span),
-            )
+            CodegenError::unsupported("hulk_rt_vector_get not declared in module", Some(span))
         })?;
 
     // 4. Call `hulk_rt_vector_get(vec_ptr, idx)`.
@@ -84,9 +81,7 @@ pub fn lower_index_get<'ctx>(
         .builder
         .build_call(get_fn, &[vec_ptr.into(), idx_i64.into()], "vec_get")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    let elem_ptr = call_result
-        .try_as_basic_value()
-        .unwrap_basic(); // safe: function returns a pointer
+    let elem_ptr = call_result.try_as_basic_value().unwrap_basic(); // safe: function returns a pointer
 
     // 5. Unbox if the element type is primitive.
     let unboxed = ensure_unboxed(ctx, elem_ptr, expr_anno)?;
@@ -152,16 +147,17 @@ pub fn lower_index_assign<'ctx>(
         .get("hulk_rt_vector_set")
         .copied()
         .ok_or_else(|| {
-            CodegenError::unsupported(
-                "hulk_rt_vector_set not declared in module",
-                Some(span),
-            )
+            CodegenError::unsupported("hulk_rt_vector_set not declared in module", Some(span))
         })?;
 
     // 6. Call hulk_rt_vector_set(vec_ptr, idx, boxed_val).
     ctx.codegen
         .builder
-        .build_call(set_fn, &[vec_ptr.into(), idx_i64.into(), boxed_val.into()], "vec_set")
+        .build_call(
+            set_fn,
+            &[vec_ptr.into(), idx_i64.into(), boxed_val.into()],
+            "vec_set",
+        )
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // 7. Return the boxed value (the assignment expression returns the stored value).

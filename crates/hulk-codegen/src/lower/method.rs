@@ -2,12 +2,12 @@
 
 use hulk_ast::{DeclarationKind, TypeDecl, TypeMemberKind};
 use hulk_semantic::{Type, TypeRegistry};
-use inkwell::types::{BasicType, BasicMetadataTypeEnum};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 
+use super::lower_expr;
 use crate::context::CodegenCtx;
 use crate::error::CodegenError;
 use crate::lower::{utils, LowerCtx};
-use super::lower_expr;
 
 /// Declares all methods for all user‑defined types.
 ///
@@ -33,18 +33,16 @@ fn declare_methods_for_type(
     registry: &TypeRegistry,
 ) -> Result<(), CodegenError> {
     let type_name = &ty_decl.name;
-    let type_info = registry
-        .lookup_type(type_name)
-        .ok_or_else(|| CodegenError::llvm_verification(format!("type '{}' not found", type_name)))?;
+    let type_info = registry.lookup_type(type_name).ok_or_else(|| {
+        CodegenError::llvm_verification(format!("type '{}' not found", type_name))
+    })?;
 
-    
     let methods = &type_info.methods;
 
     // Get the type layout to know the struct type for `self`.
-    let _layout = ctx
-        .type_layouts
-        .get(type_name)
-        .ok_or_else(|| CodegenError::llvm_verification(format!("no layout for type '{}'", type_name)))?;
+    let _layout = ctx.type_layouts.get(type_name).ok_or_else(|| {
+        CodegenError::llvm_verification(format!("no layout for type '{}'", type_name))
+    })?;
     let self_ty = ctx.context.ptr_type(Default::default());
 
     for (method_name, method_sig) in methods {
@@ -99,20 +97,19 @@ fn define_methods_for_type(
     ctx: &mut CodegenCtx,
     ty_decl: &TypeDecl<Type>,
     registry: &TypeRegistry,
-    program: &hulk_ast::Program<Type>
+    program: &hulk_ast::Program<Type>,
 ) -> Result<(), CodegenError> {
     let type_name = &ty_decl.name;
-    let type_info = registry
-        .lookup_type(type_name)
-        .ok_or_else(|| CodegenError::llvm_verification(format!("type '{}' not found", type_name)))?;
+    let type_info = registry.lookup_type(type_name).ok_or_else(|| {
+        CodegenError::llvm_verification(format!("type '{}' not found", type_name))
+    })?;
 
     let methods = &type_info.methods;
 
     // Get layout for self type.
-    let _layout = ctx
-        .type_layouts
-        .get(type_name)
-        .ok_or_else(|| CodegenError::llvm_verification(format!("no layout for type '{}'", type_name)))?;
+    let _layout = ctx.type_layouts.get(type_name).ok_or_else(|| {
+        CodegenError::llvm_verification(format!("no layout for type '{}'", type_name))
+    })?;
     let self_ty = ctx.context.ptr_type(Default::default());
 
     for (method_name, method_sig) in methods {
@@ -124,11 +121,9 @@ fn define_methods_for_type(
         }
 
         let qualified_name = format!("{}::{}", type_name, method_name);
-        let fn_value = ctx
-            .functions
-            .get(&qualified_name)
-            .cloned()
-            .ok_or_else(|| CodegenError::llvm_verification(format!("method '{}' not declared", qualified_name)))?;
+        let fn_value = ctx.functions.get(&qualified_name).cloned().ok_or_else(|| {
+            CodegenError::llvm_verification(format!("method '{}' not declared", qualified_name))
+        })?;
 
         // Create entry block.
         let entry_bb = ctx.context.append_basic_block(fn_value, "entry");
@@ -148,23 +143,37 @@ fn define_methods_for_type(
             .builder
             .build_alloca(self_ty, "self")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        lower_ctx.codegen.builder
+        lower_ctx
+            .codegen
+            .builder
             .build_store(self_alloca, self_param)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         let self_sem_ty = Type::Named(type_name.clone());
-        lower_ctx.scope_stack.declare("self", self_alloca, self_ty.into(), self_sem_ty, false);
-        
+        lower_ctx
+            .scope_stack
+            .declare("self", self_alloca, self_ty.into(), self_sem_ty, false);
+
         // Bind other parameters.
         for (i, (param_name, param_ty)) in method_sig.params.iter().enumerate() {
             let param_value = params[i + 1];
             let llvm_param_ty = utils::llvm_type(lower_ctx.codegen, registry, param_ty)?;
-            let alloca = lower_ctx.codegen.builder
+            let alloca = lower_ctx
+                .codegen
+                .builder
                 .build_alloca(llvm_param_ty, param_name)
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            lower_ctx.codegen.builder
+            lower_ctx
+                .codegen
+                .builder
                 .build_store(alloca, param_value)
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            lower_ctx.scope_stack.declare(param_name, alloca, llvm_param_ty, param_ty.clone(), false);
+            lower_ctx.scope_stack.declare(
+                param_name,
+                alloca,
+                llvm_param_ty,
+                param_ty.clone(),
+                false,
+            );
         }
 
         // Find the corresponding method body in the AST.
@@ -184,16 +193,21 @@ fn define_methods_for_type(
                 }
             })
             .ok_or_else(|| {
-                CodegenError::llvm_verification(format!("method body for '{}' not found", method_name))
+                CodegenError::llvm_verification(format!(
+                    "method body for '{}' not found",
+                    method_name
+                ))
             })?;
 
         // Lower the method body.
         let body_value = lower_expr(&mut lower_ctx, method_body)?;
 
         lower_ctx.pop_scope()?; // Pop the function's parameter scope.
-        
+
         // Return.
-        lower_ctx.codegen.builder
+        lower_ctx
+            .codegen
+            .builder
             .build_return(Some(&body_value))
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     }

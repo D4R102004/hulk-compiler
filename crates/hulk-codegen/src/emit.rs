@@ -8,7 +8,9 @@
 use std::path::Path;
 
 use inkwell::module::Module;
-use inkwell::targets::{CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple};
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
+};
 use inkwell::OptimizationLevel;
 
 use crate::error::CodegenError;
@@ -25,8 +27,9 @@ pub fn init_all_targets() -> Result<(), CodegenError> {
 /// Builds a `TargetMachine` for the Linux x86_64 target.
 pub fn linux_x86_64_target_machine() -> Result<TargetMachine, CodegenError> {
     let triple = TargetTriple::create(TARGET_TRIPLE);
-    let target = Target::from_triple(&triple)
-        .map_err(|e| CodegenError::target_emission(format!("could not find Linux x86_64 target: {e}")))?;
+    let target = Target::from_triple(&triple).map_err(|e| {
+        CodegenError::target_emission(format!("could not find Linux x86_64 target: {e}"))
+    })?;
 
     target
         .create_target_machine(
@@ -45,7 +48,11 @@ pub fn linux_x86_64_target_machine() -> Result<TargetMachine, CodegenError> {
 }
 
 /// Writes `module` as a relocatable object file at `path`, using `machine`.
-pub fn write_object_file(machine: &TargetMachine, module: &Module, path: &Path) -> Result<(), CodegenError> {
+pub fn write_object_file(
+    machine: &TargetMachine,
+    module: &Module,
+    path: &Path,
+) -> Result<(), CodegenError> {
     machine
         .write_to_file(module, FileType::Object, path)
         .map_err(|e| CodegenError::target_emission(e.to_string()))

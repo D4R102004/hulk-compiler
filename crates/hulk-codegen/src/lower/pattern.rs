@@ -8,18 +8,22 @@
 //! - Wildcard and variable patterns always match.
 //! - If no pattern matches, `hulk_rt_match_fail()` is called (non‑returning).
 
+use hulk_ast::{Expr, ExprKind, Literal, MatchExpr, Pattern, SourceSpan};
+use hulk_semantic::Type;
 use inkwell::values::{BasicValueEnum, IntValue};
 use inkwell::FloatPredicate;
-use hulk_ast::{Expr, MatchExpr, Pattern, Literal, ExprKind, SourceSpan};
-use hulk_semantic::Type;
 
-use crate::error::CodegenError;
-use crate::lower::LowerCtx;
-use crate::lower::utils::llvm_type;
-use crate::runtime_decls::ensure_decl;
 use super::lower_expr;
+use crate::error::CodegenError;
+use crate::lower::utils::llvm_type;
+use crate::lower::LowerCtx;
+use crate::runtime_decls::ensure_decl;
 
-type PatternMatchResult<'ctx> = (IntValue<'ctx>, Vec<(String, BasicValueEnum<'ctx>, Type)>, bool);
+type PatternMatchResult<'ctx> = (
+    IntValue<'ctx>,
+    Vec<(String, BasicValueEnum<'ctx>, Type)>,
+    bool,
+);
 
 /// Lowers a `match` expression.
 ///
@@ -62,13 +66,19 @@ pub fn lower_match<'ctx>(
         Type::Iterable(_) => {
             let ptr_type = ctx.codegen.context.ptr_type(Default::default());
             let null_ptr = ptr_type.const_null();
-            let val = ctx.codegen.context.const_struct(&[null_ptr.into(), null_ptr.into()], false);
+            let val = ctx
+                .codegen
+                .context
+                .const_struct(&[null_ptr.into(), null_ptr.into()], false);
             BasicValueEnum::StructValue(val)
         }
         _ => {
-            return Err(CodegenError::unsupported (
-                format!("match result type `{}` not supported", match_expr.value.anno),
-                Some(match_expr.value.span)
+            return Err(CodegenError::unsupported(
+                format!(
+                    "match result type `{}` not supported",
+                    match_expr.value.anno
+                ),
+                Some(match_expr.value.span),
             ));
         }
     };
@@ -84,20 +94,28 @@ pub fn lower_match<'ctx>(
         .unwrap()
         .get_parent()
         .unwrap();
-    let merge_bb = ctx.codegen.context.append_basic_block(parent_fn, "match_merge");
+    let merge_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "match_merge");
 
     // Lower the scrutinee once.
     let scrutinee_val = lower_expr(ctx, &match_expr.value)?;
     let scrutinee_ty = &match_expr.value.anno;
 
     // Determine if the match has a catch‑all pattern (wildcard or variable).
-    let has_catch_all = match_expr.cases.iter().any(|case| {
-        matches!(&case.pattern, Pattern::Wildcard | Pattern::Variable(_))
-    });
+    let has_catch_all = match_expr
+        .cases
+        .iter()
+        .any(|case| matches!(&case.pattern, Pattern::Wildcard | Pattern::Variable(_)));
 
     // Create the fail block only if the match is non‑exhaustive.
     let fail_bb = if !has_catch_all {
-        Some(ctx.codegen.context.append_basic_block(parent_fn, "match_fail"))
+        Some(
+            ctx.codegen
+                .context
+                .append_basic_block(parent_fn, "match_fail"),
+        )
     } else {
         None
     };
@@ -106,8 +124,14 @@ pub fn lower_match<'ctx>(
     let mut case_check_blocks = Vec::new();
     let mut case_body_blocks = Vec::new();
     for (i, _case) in match_expr.cases.iter().enumerate() {
-        let check_bb = ctx.codegen.context.append_basic_block(parent_fn, &format!("case_{}_check", i));
-        let body_bb = ctx.codegen.context.append_basic_block(parent_fn, &format!("case_{}_body", i));
+        let check_bb = ctx
+            .codegen
+            .context
+            .append_basic_block(parent_fn, &format!("case_{}_check", i));
+        let body_bb = ctx
+            .codegen
+            .context
+            .append_basic_block(parent_fn, &format!("case_{}_body", i));
         case_check_blocks.push(check_bb);
         case_body_blocks.push(body_bb);
     }
@@ -135,8 +159,13 @@ pub fn lower_match<'ctx>(
         ctx.codegen.builder.position_at_end(check_bb);
 
         // Lower the pattern; returns a boolean condition and the bindings.
-        let (cond, bindings, _is_catch_all) =
-            lower_pattern(ctx, &case.pattern, &scrutinee_val, scrutinee_ty, Some(case.body.span))?;
+        let (cond, bindings, _is_catch_all) = lower_pattern(
+            ctx,
+            &case.pattern,
+            &scrutinee_val,
+            scrutinee_ty,
+            Some(case.body.span),
+        )?;
 
         // If pattern matches, jump to body; otherwise to next check or fail.
         ctx.codegen
@@ -237,28 +266,42 @@ fn lower_pattern<'ctx>(
 
         Pattern::Variable(name) => {
             // Always matches, binds the scrutinee value with its semantic type.
-            Ok((true_val, vec![(name.clone(), *scrutinee_val, scrutinee_ty.clone())], true))
+            Ok((
+                true_val,
+                vec![(name.clone(), *scrutinee_val, scrutinee_ty.clone())],
+                true,
+            ))
         }
 
         Pattern::Literal(lit) => {
             let cond = match lit {
                 Literal::Number(n) => {
                     let c = ctx.codegen.context.f64_type().const_float(*n);
-                    ctx.codegen.builder.build_float_compare(
-                        FloatPredicate::OEQ,
-                        scrutinee_val.into_float_value(),
-                        c,
-                        "lit_cmp",
-                    ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+                    ctx.codegen
+                        .builder
+                        .build_float_compare(
+                            FloatPredicate::OEQ,
+                            scrutinee_val.into_float_value(),
+                            c,
+                            "lit_cmp",
+                        )
+                        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 }
                 Literal::Boolean(b) => {
-                    let c = ctx.codegen.context.bool_type().const_int(if *b { 1 } else { 0 }, false);
-                    ctx.codegen.builder.build_int_compare(
-                        inkwell::IntPredicate::EQ,
-                        scrutinee_val.into_int_value(),
-                        c,
-                        "lit_cmp",
-                    ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+                    let c = ctx
+                        .codegen
+                        .context
+                        .bool_type()
+                        .const_int(if *b { 1 } else { 0 }, false);
+                    ctx.codegen
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            scrutinee_val.into_int_value(),
+                            c,
+                            "lit_cmp",
+                        )
+                        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 }
                 Literal::String(s) => {
                     let lit_expr = Expr {
@@ -268,11 +311,15 @@ fn lower_pattern<'ctx>(
                     };
                     let lit_val = lower_expr(ctx, &lit_expr)?;
                     let str_eq_fn = ensure_decl(ctx.codegen, "hulk_rt_string_equals")?;
-                    let call = ctx.codegen.builder.build_call(
-                        str_eq_fn,
-                        &[(*scrutinee_val).into(), lit_val.into()],
-                        "str_eq",
-                    ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+                    let call = ctx
+                        .codegen
+                        .builder
+                        .build_call(
+                            str_eq_fn,
+                            &[(*scrutinee_val).into(), lit_val.into()],
+                            "str_eq",
+                        )
+                        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
                     call.try_as_basic_value().basic().unwrap().into_int_value()
                 }
             };
@@ -282,7 +329,7 @@ fn lower_pattern<'ctx>(
         Pattern::Type(type_ref, alias) => {
             // Resolve the target type from the type reference.
             let target_ty = crate::lower::utils::resolve_type_ref_to_type(type_ref, ctx.registry);
-            
+
             // Get the vtable for the target type.
             let target_type_name = &type_ref.name;
             let target_vtable = ctx
@@ -290,31 +337,37 @@ fn lower_pattern<'ctx>(
                 .type_layouts
                 .get(target_type_name)
                 .and_then(|layout| layout.vtable_global)
-                .ok_or_else(|| CodegenError::unsupported (
-                    format!("vtable for type `{}` not found", target_type_name),
-                    span,
-                ))?;
+                .ok_or_else(|| {
+                    CodegenError::unsupported(
+                        format!("vtable for type `{}` not found", target_type_name),
+                        span,
+                    )
+                })?;
             let target_vtable_ptr = target_vtable.as_pointer_value();
 
             // Call downcast_check.
             let downcast_fn = ensure_decl(ctx.codegen, "hulk_rt_downcast_check")?;
             let obj_ptr = scrutinee_val.into_pointer_value();
-            let call = ctx.codegen.builder.build_call(
-                downcast_fn,
-                &[obj_ptr.into(), target_vtable_ptr.into()],
-                "downcast_check",
-            ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            let call = ctx
+                .codegen
+                .builder
+                .build_call(
+                    downcast_fn,
+                    &[obj_ptr.into(), target_vtable_ptr.into()],
+                    "downcast_check",
+                )
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             let is_ok = call.try_as_basic_value().basic().unwrap().into_int_value();
 
             // If alias is present, bind the downcasted pointer with the target type.
             let mut bindings = Vec::new();
             if let Some(alias_name) = alias {
                 let ptr_type = ctx.codegen.context.ptr_type(Default::default());
-                let cast_ptr = ctx.codegen.builder.build_pointer_cast(
-                    obj_ptr,
-                    ptr_type,
-                    "downcast_ptr",
-                ).map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+                let cast_ptr = ctx
+                    .codegen
+                    .builder
+                    .build_pointer_cast(obj_ptr, ptr_type, "downcast_ptr")
+                    .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
                 // The semantic type is the target type.
                 bindings.push((alias_name.clone(), cast_ptr.into(), target_ty));
             }

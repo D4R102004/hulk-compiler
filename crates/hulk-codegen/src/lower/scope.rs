@@ -2,9 +2,9 @@
 
 use std::collections::HashMap;
 
-use inkwell::values::PointerValue;
-use inkwell::types::BasicTypeEnum;
 use hulk_semantic::Type;
+use inkwell::types::BasicTypeEnum;
+use inkwell::values::PointerValue;
 
 /// A stack of scopes, each mapping a variable name to its LLVM `alloca` pointer.
 ///
@@ -13,7 +13,7 @@ use hulk_semantic::Type;
 /// (`self`, method/function parameters, loop variables) are skipped.
 #[derive(Default)]
 pub struct ScopeStack<'ctx> {
-    scopes: Vec<HashMap<String,(PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type, bool)>>,
+    scopes: Vec<HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type, bool)>>,
 }
 
 impl<'ctx> ScopeStack<'ctx> {
@@ -30,7 +30,9 @@ impl<'ctx> ScopeStack<'ctx> {
     ///
     /// # Panics
     /// Panics if there is no scope to pop (i.e., the stack is empty).
-    pub fn pop_scope(&mut self) -> HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type, bool)> {
+    pub fn pop_scope(
+        &mut self,
+    ) -> HashMap<String, (PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type, bool)> {
         self.scopes.pop().expect("scope stack underflow")
     }
 
@@ -42,7 +44,14 @@ impl<'ctx> ScopeStack<'ctx> {
     /// released by the callee — the caller already owns that reference.
     ///
     /// Overwrites any existing binding with the same name in that scope.
-    pub fn declare(&mut self, name: &str, ptr: PointerValue<'ctx>, llvm_ty: BasicTypeEnum<'ctx>, sem_ty: Type, owned: bool) {
+    pub fn declare(
+        &mut self,
+        name: &str,
+        ptr: PointerValue<'ctx>,
+        llvm_ty: BasicTypeEnum<'ctx>,
+        sem_ty: Type,
+        owned: bool,
+    ) {
         let scope = self.scopes.last_mut().expect("no scope to declare into");
         scope.insert(name.to_string(), (ptr, llvm_ty, sem_ty, owned));
     }

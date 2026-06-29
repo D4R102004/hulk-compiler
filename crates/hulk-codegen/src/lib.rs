@@ -17,10 +17,10 @@
 pub mod context;
 pub mod emit;
 pub mod error;
-pub mod options;
-pub mod layout;
 pub mod itables;
+pub mod layout;
 pub mod lower;
+pub mod options;
 pub mod runtime_decls;
 
 use std::path::Path;
@@ -50,7 +50,9 @@ pub fn build_smoke_module(context: &Context) -> Result<CodegenCtx<'_>, CodegenEr
     let noop = declare_smoke_runtime_fn(&ctx);
 
     let i32_t = ctx.context.i32_type();
-    let main_fn = ctx.module.add_function("main", i32_t.fn_type(&[], false), None);
+    let main_fn = ctx
+        .module
+        .add_function("main", i32_t.fn_type(&[], false), None);
     let entry_bb = ctx.context.append_basic_block(main_fn, "entry");
     ctx.builder.position_at_end(entry_bb);
     ctx.builder
@@ -87,7 +89,9 @@ pub fn compile(
 
     // Create main function that returns i32.
     let i32_type = context.i32_type();
-    let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
+    let main_fn = codegen
+        .module
+        .add_function("main", i32_type.fn_type(&[], false), None);
     let entry_bb = context.append_basic_block(main_fn, "entry");
     codegen.builder.position_at_end(entry_bb);
 
@@ -100,7 +104,7 @@ pub fn compile(
 
     // Build vtables (requires method declarations)
     layout::build_vtables(&mut codegen, &verified.registry)?;
-        
+
     // Build itables for used protocols.
     itables::build_itables(&mut codegen, &verified.registry, &verified.typed_program)?;
 
@@ -117,23 +121,31 @@ pub fn compile(
 
     // Lower the entry expression and capture its value.
     let entry_result = {
-        let mut lower_ctx = lower::LowerCtx::new(&mut codegen, &verified.registry, &verified.typed_program);
+        let mut lower_ctx =
+            lower::LowerCtx::new(&mut codegen, &verified.registry, &verified.typed_program);
         lower::lower_expr(&mut lower_ctx, &verified.typed_program.entry)?
     };
 
     // Release the entry result if it is heap-allocated.
-    if lower::utils::is_heap_allocated_type(&verified.typed_program.entry.anno, &verified.registry) {
+    if lower::utils::is_heap_allocated_type(&verified.typed_program.entry.anno, &verified.registry)
+    {
         if let Some(release_fn) = codegen.functions.get("hulk_rt_release").cloned() {
-            let _ = codegen.builder.build_call(release_fn, &[entry_result.into()], "release_entry");
+            let _ = codegen
+                .builder
+                .build_call(release_fn, &[entry_result.into()], "release_entry");
         }
     }
 
     // Return 0.
-    codegen.builder.build_return(Some(&i32_type.const_int(0, false)))
+    codegen
+        .builder
+        .build_return(Some(&i32_type.const_int(0, false)))
         .map_err(|e| error::CodegenError::llvm_verification(e.to_string()))?;
 
     // Verify module.
-    codegen.module.verify()
+    codegen
+        .module
+        .verify()
         .map_err(|e| error::CodegenError::llvm_verification(e.to_string()))?;
 
     // Emit object file.
@@ -156,7 +168,8 @@ pub fn link_output(
     // WHY: the binary may be invoked as target/release/hulk-cli (dev)
     // or as ./hulk copied to repo root (grader). Probe both.
     let rt_lib_dir = [
-        std::env::current_exe().ok()
+        std::env::current_exe()
+            .ok()
             .and_then(|exe| exe.parent().map(|p| p.to_path_buf())),
         Some(cwd.join("target").join("release")),
         Some(cwd.join("target").join("debug")),
@@ -164,10 +177,13 @@ pub fn link_output(
     .into_iter()
     .flatten()
     .find(|p| p.join("libhulk_rt.a").exists())
-    .ok_or_else(|| error::CodegenError::link(
-        "cc", None,
-        "cannot find libhulk_rt.a — run make build first".to_string(),
-    ))?;
+    .ok_or_else(|| {
+        error::CodegenError::link(
+            "cc",
+            None,
+            "cannot find libhulk_rt.a — run make build first".to_string(),
+        )
+    })?;
 
     let cc_output = std::process::Command::new("cc")
         .arg(obj_path)
@@ -177,9 +193,7 @@ pub fn link_output(
         .arg("-o")
         .arg(output_path)
         .output()
-        .map_err(|e| error::CodegenError::link(
-            "cc", None, format!("failed to invoke cc: {e}")
-        ))?;
+        .map_err(|e| error::CodegenError::link("cc", None, format!("failed to invoke cc: {e}")))?;
 
     if !cc_output.status.success() {
         return Err(error::CodegenError::link(
@@ -199,14 +213,14 @@ mod tests {
     //! object file. They also check that semantic errors are caught and that unsupported
     //! constructs (in Phase 3) are properly rejected.
 
+    use inkwell::context::Context;
     use std::io::Read;
     use std::path::PathBuf;
-    use inkwell::context::Context;
 
+    use crate::{build_smoke_module, compile, CodegenOptions};
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
     use hulk_semantic::analyze;
-    use crate::{compile, CodegenOptions, build_smoke_module};
     use tempfile::tempdir;
 
     /// Compiles a HULK source string to an object file and an executable path (the latter is
@@ -373,22 +387,22 @@ mod tests {
         assert!(result.is_err(), "expected semantic error");
     }
 
-        // // ─── Codegen unsupported constructs ────────────────────────────────────
+    // // ─── Codegen unsupported constructs ────────────────────────────────────
 
-        // #[test]
-        // fn test_unsupported_vector() {
-        //     let src = "let v = [1,2,3] in v;";
-        //     let tokens = Lexer::new(src).tokenize().unwrap();
-        //     let program = parse(tokens).unwrap();
-        //     let verified = analyze(&program).expect("semantic analysis should succeed");
-        //     let temp_dir = tempdir().expect("create temp dir");
-        //     let output_path = temp_dir.path().join("output");
-        //     let opts = CodegenOptions::with_output_path(output_path);
-        //     let result = compile(&verified, &opts);
-        //     assert!(result.is_err(), "expected codegen error for vector");
-        //     let err = result.unwrap_err();
-        //     assert!(err.to_string().contains("vectors not yet supported"));
-        // }
+    // #[test]
+    // fn test_unsupported_vector() {
+    //     let src = "let v = [1,2,3] in v;";
+    //     let tokens = Lexer::new(src).tokenize().unwrap();
+    //     let program = parse(tokens).unwrap();
+    //     let verified = analyze(&program).expect("semantic analysis should succeed");
+    //     let temp_dir = tempdir().expect("create temp dir");
+    //     let output_path = temp_dir.path().join("output");
+    //     let opts = CodegenOptions::with_output_path(output_path);
+    //     let result = compile(&verified, &opts);
+    //     assert!(result.is_err(), "expected codegen error for vector");
+    //     let err = result.unwrap_err();
+    //     assert!(err.to_string().contains("vectors not yet supported"));
+    // }
 
     // ─── Additional check: object file is valid ELF ─────────────────────────
 

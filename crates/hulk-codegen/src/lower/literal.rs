@@ -42,7 +42,11 @@ pub fn lower_literal<'ctx>(
             Ok(float.into())
         }
         Literal::Boolean(b) => {
-            let bool_val = ctx.codegen.context.bool_type().const_int(if *b { 1 } else { 0 }, false);
+            let bool_val = ctx
+                .codegen
+                .context
+                .bool_type()
+                .const_int(if *b { 1 } else { 0 }, false);
             Ok(bool_val.into())
         }
         Literal::String(s) => {
@@ -51,7 +55,10 @@ pub fn lower_literal<'ctx>(
             let data_bytes = s.as_bytes();
             let data_const = ctx.codegen.context.const_string(data_bytes, false);
             let data_global = ctx.codegen.module.add_global(
-                data_const.get_type(), None, &format!("str_data_{id}"));
+                data_const.get_type(),
+                None,
+                &format!("str_data_{id}"),
+            );
             data_global.set_initializer(&data_const);
             data_global.set_constant(true);
             data_global.set_linkage(Linkage::Private);
@@ -61,38 +68,47 @@ pub fn lower_literal<'ctx>(
             // MUST be byte-for-byte compatible with `hulk_rt::HulkString`
             // (ObjHeader{ref_count:i64, gc_mark:u8, type_tag:u8, next:ptr,
             // vtable:ptr} followed by len:i64, data:ptr — 48 bytes total).
-            
+
             let i64_type = ctx.codegen.context.i64_type();
-            let i8_type  = ctx.codegen.context.i8_type();
+            let i8_type = ctx.codegen.context.i8_type();
             let ptr_type = ctx.codegen.context.ptr_type(Default::default());
 
             let header_ty = ctx.codegen.context.struct_type(
-                &[i64_type.into(), i8_type.into(), i8_type.into(), ptr_type.into(), ptr_type.into()],
+                &[
+                    i64_type.into(),
+                    i8_type.into(),
+                    i8_type.into(),
+                    ptr_type.into(),
+                    ptr_type.into(),
+                ],
                 false,
             );
             let header_const = ctx.codegen.context.const_struct(
                 &[
-                    i64_type.const_int(0, false).into(),                        // ref_count
-                    i8_type.const_int(0, false).into(),                         // gc_mark
+                    i64_type.const_int(0, false).into(), // ref_count
+                    i8_type.const_int(0, false).into(),  // gc_mark
                     i8_type.const_int(TAG_LITERAL_STRING as u64, false).into(), // type_tag
-                    ptr_type.const_null().into(),                                                  // next
-                    ptr_type.const_null().into(),                                                  // vtable
+                    ptr_type.const_null().into(),        // next
+                    ptr_type.const_null().into(),        // vtable
                 ],
                 false,
             );
 
-            let struct_type = ctx.codegen.context.struct_type(
-                &[header_ty.into(), i64_type.into(), ptr_type.into()],
-                false,
-            );
+            let struct_type = ctx
+                .codegen
+                .context
+                .struct_type(&[header_ty.into(), i64_type.into(), ptr_type.into()], false);
             let len_const = i64_type.const_int(s.len() as u64, false);
             let data_ptr: inkwell::values::BasicValueEnum = data_global.as_pointer_value().into();
-            let struct_const = ctx.codegen.context.const_struct(
-                &[header_const.into(), len_const.into(), data_ptr],
-                false,
-            );
+            let struct_const = ctx
+                .codegen
+                .context
+                .const_struct(&[header_const.into(), len_const.into(), data_ptr], false);
 
-            let global = ctx.codegen.module.add_global(struct_type, None, &format!("str_{id}"));
+            let global = ctx
+                .codegen
+                .module
+                .add_global(struct_type, None, &format!("str_{id}"));
             global.set_initializer(&struct_const);
             global.set_constant(true); // immutable string literal. Must be handled in retain and release as a no-op.
             global.set_linkage(Linkage::Private);

@@ -10,9 +10,9 @@ mod check;
 mod collect;
 mod hierarchy;
 mod infer;
+mod infer_utils;
 mod resolve_constructor_params;
 mod utils;
-mod infer_utils;
 
 pub use check::run as check;
 pub use collect::run as collect;

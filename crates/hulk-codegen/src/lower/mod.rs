@@ -13,11 +13,11 @@
 //! (Phase 8) later promotes these to SSA values. This avoids manual SSA
 //! bookkeeping and keeps the lowering code simple and correct.
 
-use std::collections::HashMap;
-use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::types::BasicTypeEnum;
+use inkwell::values::{BasicValueEnum, PointerValue};
+use std::collections::HashMap;
 
-use hulk_ast::{Expr, Program, TypeDecl, DeclarationKind, SourceSpan};
+use hulk_ast::{DeclarationKind, Expr, Program, SourceSpan, TypeDecl};
 use hulk_semantic::{Type, TypeRegistry};
 
 use crate::context::CodegenCtx;
@@ -27,24 +27,24 @@ use crate::lower::utils::{is_heap_allocated_type, object_pointer_from_fat_ptr};
 
 // ─── Submodules ───────────────────────────────────────────────────────────
 
-pub mod utils;
-pub mod scope;
 pub mod binding;
-pub mod control;
-pub mod literal;
-pub mod operators;
-pub mod decl;
+pub mod builtins;
 pub mod call;
+pub mod control;
+pub mod decl;
+pub mod for_loop;
+pub mod index;
+pub mod literal;
+pub mod member;
 pub mod method;
 pub mod new;
-pub mod member;
-pub mod type_ops;
-pub mod vector;
-pub mod for_loop;
+pub mod operators;
 pub mod pattern;
-pub mod builtins;
-pub mod index;
+pub mod scope;
+pub mod type_ops;
+pub mod utils;
 pub mod variable;
+pub mod vector;
 
 // ─── Lowering context ────────────────────────────────────────────────────
 
@@ -64,7 +64,7 @@ pub struct LowerCtx<'a, 'ctx> {
     /// The typed program being lowered (for reference to declarations).
     pub typed_program: &'a Program<Type>,
     /// Map of type names to their declarations for quick lookup.
-    pub type_decls: HashMap<String, &'a TypeDecl<Type>>, 
+    pub type_decls: HashMap<String, &'a TypeDecl<Type>>,
     /// Which type the current method belongs to (if any).
     pub current_type: Option<String>,
     /// The name of the current method being lowered (if any).
@@ -108,12 +108,15 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
             for (_name, (ptr, llvm_ty, sem_ty, owned)) in scope {
                 if owned && is_heap_allocated_type(&sem_ty, self.registry) {
                     // Load the full value using its stored LLVM type.
-                    let val = self.codegen.builder
+                    let val = self
+                        .codegen
+                        .builder
                         .build_load(llvm_ty, ptr, "scope_exit_load")
                         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
                     // If it's a fat pointer, extract the object data.
                     let obj_ptr = object_pointer_from_fat_ptr(self, val, &sem_ty)?;
-                    self.codegen.builder
+                    self.codegen
+                        .builder
                         .build_call(release, &[obj_ptr.into()], "scope_exit_release")
                         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
                 }
@@ -123,42 +126,71 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
     }
 
     /// Declares a variable in the current scope and initialises it with `value`.
-    pub fn declare_var(&mut self, name: &str, value: BasicValueEnum<'ctx>, sem_ty: Type) -> Result<(), CodegenError> {
+    pub fn declare_var(
+        &mut self,
+        name: &str,
+        value: BasicValueEnum<'ctx>,
+        sem_ty: Type,
+    ) -> Result<(), CodegenError> {
         let llvm_ty = value.get_type();
-        let ptr = self.codegen.builder.build_alloca(llvm_ty, name)
+        let ptr = self
+            .codegen
+            .builder
+            .build_alloca(llvm_ty, name)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        self.codegen.builder.build_store(ptr, value)
+        self.codegen
+            .builder
+            .build_store(ptr, value)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         self.scope_stack.declare(name, ptr, llvm_ty, sem_ty, true);
         Ok(())
     }
 
     /// Looks up a variable's pointer in the scope stack.
-    pub fn lookup_var(&self, name: &str, span: Option<SourceSpan>) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type), CodegenError> {
-        self.scope_stack.lookup(name)
-            .ok_or_else(|| CodegenError::unsupported (
-                format!("undefined variable `{}` (should have been caught by semantic analysis)", name),
-                span
-            ))
+    pub fn lookup_var(
+        &self,
+        name: &str,
+        span: Option<SourceSpan>,
+    ) -> Result<(PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type), CodegenError> {
+        self.scope_stack.lookup(name).ok_or_else(|| {
+            CodegenError::unsupported(
+                format!(
+                    "undefined variable `{}` (should have been caught by semantic analysis)",
+                    name
+                ),
+                span,
+            )
+        })
     }
 
     /// Loads a variable's value.
-    pub fn load_var(&self, name: &str, span: Option<SourceSpan>) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-        let (ptr, llvm_ty, _sem_ty) = self.scope_stack.lookup(name)
-            .ok_or_else(|| CodegenError::unsupported (
-                format!("undefined variable `{}`", name),
-                span
-            ))?;
-        self.codegen.builder.build_load(llvm_ty, ptr, name)
+    pub fn load_var(
+        &self,
+        name: &str,
+        span: Option<SourceSpan>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let (ptr, llvm_ty, _sem_ty) = self.scope_stack.lookup(name).ok_or_else(|| {
+            CodegenError::unsupported(format!("undefined variable `{}`", name), span)
+        })?;
+        self.codegen
+            .builder
+            .build_load(llvm_ty, ptr, name)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))
     }
 
-    pub fn store_var(&mut self, name: &str, value: BasicValueEnum<'ctx>, span: Option<SourceSpan>) -> Result<(), CodegenError> {
+    pub fn store_var(
+        &mut self,
+        name: &str,
+        value: BasicValueEnum<'ctx>,
+        span: Option<SourceSpan>,
+    ) -> Result<(), CodegenError> {
         let (ptr, _llvm_ty, _sem_ty) = self.lookup_var(name, span)?;
-        self.codegen.builder.build_store(ptr, value)
+        self.codegen
+            .builder
+            .build_store(ptr, value)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         Ok(())
-}
+    }
 }
 
 /// Lowers a typed expression to an LLVM value.
@@ -185,23 +217,21 @@ pub fn lower_expr<'ctx>(
 
     match &expr.kind {
         // ─── Literals ─────────────────────────────────────────────────────
-
         ExprKind::Literal(lit) => literal::lower_literal(ctx, lit),
 
         // ─── Variables and special references ────────────────────────────
-
         ExprKind::Variable(name) => variable::lower_variable(ctx, name, Some(expr.span)),
         ExprKind::SelfRef => variable::lower_variable(ctx, "self", Some(expr.span)),
         ExprKind::Vector(vector) => vector::lower_vector(ctx, vector, &expr.anno, expr.span),
-        ExprKind::Index(index_expr) => index::lower_index_get(ctx, index_expr, &expr.anno, expr.span),
-        
-        // ─── Unary and binary operators ──────────────────────────────────
+        ExprKind::Index(index_expr) => {
+            index::lower_index_get(ctx, index_expr, &expr.anno, expr.span)
+        }
 
+        // ─── Unary and binary operators ──────────────────────────────────
         ExprKind::Unary(unary) => operators::lower_unary(ctx, unary),
         ExprKind::Binary(binary) => operators::lower_binary(ctx, binary, &expr.anno),
 
         // ─── Control flow ────────────────────────────────────────────────
-
         ExprKind::Block(block) => control::lower_block(ctx, block),
         ExprKind::If(if_expr) => control::lower_if(ctx, if_expr, &expr.anno),
         ExprKind::While(while_expr) => control::lower_while(ctx, while_expr, &expr.anno),
@@ -209,14 +239,12 @@ pub fn lower_expr<'ctx>(
         ExprKind::Match(match_expr) => pattern::lower_match(ctx, match_expr, &expr.anno),
 
         // ─── Bindings and assignments ────────────────────────────────────
-
         ExprKind::Let(let_expr) => binding::lower_let(ctx, let_expr),
         ExprKind::Assign(assign) => binding::lower_assign(ctx, assign),
-        
-        // ─── Functions and properties calls ────────────────────────────────────
 
-        ExprKind::Call(call) => call::lower_call(ctx, call), 
-        ExprKind::New(new_expr) => new::lower_new(ctx, new_expr, Some(expr.span)), 
+        // ─── Functions and properties calls ────────────────────────────────────
+        ExprKind::Call(call) => call::lower_call(ctx, call),
+        ExprKind::New(new_expr) => new::lower_new(ctx, new_expr, Some(expr.span)),
         ExprKind::Member(member_expr) => member::lower_member(ctx, member_expr, Some(expr.span)),
 
         // ─── Type tests and downcasts ──────────────────────────────────────────
@@ -224,9 +252,12 @@ pub fn lower_expr<'ctx>(
         ExprKind::Downcast(downcast) => type_ops::lower_downcast(ctx, downcast),
 
         // ─── Catch-all for unhandled cases ───────────────────────────────
-        _ => Err(CodegenError::unsupported (
-            format!("lowering of {:?} not yet implemented or unsupported", expr.kind),
-            Some(expr.span)
+        _ => Err(CodegenError::unsupported(
+            format!(
+                "lowering of {:?} not yet implemented or unsupported",
+                expr.kind
+            ),
+            Some(expr.span),
         )),
     }
 }
@@ -234,15 +265,15 @@ pub fn lower_expr<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{layout, lower, runtime_decls, itables};
+    use crate::{itables, layout, lower, runtime_decls};
+    use hulk_ast::{
+        AssignExpr, AssignTarget, BinaryExpr, BinaryOp, BlockExpr, ElifBranch, Expr, ExprKind,
+        ForExpr, IfExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, Pattern, SourceSpan,
+        TypeRef, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
+    };
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
     use hulk_semantic::analyze;
-    use hulk_ast::{
-        AssignExpr, AssignTarget, BinaryExpr, BinaryOp, BlockExpr, ElifBranch, Expr, ExprKind,
-        IfExpr, LetBinding, LetExpr, Literal, SourceSpan, UnaryExpr, UnaryOp, WhileExpr, ForExpr,
-        MatchExpr, MatchCase, Pattern, VectorExpr, VectorComprehension, TypeRef,
-    };
     use hulk_semantic::{seeded_registry, Type};
     use inkwell::context::Context;
 
@@ -254,7 +285,7 @@ mod tests {
     fn dummy_program(expr: Expr<Type>) -> Program<Type> {
         Program {
             declarations: vec![],
-            entry: expr.clone()
+            entry: expr.clone(),
         }
     }
 
@@ -409,7 +440,9 @@ mod tests {
         let context = Context::create();
         let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
         let i32_type = context.i32_type();
-        let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
+        let main_fn = codegen
+            .module
+            .add_function("main", i32_type.fn_type(&[], false), None);
         let entry_bb = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry_bb);
 
@@ -417,16 +450,22 @@ mod tests {
         declare_test_builtins(&mut codegen);
 
         let registry = seeded_registry();
-        let dprog  = dummy_program(expr.clone());
+        let dprog = dummy_program(expr.clone());
         // Lower the expression in a separate scope so the borrow ends.
         {
             let mut lower_ctx = LowerCtx::new(&mut codegen, &registry, &dprog);
             let val = lower_expr(&mut lower_ctx, &expr).expect("lowering failed");
             // Store the result so it's a real operand of a `store` instruction
-            let slot = lower_ctx.codegen.builder
+            let slot = lower_ctx
+                .codegen
+                .builder
                 .build_alloca(val.get_type(), "test_result")
                 .expect("alloca failed");
-            lower_ctx.codegen.builder.build_store(slot, val).expect("store failed");
+            lower_ctx
+                .codegen
+                .builder
+                .build_store(slot, val)
+                .expect("store failed");
         }
 
         // Now we can use codegen freely.
@@ -472,12 +511,15 @@ mod tests {
 
         // 4. Create main function (entry point).
         let i32_type = context.i32_type();
-        let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
+        let main_fn = codegen
+            .module
+            .add_function("main", i32_type.fn_type(&[], false), None);
         let entry_bb = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry_bb);
 
         // 5. Build layouts for user‑defined types.
-        layout::build_layouts(&verified.typed_program, &verified.registry, &mut codegen).expect("build layouts");
+        layout::build_layouts(&verified.typed_program, &verified.registry, &mut codegen)
+            .expect("build layouts");
 
         // 6. Declare free functions and methods.
         lower::decl::declare_functions(&mut codegen, &verified.typed_program, &verified.registry)
@@ -508,12 +550,15 @@ mod tests {
         declare_test_builtins(&mut codegen);
 
         // 11. Lower the entry expression.
-        let mut lower_ctx = lower::LowerCtx::new(&mut codegen, &verified.registry, &verified.typed_program);
+        let mut lower_ctx =
+            lower::LowerCtx::new(&mut codegen, &verified.registry, &verified.typed_program);
         let _val = lower::lower_expr(&mut lower_ctx, &verified.typed_program.entry)
             .expect("lowering failed");
 
         // 12. Return 0 from main.
-        codegen.builder.build_return(Some(&i32_type.const_int(0, false)))
+        codegen
+            .builder
+            .build_return(Some(&i32_type.const_int(0, false)))
             .expect("return failed");
 
         // 13. Verify and print the module.
@@ -523,11 +568,7 @@ mod tests {
 
     /// Assert that the IR contains a substring.
     fn assert_ir_contains(ir: &str, expected: &str) {
-        assert!(
-            ir.contains(expected),
-            "IR did not contain '{}'",
-            expected
-        );
+        assert!(ir.contains(expected), "IR did not contain '{}'", expected);
     }
 
     /// Helper: create a typed `for` expression.
@@ -613,7 +654,11 @@ mod tests {
         // let a = 1 in let a = 2 in a
         let inner_init = num(2.0);
         let inner_body = var("a", Type::Number);
-        let inner_let = let_expr(vec![("a".to_string(), inner_init)], inner_body, Type::Number);
+        let inner_let = let_expr(
+            vec![("a".to_string(), inner_init)],
+            inner_body,
+            Type::Number,
+        );
         let outer_let = let_expr(vec![("a".to_string(), num(1.0))], inner_let, Type::Number);
         let ir = lower_expr_to_ir(outer_let);
         assert_ir_contains(&ir, "alloca double");
@@ -645,7 +690,11 @@ mod tests {
     fn test_unary_not() {
         // let b = true in !b
         let not_expr = unary_op(UnaryOp::Not, var("b", Type::Boolean), Type::Boolean);
-        let expr = let_expr(vec![("b".to_string(), bool_lit(true))], not_expr, Type::Boolean);
+        let expr = let_expr(
+            vec![("b".to_string(), bool_lit(true))],
+            not_expr,
+            Type::Boolean,
+        );
         let ir = lower_expr_to_ir(expr);
         assert_ir_contains(&ir, "load i1, ptr %b");
         assert_ir_contains(&ir, "xor i1");
@@ -656,7 +705,12 @@ mod tests {
     #[test]
     fn test_binary_add() {
         // let a = 2 in let b = 3 in a + b
-        let sum = bin_op(var("a", Type::Number), BinaryOp::Add, var("b", Type::Number), Type::Number);
+        let sum = bin_op(
+            var("a", Type::Number),
+            BinaryOp::Add,
+            var("b", Type::Number),
+            Type::Number,
+        );
         let with_b = let_expr(vec![("b".to_string(), num(3.0))], sum, Type::Number);
         let expr = let_expr(vec![("a".to_string(), num(2.0))], with_b, Type::Number);
         let ir = lower_expr_to_ir(expr);
@@ -681,7 +735,7 @@ mod tests {
         let expr = bin_op(left, BinaryOp::Concat, right, Type::String);
         let ir = lower_expr_to_ir(expr);
         assert_ir_contains(&ir, "call ptr @hulk_rt_string_concat");
- }
+    }
 
     #[test]
     fn test_binary_concat_space() {
@@ -697,7 +751,12 @@ mod tests {
     #[test]
     fn test_binary_compare() {
         // let a = 5 in let b = 3 in a < b
-        let cmp = bin_op(var("a", Type::Number), BinaryOp::Less, var("b", Type::Number), Type::Boolean);
+        let cmp = bin_op(
+            var("a", Type::Number),
+            BinaryOp::Less,
+            var("b", Type::Number),
+            Type::Boolean,
+        );
         let with_b = let_expr(vec![("b".to_string(), num(3.0))], cmp, Type::Boolean);
         let expr = let_expr(vec![("a".to_string(), num(5.0))], with_b, Type::Boolean);
         let ir = lower_expr_to_ir(expr);
@@ -812,7 +871,9 @@ mod tests {
         let context = Context::create();
         let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
         let i32_type = context.i32_type();
-        let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
+        let main_fn = codegen
+            .module
+            .add_function("main", i32_type.fn_type(&[], false), None);
         let entry_bb = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry_bb);
 
@@ -824,14 +885,27 @@ mod tests {
         let f_entry = context.append_basic_block(f_fn, "entry");
         codegen.builder.position_at_end(f_entry);
         let const_42 = f64_type.const_float(42.0);
-        codegen.builder.build_return(Some(&const_42)).expect("return");
+        codegen
+            .builder
+            .build_return(Some(&const_42))
+            .expect("return");
         // Reset builder to main entry.
         codegen.builder.position_at_end(entry_bb);
 
         codegen.functions.insert("f".to_string(), f_fn);
 
         // Now create a call expression to f().
-        let call_expr = call(var("f", Type::Function { params: vec![], return_type: Box::new(Type::Number) }), vec![], Type::Number);
+        let call_expr = call(
+            var(
+                "f",
+                Type::Function {
+                    params: vec![],
+                    return_type: Box::new(Type::Number),
+                },
+            ),
+            vec![],
+            Type::Number,
+        );
         let dprog = dummy_program(call_expr.clone());
 
         let registry = seeded_registry();
@@ -839,14 +913,23 @@ mod tests {
             let mut lower_ctx = LowerCtx::new(&mut codegen, &registry, &dprog);
             let _val = lower_expr(&mut lower_ctx, &call_expr).expect("lowering failed");
             // Store result to make it a real operand.
-            let slot = lower_ctx.codegen.builder
+            let slot = lower_ctx
+                .codegen
+                .builder
                 .build_alloca(f64_type, "result")
                 .expect("alloca");
-            lower_ctx.codegen.builder.build_store(slot, _val).expect("store");
+            lower_ctx
+                .codegen
+                .builder
+                .build_store(slot, _val)
+                .expect("store");
         }
 
         // Return 0.
-        codegen.builder.build_return(Some(&i32_type.const_int(0, false))).expect("return");
+        codegen
+            .builder
+            .build_return(Some(&i32_type.const_int(0, false)))
+            .expect("return");
         codegen.module.verify().expect("module verification failed");
         let ir = codegen.module.print_to_string().to_string();
 
@@ -860,7 +943,9 @@ mod tests {
         let context = Context::create();
         let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
         let i32_type = context.i32_type();
-        let main_fn = codegen.module.add_function("main", i32_type.fn_type(&[], false), None);
+        let main_fn = codegen
+            .module
+            .add_function("main", i32_type.fn_type(&[], false), None);
         let entry_bb = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry_bb);
 
@@ -875,13 +960,22 @@ mod tests {
         let params = add_fn.get_params();
         let x_param = params[0].into_float_value();
         let y_param = params[1].into_float_value();
-        let sum = codegen.builder.build_float_add(x_param, y_param, "add").expect("fadd");
+        let sum = codegen
+            .builder
+            .build_float_add(x_param, y_param, "add")
+            .expect("fadd");
         codegen.builder.build_return(Some(&sum)).expect("return");
         codegen.builder.position_at_end(entry_bb);
 
         // Create a call expression to add(2.0, 3.0).
         let call_expr = call(
-            var("add", Type::Function { params: vec![Type::Number, Type::Number], return_type: Box::new(Type::Number) }),
+            var(
+                "add",
+                Type::Function {
+                    params: vec![Type::Number, Type::Number],
+                    return_type: Box::new(Type::Number),
+                },
+            ),
             vec![num(2.0), num(3.0)],
             Type::Number,
         );
@@ -891,18 +985,30 @@ mod tests {
         {
             let mut lower_ctx = LowerCtx::new(&mut codegen, &registry, &dprog);
             let _val = lower_expr(&mut lower_ctx, &call_expr).expect("lowering failed");
-            let slot = lower_ctx.codegen.builder
+            let slot = lower_ctx
+                .codegen
+                .builder
                 .build_alloca(f64_type, "result")
                 .expect("alloca");
-            lower_ctx.codegen.builder.build_store(slot, _val).expect("store");
+            lower_ctx
+                .codegen
+                .builder
+                .build_store(slot, _val)
+                .expect("store");
         }
 
-        codegen.builder.build_return(Some(&i32_type.const_int(0, false))).expect("return");
+        codegen
+            .builder
+            .build_return(Some(&i32_type.const_int(0, false)))
+            .expect("return");
         codegen.module.verify().expect("module verification failed");
         let ir = codegen.module.print_to_string().to_string();
 
         // Check that the call instruction appears with arguments.
-        assert_ir_contains(&ir, "call double @add(double 2.000000e+00, double 3.000000e+00)");
+        assert_ir_contains(
+            &ir,
+            "call double @add(double 2.000000e+00, double 3.000000e+00)",
+        );
     }
 
     // ─── Object-oriented features ─────────────────────────────────────────
@@ -940,9 +1046,9 @@ mod tests {
             let a = new A() in a.f();
         ";
         let ir = lower_source_to_ir(src);
-        assert_ir_contains(&ir, "load ptr, ptr");  // load vtable
-        assert_ir_contains(&ir, "load ptr, ptr");  // load function pointer
-        // Check that the IR contains an indirect call with the correct return type.
+        assert_ir_contains(&ir, "load ptr, ptr"); // load vtable
+        assert_ir_contains(&ir, "load ptr, ptr"); // load function pointer
+                                                  // Check that the IR contains an indirect call with the correct return type.
         assert_ir_contains(&ir, "call double");
         // Also ensure the vtable is loaded.
         assert_ir_contains(&ir, "load ptr");
@@ -1046,18 +1152,30 @@ mod tests {
     }
 
     // ─── For Loops and Vector Comprehension ──────────────────────────────────────
-    
+
     #[test]
     fn test_for_loop() {
         // for (x in [1,2,3]) print(x)
         // We'll use a simple iterable: `range(1,4)` (builtin)
         let iterable = call(
-            var("range", Type::Function { params: vec![Type::Number, Type::Number], return_type: Box::new(Type::Named("Range".to_string())) }),
+            var(
+                "range",
+                Type::Function {
+                    params: vec![Type::Number, Type::Number],
+                    return_type: Box::new(Type::Named("Range".to_string())),
+                },
+            ),
             vec![num(1.0), num(4.0)],
             Type::Named("Range".to_string()),
         );
         let body = call(
-            var("print", Type::Function { params: vec![Type::Object], return_type: Box::new(Type::Object) }),
+            var(
+                "print",
+                Type::Function {
+                    params: vec![Type::Object],
+                    return_type: Box::new(Type::Object),
+                },
+            ),
             vec![var("x", Type::Number)],
             Type::Object,
         );
@@ -1073,11 +1191,22 @@ mod tests {
     fn test_vector_comprehension() {
         // [x^2 | x in range(1,4)]
         let iterable = call(
-            var("range", Type::Function { params: vec![Type::Number, Type::Number], return_type: Box::new(Type::Named("Range".to_string())) }),
+            var(
+                "range",
+                Type::Function {
+                    params: vec![Type::Number, Type::Number],
+                    return_type: Box::new(Type::Named("Range".to_string())),
+                },
+            ),
             vec![num(1.0), num(4.0)],
             Type::Named("Range".to_string()),
         );
-        let head = bin_op(var("x", Type::Number), BinaryOp::Power, num(2.0), Type::Number);
+        let head = bin_op(
+            var("x", Type::Number),
+            BinaryOp::Power,
+            num(2.0),
+            Type::Number,
+        );
         let comp = comprehension(head, "x", iterable, Type::Vector(Box::new(Type::Number)));
         let ir = lower_expr_to_ir(comp);
         assert_ir_contains(&ir, "call ptr @hulk_rt_dynamic_vector_new()");

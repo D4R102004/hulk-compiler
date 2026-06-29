@@ -1,15 +1,15 @@
 //! Lowering of vector expressions: literals, comprehensions, and indexing.
 
-use inkwell::values::BasicValueEnum;
-use hulk_ast::{Expr, SourceSpan, VectorExpr, VectorComprehension};
+use hulk_ast::{Expr, SourceSpan, VectorComprehension, VectorExpr};
 use hulk_semantic::Type;
+use inkwell::values::BasicValueEnum;
 
+use super::call::lower_method_call;
+use super::lower_expr;
 use crate::error::CodegenError;
+use crate::lower::utils::ensure_boxed;
 use crate::lower::LowerCtx;
 use crate::runtime_decls::ensure_decl;
-use crate::lower::utils::ensure_boxed;
-use super::lower_expr;
-use super::call::lower_method_call;
 
 /// Dispatches to the appropriate vector lowering routine.
 pub fn lower_vector<'ctx>(
@@ -20,7 +20,9 @@ pub fn lower_vector<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
     match vector {
         VectorExpr::Literal(items) => lower_vector_literal(ctx, items, expr_anno, span),
-        VectorExpr::Comprehension(comp) => lower_vector_comprehension(ctx, comp).map_err(|e| e.with_span(span)),
+        VectorExpr::Comprehension(comp) => {
+            lower_vector_comprehension(ctx, comp).map_err(|e| e.with_span(span))
+        }
     }
 }
 
@@ -78,7 +80,11 @@ fn lower_vector_literal<'ctx>(
 
         ctx.codegen
             .builder
-            .build_call(set_fn, &[vec_ptr.into(), idx_val.into(), elem_val.into()], "vec_set")
+            .build_call(
+                set_fn,
+                &[vec_ptr.into(), idx_val.into(), elem_val.into()],
+                "vec_set",
+            )
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
         ctx.codegen
@@ -126,9 +132,18 @@ fn lower_vector_comprehension<'ctx>(
         .unwrap()
         .get_parent()
         .unwrap();
-    let cond_bb = ctx.codegen.context.append_basic_block(parent_fn, "comp_cond");
-    let body_bb = ctx.codegen.context.append_basic_block(parent_fn, "comp_body");
-    let exit_bb = ctx.codegen.context.append_basic_block(parent_fn, "comp_exit");
+    let cond_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "comp_cond");
+    let body_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "comp_body");
+    let exit_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "comp_exit");
 
     ctx.codegen
         .builder
@@ -172,7 +187,8 @@ fn lower_vector_comprehension<'ctx>(
         .builder
         .build_store(var_ptr, current_val)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    ctx.scope_stack.declare(&comp.var, var_ptr, elem_llvm_ty, elem_ty.clone(), false);
+    ctx.scope_stack
+        .declare(&comp.var, var_ptr, elem_llvm_ty, elem_ty.clone(), false);
 
     // Lower the head expression.
     let mut head_val = lower_expr(ctx, head_expr)?;
