@@ -146,12 +146,13 @@ pub fn lower_for<'ctx>(
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let current_val = lower_method_call_val(ctx, iter_for_current, &iter_ty, "current", iterable_expr.span)?;
 
-    // WHY: hulk_rt_range_current returns f64 directly (never boxed).
-    // hulk_rt_vector_current returns HulkBox* (needs unboxing for primitive elements).
+    // hulk_rt_range_current returns f64 directly (never boxed).
     let unboxed_current = if matches!(&iter_ty, Type::Named(n) if n == "Range") {
         current_val
-    } else {
-        ensure_unboxed(ctx, current_val, &elem_ty)?
+    }
+    // hulk_rt_vector_current returns HulkBox* (needs unboxing for primitive elements).
+    else {
+        ensure_unboxed(ctx, current_val, &elem_ty, Some(iterable_expr.span))?
     };
 
     // Bind the loop variable.

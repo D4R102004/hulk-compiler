@@ -2,7 +2,7 @@
 
 use inkwell::FloatPredicate;
 use inkwell::values::BasicValueEnum;
-use hulk_ast::TypeRef;
+use hulk_ast::{TypeRef, SourceSpan};
 use hulk_semantic::{Type, TypeRegistry};
 use hulk_rt::{TAG_BOX, TAG_NUMBER, TAG_BOOLEAN};
 
@@ -414,17 +414,35 @@ pub fn ensure_boxed<'ctx>(
 
 /// Converts a boxed primitive pointer back to a raw value.
 /// If `ty` is not Number or Boolean, returns the pointer unchanged.
+/// 
+/// # Errors
+/// Returns `CodegenError::Internal` if the pointer is null, indicating 
+/// a compiler bug (e.g., reading from an uninitialized vector slot).
 pub fn ensure_unboxed<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     boxed_ptr: inkwell::values::BasicValueEnum<'ctx>,
     ty: &Type,
+    span: Option<SourceSpan>
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
-    // If the static type is already a pointer type, no unboxing needed.
-    if !matches!(ty, Type::Number | Type::Boolean) {
+  
+       // If the static type is already a pointer type, no unboxing needed.
+    if !matches!(ty, Type::Number | Type::Boolean) ||
+       // If boxed_ptr is not a ptr, return without unboxing
+       !boxed_ptr.is_pointer_value()
+    {
         return Ok(boxed_ptr);
     }
 
     let ptr = boxed_ptr.into_pointer_value();
+
+    // If the pointer is null, we cannot unbox it.
+    if ptr.is_null() {
+        return Err(CodegenError::internal(
+            "attempted to unbox a null pointer; possibly reading from an uninitialized vector element",
+            span
+        ));
+    }
+
     let i8_type = ctx.codegen.context.i8_type();
     let i64_type = ctx.codegen.context.i64_type();
     let ptr_type = ctx.codegen.context.ptr_type(Default::default());

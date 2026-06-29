@@ -89,7 +89,7 @@ pub fn lower_index_get<'ctx>(
         .unwrap_basic(); // safe: function returns a pointer
 
     // 5. Unbox if the element type is primitive.
-    let unboxed = ensure_unboxed(ctx, elem_ptr, expr_anno)?;
+    let unboxed = ensure_unboxed(ctx, elem_ptr, expr_anno, Some(span))?;
 
     Ok(unboxed)
 }
