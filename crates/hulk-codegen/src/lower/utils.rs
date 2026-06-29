@@ -449,7 +449,7 @@ pub fn ensure_unboxed<'ctx>(
             let val = ctx.codegen.builder
                 .build_load(ctx.codegen.context.f64_type(), payload_typed_ptr, "unbox_num")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            Ok(val.into())
+            Ok(val)
         }
         Type::Boolean => {
             let val = ctx.codegen.builder

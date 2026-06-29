@@ -128,6 +128,30 @@ pub fn lower_call<'ctx>(
 /// - Builtin types (`Vector`, `Range`) → direct call to a runtime function.
 /// - Protocol types (`Named` protocol or `Iterable`) → itable dispatch via fat pointer.
 /// - Class types (`Named` type) → vtable dispatch.
+pub fn lower_method_call_val<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    obj_val: BasicValueEnum<'ctx>,
+    obj_type: &Type,
+    method_name: &str,
+    span: SourceSpan,
+) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+    if let Type::Vector(_) = obj_type {
+        return lower_builtin_vector_call(ctx, obj_val, method_name, &[], span);
+    }
+    if let Type::Named(name) = obj_type {
+        if name == "Range" {
+            return lower_builtin_range_call(ctx, obj_val, method_name, &[], span);
+        }
+    }
+    if is_protocol_type(obj_type, ctx.registry) {
+        return lower_protocol_call(ctx, obj_val, obj_type, method_name, &[], span);
+    }
+    Err(CodegenError::unsupported(
+        format!("iterable method `{}` not supported on type `{}`", method_name, obj_type),
+        Some(span),
+    ))
+}
+
 pub fn lower_method_call<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     object: TypedExpr,

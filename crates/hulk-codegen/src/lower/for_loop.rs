@@ -6,7 +6,7 @@ use hulk_ast::ForExpr;
 use hulk_semantic::Type;
 
 use crate::error::CodegenError;
-use crate::lower::call::lower_method_call;
+use crate::lower::call::lower_method_call_val;
 use crate::lower::LowerCtx;
 use crate::lower::utils::ensure_unboxed;
 use super::lower_expr;
@@ -23,7 +23,6 @@ pub fn lower_for<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     for_expr: &ForExpr<Type>,
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-    // The iterable expression is lowered once, before the loop.
     let iterable_expr = &for_expr.iterable;
     let body_expr = &for_expr.body;
 
@@ -32,11 +31,15 @@ pub fn lower_for<'ctx>(
         .registry
         .lookup_method(&iterable_expr.anno, "current")
         .map(|sig| sig.return_type)
-        .ok_or_else(|| CodegenError::unsupported (
+        .ok_or_else(|| CodegenError::unsupported(
             format!("iterable type `{}` does not support `current()`", iterable_expr.anno),
             Some(iterable_expr.span)
         ))?;
     let elem_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &elem_ty)?;
+
+    // Compute the LLVM type of the iterable itself (needed for the persistent alloca).
+    let iter_ty = iterable_expr.anno.clone();
+    let iter_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &iter_ty)?;
 
     // Result storage: the loop's value is the last body value, or a default.
     let result_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &body_expr.anno)?;
@@ -74,7 +77,7 @@ pub fn lower_for<'ctx>(
             BasicValueEnum::StructValue(null_struct)
         }
         _ => {
-            return Err(CodegenError::unsupported (
+            return Err(CodegenError::unsupported(
                 format!("default value for type `{}` not implemented", body_expr.anno),
                 Some(body_expr.span)
             ));
@@ -83,6 +86,22 @@ pub fn lower_for<'ctx>(
     ctx.codegen
         .builder
         .build_store(result_alloca, default_val)
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    // WHY: Evaluate the iterable expression ONCE here, before entering the loop.
+    // Previously, lower_method_call re-evaluated the receiver expression on every
+    // next()/current() call.  For `range(0,5)` that creates a fresh HulkRange
+    // each iteration, so next() always returns true → infinite loop.  Store the
+    // iterable in a stack slot and load it in both the condition and body blocks.
+    let iter_val = lower_expr(ctx, iterable_expr)?;
+    let iter_alloca = ctx
+        .codegen
+        .builder
+        .build_alloca(iter_llvm_ty, "iter_obj")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.codegen
+        .builder
+        .build_store(iter_alloca, iter_val)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Basic blocks.
@@ -106,14 +125,11 @@ pub fn lower_for<'ctx>(
     // ── Condition block ─────────────────────────────────────────────────
     ctx.codegen.builder.position_at_end(cond_bb);
 
-    // Call `next()` on the iterable; returns a boolean.
-    let next_val = lower_method_call(
-        ctx,
-        (**iterable_expr).clone(),
-        "next",
-        &[],
-        iterable_expr.span,
-    )?;
+    // Load the persistent iterable and call next().
+    let iter_for_next = ctx.codegen.builder
+        .build_load(iter_llvm_ty, iter_alloca, "iter_next_load")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    let next_val = lower_method_call_val(ctx, iter_for_next, &iter_ty, "next", iterable_expr.span)?;
     let next_bool = next_val.into_int_value();
 
     ctx.codegen
@@ -124,17 +140,19 @@ pub fn lower_for<'ctx>(
     // ── Body block ──────────────────────────────────────────────────────
     ctx.codegen.builder.position_at_end(body_bb);
 
-    // Call `current()` to get the element.
-    let current_val = lower_method_call(
-        ctx,
-        (**iterable_expr).clone(),
-        "current",
-        &[],
-        iterable_expr.span,
-    )?;
+    // Load the persistent iterable and call current().
+    let iter_for_current = ctx.codegen.builder
+        .build_load(iter_llvm_ty, iter_alloca, "iter_current_load")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    let current_val = lower_method_call_val(ctx, iter_for_current, &iter_ty, "current", iterable_expr.span)?;
 
-    // Unbox if the element type is primitive
-    let unboxed_current = ensure_unboxed(ctx, current_val, &elem_ty)?;
+    // WHY: hulk_rt_range_current returns f64 directly (never boxed).
+    // hulk_rt_vector_current returns HulkBox* (needs unboxing for primitive elements).
+    let unboxed_current = if matches!(&iter_ty, Type::Named(n) if n == "Range") {
+        current_val
+    } else {
+        ensure_unboxed(ctx, current_val, &elem_ty)?
+    };
 
     // Bind the loop variable.
     ctx.push_scope();
