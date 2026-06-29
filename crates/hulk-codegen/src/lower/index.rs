@@ -118,7 +118,7 @@ pub fn lower_index_get<'ctx>(
 /// - `CodegenError::Unsupported` if the runtime function `hulk_rt_vector_set`
 ///   is not declared.
 /// - Propagates errors from lowering the object, index, or value expressions.
-pub fn lower_index_set<'ctx>(
+pub fn lower_index_assign<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     object: &hulk_ast::Expr<Type>,
     index: &hulk_ast::Expr<Type>,

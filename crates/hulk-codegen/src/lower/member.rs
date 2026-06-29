@@ -5,7 +5,7 @@ use hulk_semantic::Type;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
-use crate::lower::utils::{field_indices, resolve_attribute_with_offset};
+use crate::lower::utils::{field_indices, resolve_attribute_with_offset, llvm_type, is_heap_allocated_type};
 use super::lower_expr;
 
 /// Lowers a member access expression.
@@ -38,6 +38,126 @@ pub fn lower_member<'ctx>(
         format!("member '{}' not found in type '{}'", member.member, obj_type),
         Some(member.object.span),
     ))
+}
+
+/// Lowers a member field assignment `object.field := value`.
+///
+/// # Steps
+/// 1. Lower the `object` expression to obtain a pointer.
+/// 2. Resolve the attribute's type and byte offset.
+/// 3. Compute the field address using byte offset.
+/// 4. Lower the `value` expression.
+/// 5. Load the old value for release (if heap‑allocated).
+/// 6. If the attribute is heap‑allocated, release the old value and retain the new.
+/// 7. Store the new value.
+/// 8. Return the stored value (the assignment expression's value).
+///
+/// # Parameters
+/// - `ctx`: The lowering context.
+/// - `object`: The object expression.
+/// - `field`: The attribute name.
+/// - `value`: The expression to store.
+/// - `span`: The source span for error reporting.
+///
+/// # Returns
+/// The LLVM value that was stored.
+///
+/// # Errors
+/// - Propagates errors from lowering the object or value, resolving the attribute,
+///   or LLVM instruction emission.
+pub fn lower_member_assign<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    object: &hulk_ast::Expr<Type>,
+    field: &str,
+    value: &hulk_ast::Expr<Type>,
+    span: SourceSpan,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+
+    // 1. Lower the object expression to get a pointer.
+    let obj_val = super::lower_expr(ctx, object)?;
+    let obj_ptr = obj_val.into_pointer_value();
+
+    // 2. Determine the static type of the object and resolve the attribute.
+    let obj_type = &object.anno;
+    let (attr_type, offset) = resolve_attribute_with_offset(ctx, obj_type, field)?;
+
+    // 3. Compute the field address using byte offset.
+    let ptr_type = ctx.codegen.context.ptr_type(Default::default());
+    let obj_i8 = ctx
+        .codegen
+        .builder
+        .build_pointer_cast(obj_ptr, ptr_type, "obj_i8")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    let offset_val = ctx.codegen.context.i64_type().const_int(offset as u64, false);
+    let field_ptr_i8 = unsafe {
+        ctx.codegen
+            .builder
+            .build_gep(ctx.codegen.context.i8_type(), obj_i8, &[offset_val], "field_ptr")
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+    };
+
+    // 4. Cast to the attribute's type pointer.
+    let attr_ptr_type = ctx.codegen.context.ptr_type(Default::default());
+    let field_ptr = ctx
+        .codegen
+        .builder
+        .build_pointer_cast(field_ptr_i8, attr_ptr_type, "field_typed_ptr")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    // 5. Lower the new value.
+    let val = super::lower_expr(ctx, value)?;
+
+    // 6. Load the old value.
+    let attr_llvm_ty = llvm_type(ctx.codegen, ctx.registry, &attr_type)?;
+    let old_val = ctx
+        .codegen
+        .builder
+        .build_load(attr_llvm_ty, field_ptr, "old_attr")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    // 7. If the attribute is heap-allocated, release the old value and retain the new.
+    if is_heap_allocated_type(&attr_type, ctx.registry) {
+        let release_fn = ctx
+            .codegen
+            .functions
+            .get("hulk_rt_release")
+            .cloned()
+            .ok_or_else(|| {
+                CodegenError::unsupported(
+                    "hulk_rt_release not declared",
+                    Some(span),
+                )
+            })?;
+        ctx.codegen
+            .builder
+            .build_call(release_fn, &[old_val.into()], "release_old_attr")
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+        let retain_fn = ctx
+            .codegen
+            .functions
+            .get("hulk_rt_retain")
+            .cloned()
+            .ok_or_else(|| {
+                CodegenError::unsupported(
+                    "hulk_rt_retain not declared",
+                    Some(span),
+                )
+            })?;
+        ctx.codegen
+            .builder
+            .build_call(retain_fn, &[val.into()], "retain_new_attr")
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    }
+
+    // 8. Store the new value.
+    ctx.codegen
+        .builder
+        .build_store(field_ptr, val)
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    // 9. Assignment expression returns the value.
+    Ok(val)
 }
 
 /// Loads an attribute value from the object at the given offset.

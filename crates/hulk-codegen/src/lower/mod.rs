@@ -44,6 +44,7 @@ pub mod for_loop;
 pub mod pattern;
 pub mod builtins;
 pub mod index;
+pub mod variable;
 
 // ─── Lowering context ────────────────────────────────────────────────────
 
@@ -189,8 +190,8 @@ pub fn lower_expr<'ctx>(
 
         // ─── Variables and special references ────────────────────────────
 
-        ExprKind::Variable(name) => binding::lower_variable(ctx, name, Some(expr.span)),
-        ExprKind::SelfRef => binding::lower_variable(ctx, "self", Some(expr.span)),
+        ExprKind::Variable(name) => variable::lower_variable(ctx, name, Some(expr.span)),
+        ExprKind::SelfRef => variable::lower_variable(ctx, "self", Some(expr.span)),
         ExprKind::Vector(vector) => vector::lower_vector(ctx, vector, &expr.anno, expr.span),
         ExprKind::Index(index_expr) => index::lower_index_get(ctx, index_expr, &expr.anno, expr.span),
         
