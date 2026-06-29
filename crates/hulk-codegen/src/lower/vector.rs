@@ -172,7 +172,7 @@ fn lower_vector_comprehension<'ctx>(
         .builder
         .build_store(var_ptr, current_val)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    ctx.scope_stack.declare(&comp.var, var_ptr, elem_llvm_ty, elem_ty.clone());
+    ctx.scope_stack.declare(&comp.var, var_ptr, elem_llvm_ty, elem_ty.clone(), false);
 
     // Lower the head expression.
     let mut head_val = lower_expr(ctx, head_expr)?;

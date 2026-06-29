@@ -103,8 +103,8 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
         let scope = self.scope_stack.pop_scope();
         let release_fn = self.codegen.functions.get("hulk_rt_release").cloned();
         if let Some(release) = release_fn {
-            for (_name, (ptr, llvm_ty, sem_ty)) in scope {
-                if is_heap_allocated_type(&sem_ty, self.registry) {
+            for (_name, (ptr, llvm_ty, sem_ty, owned)) in scope {
+                if owned && is_heap_allocated_type(&sem_ty, self.registry) {
                     // Load the full value using its stored LLVM type.
                     let val = self.codegen.builder
                         .build_load(llvm_ty, ptr, "scope_exit_load")
@@ -127,7 +127,7 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         self.codegen.builder.build_store(ptr, value)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        self.scope_stack.declare(name, ptr, llvm_ty, sem_ty);
+        self.scope_stack.declare(name, ptr, llvm_ty, sem_ty, true);
         Ok(())
     }
 

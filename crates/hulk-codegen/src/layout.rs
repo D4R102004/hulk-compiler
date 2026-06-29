@@ -145,15 +145,26 @@ fn build_struct_type<'ctx>(
     let mut attr_names = Vec::new();
     let mut attr_tys = Vec::new();
 
+    // WHY: hierarchy.rs flattens all parent attributes into each descendant's
+    // TypeInfo. Without deduplication, build_struct_type adds "val" once per
+    // ancestor level, so field_offsets["val"] ends up pointing to the last
+    // (deepest) duplicate instead of the root ancestor's offset at 32.
+    // This tracks which attribute names have already been added so each
+    // attribute appears exactly once, at the offset determined by the first
+    // ancestor that declares it (root-first order).
+    let mut seen = std::collections::HashSet::new();
+
     // Helper to add attributes from a given type.
     fn add_attributes_from_type<'a>(
         type_info: &TypeInfo,
         attr_names: &mut Vec<String>,
         attr_tys: &mut Vec<BasicTypeEnum<'a>>,
+        seen: &mut std::collections::HashSet<String>,
         ctx: &CodegenCtx<'a>,
         registry: &TypeRegistry,
     ) -> Result<(), CodegenError> {
         for (name, attr) in &type_info.attributes {
+            if !seen.insert(name.clone()) { continue; }
             let ty = attr
                 .declared_type
                 .as_ref()
@@ -171,11 +182,11 @@ fn build_struct_type<'ctx>(
         let ancestor_info = registry
             .lookup_type(&ancestor_name)
             .ok_or_else(|| CodegenError::llvm_verification(format!("ancestor '{}' not found", ancestor_name)))?;
-        add_attributes_from_type(ancestor_info, &mut attr_names, &mut attr_tys, ctx, registry)?;
+        add_attributes_from_type(ancestor_info, &mut attr_names, &mut attr_tys, &mut seen, ctx, registry)?;
     }
 
     // Add own attributes.
-    add_attributes_from_type(info, &mut attr_names, &mut attr_tys, ctx, registry)?;
+    add_attributes_from_type(info, &mut attr_names, &mut attr_tys, &mut seen, ctx, registry)?;
 
     // ─── 2. Build the struct type ──────────────────────────────────────────
 
