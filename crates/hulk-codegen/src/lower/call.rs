@@ -367,8 +367,12 @@ fn lower_base_call<'ctx>(
             )
         })?;
 
-    // Prepare arguments: `self` is the first argument. We need to load `self` from the scope.
-    let self_ptr = ctx
+    // Prepare arguments: `self` is the first argument.
+    // WHY: scope_stack stores the alloca address (.0), not the value it holds.
+    // We must load the actual object pointer out of the alloca before passing it
+    // as `self` to the parent method — otherwise the callee receives the stack
+    // slot address and treats it as the object, reading garbage at offset 32+.
+    let (self_alloca, self_llvm_ty, _) = ctx
         .scope_stack
         .lookup("self")
         .ok_or_else(|| {
@@ -376,10 +380,14 @@ fn lower_base_call<'ctx>(
                 "self not in scope",
                 Some(call.callee.span)
             )
-        })?
-        .0;
+        })?;
+    let self_val = ctx
+        .codegen
+        .builder
+        .build_load(self_llvm_ty, self_alloca, "self_for_base")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let mut args = Vec::new();
-    args.push(self_ptr.into());
+    args.push(self_val.into());
     for arg in &call.args {
         args.push(lower_expr(ctx, arg)?.into());
     }

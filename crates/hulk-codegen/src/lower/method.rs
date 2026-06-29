@@ -152,7 +152,7 @@ fn define_methods_for_type(
             .build_store(self_alloca, self_param)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         let self_sem_ty = Type::Named(type_name.clone());
-        lower_ctx.scope_stack.declare("self", self_alloca, self_ty.into(), self_sem_ty);
+        lower_ctx.scope_stack.declare("self", self_alloca, self_ty.into(), self_sem_ty, false);
         
         // Bind other parameters.
         for (i, (param_name, param_ty)) in method_sig.params.iter().enumerate() {
@@ -164,7 +164,7 @@ fn define_methods_for_type(
             lower_ctx.codegen.builder
                 .build_store(alloca, param_value)
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            lower_ctx.scope_stack.declare(param_name, alloca, llvm_param_ty, param_ty.clone());
+            lower_ctx.scope_stack.declare(param_name, alloca, llvm_param_ty, param_ty.clone(), false);
         }
 
         // Find the corresponding method body in the AST.

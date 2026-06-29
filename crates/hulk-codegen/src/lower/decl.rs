@@ -119,7 +119,7 @@ fn define_function(
         lower_ctx.codegen.builder
             .build_store(alloca, *param_value)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        lower_ctx.scope_stack.declare(param_name, alloca, llvm_param_ty, param_ty.clone());
+        lower_ctx.scope_stack.declare(param_name, alloca, llvm_param_ty, param_ty.clone(), false);
     }
 
     // Lower the function body.
