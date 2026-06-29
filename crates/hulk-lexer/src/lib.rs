@@ -450,7 +450,7 @@ impl Lexer {
             "as" => TokenKind::As,
             "protocol" => TokenKind::Protocol,
             "extends" => TokenKind::Extends,
-            "def" => TokenKind::Def,
+            "define" => TokenKind::Def,
             "match" => TokenKind::Match,
             "case" => TokenKind::Case,
             // Not a keyword — it's a user-defined identifier.

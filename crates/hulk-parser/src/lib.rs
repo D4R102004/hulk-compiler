@@ -150,7 +150,9 @@ impl Ll1Parser {
         let span = self.peek_span();
 
         match &self.peek().kind {
-            TokenKind::Function => {
+            // WHY: 'define' is syntactically identical to 'function'.
+            // TokenKind::Def is already emitted by the lexer for the 'define' keyword.
+            TokenKind::Function | TokenKind::Def => {
                 self.advance();
                 let function = self.parse_function_declaration_after_keyword()?;
                 Ok(Declaration::new(DeclarationKind::Function(function), span))
@@ -185,14 +187,18 @@ impl Ll1Parser {
             None
         };
 
-        let body = if self.match_kind(&TokenKind::FatArrow) {
+        // WHY: HULK spec uses `=>` for function bodies, but the 'define' macro
+        // extension conventionally uses `->` (same token as function-type arrows).
+        // Accept both so `define f(x): T -> expr` and `function f(x): T => expr`
+        // work identically.
+        let body = if self.match_kind(&TokenKind::FatArrow) || self.match_kind(&TokenKind::Arrow) {
             let expression = self.parse_expression()?;
             self.match_kind(&TokenKind::Semicolon);
             expression
         } else if self.check(&TokenKind::LBrace) {
             self.parse_block_expression()?
         } else {
-            return Err(self.error_unexpected("`=>` or function block"));
+            return Err(self.error_unexpected("`=>`, `->`, or function block"));
         };
 
         Ok(FunctionDecl::new(name, params, return_type, body))
@@ -928,7 +934,7 @@ impl Ll1Parser {
     fn lookahead_starts_declaration(&self) -> bool {
         matches!(
             &self.peek().kind,
-            TokenKind::Function | TokenKind::Type | TokenKind::Protocol
+            TokenKind::Function | TokenKind::Def | TokenKind::Type | TokenKind::Protocol
         )
     }
 
@@ -1122,7 +1128,7 @@ fn token_kind_name(kind: &TokenKind) -> String {
         TokenKind::As => "`as`".to_string(),
         TokenKind::Protocol => "`protocol`".to_string(),
         TokenKind::Extends => "`extends`".to_string(),
-        TokenKind::Def => "`def`".to_string(),
+        TokenKind::Def => "`define`".to_string(),
         TokenKind::Match => "`match`".to_string(),
         TokenKind::Case => "`case`".to_string(),
         TokenKind::Underscore => "`_`".to_string(),
