@@ -8,6 +8,7 @@ use hulk_semantic::Type;
 use crate::error::CodegenError;
 use crate::lower::call::lower_method_call;
 use crate::lower::LowerCtx;
+use crate::lower::utils::ensure_unboxed;
 use super::lower_expr;
 
 /// Lowers a `for` loop.
@@ -132,6 +133,9 @@ pub fn lower_for<'ctx>(
         iterable_expr.span,
     )?;
 
+    // Unbox if the element type is primitive
+    let unboxed_current = ensure_unboxed(ctx, current_val, &elem_ty)?;
+
     // Bind the loop variable.
     ctx.push_scope();
     let var_ptr = ctx
@@ -141,7 +145,7 @@ pub fn lower_for<'ctx>(
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.codegen
         .builder
-        .build_store(var_ptr, current_val)
+        .build_store(var_ptr, unboxed_current)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.scope_stack.declare(&for_expr.var, var_ptr, elem_llvm_ty, elem_ty.clone(), false);
 

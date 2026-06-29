@@ -412,6 +412,58 @@ pub fn ensure_boxed<'ctx>(
     Ok(value)
 }
 
+/// Converts a boxed primitive pointer back to a raw value.
+/// If `ty` is not Number or Boolean, returns the pointer unchanged.
+pub fn ensure_unboxed<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    boxed_ptr: inkwell::values::BasicValueEnum<'ctx>,
+    ty: &Type,
+) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+    // If the static type is already a pointer type, no unboxing needed.
+    if !matches!(ty, Type::Number | Type::Boolean) {
+        return Ok(boxed_ptr);
+    }
+
+    let ptr = boxed_ptr.into_pointer_value();
+    let i8_type = ctx.codegen.context.i8_type();
+    let i64_type = ctx.codegen.context.i64_type();
+    let ptr_type = ctx.codegen.context.ptr_type(Default::default());
+
+    // Compute payload address
+    let payload_ptr_i8 = unsafe {
+        ctx.codegen.builder.build_gep(
+            i8_type,
+            ptr,
+            &[i64_type.const_int(PAYLOAD_OFFSET, false)],
+            "payload_ptr",
+        )
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+    };
+
+    let payload_typed_ptr = ctx.codegen.builder
+        .build_pointer_cast(payload_ptr_i8, ptr_type, "payload_typed")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    match ty {
+        Type::Number => {
+            let val = ctx.codegen.builder
+                .build_load(ctx.codegen.context.f64_type(), payload_typed_ptr, "unbox_num")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            Ok(val.into())
+        }
+        Type::Boolean => {
+            let val = ctx.codegen.builder
+                .build_load(i64_type, payload_typed_ptr, "unbox_bool")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            let truncated = ctx.codegen.builder
+                .build_int_truncate(val.into_int_value(), ctx.codegen.context.bool_type(), "bool_trunc")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            Ok(truncated.into())
+        }
+        _ => unreachable!(),
+    }
+}
+
 // Returns `true` if the type is a protocol or an Iterable, which are both represented as fat pointers.
 pub fn is_protocol_or_iterable(ty: &Type, registry: &TypeRegistry) -> bool {
     match ty {
