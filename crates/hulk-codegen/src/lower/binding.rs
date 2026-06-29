@@ -13,15 +13,15 @@
 //!   subsequent bindings can refer to earlier ones.
 //! - A plain `Block` does not introduce a new scope (handled in `control.rs`).
 
-use inkwell::values::BasicValueEnum;
 use hulk_ast::{AssignExpr, AssignTarget, LetExpr};
 use hulk_semantic::Type;
+use inkwell::values::BasicValueEnum;
 
-use crate::error::CodegenError;
-use crate::lower::LowerCtx;
-use crate::lower::utils::{resolve_type_ref_to_type, convert_to_protocol, is_protocol_or_iterable};
-use crate::lower::{variable, member, index};
 use super::lower_expr;
+use crate::error::CodegenError;
+use crate::lower::utils::{convert_to_protocol, is_protocol_or_iterable, resolve_type_ref_to_type};
+use crate::lower::LowerCtx;
+use crate::lower::{index, member, variable};
 
 /// Lowers a `let` expression with one or more bindings.
 ///

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use hulk_ast::{AssignTarget, BinaryOp, ExprKind, Literal, UnaryOp, VectorExpr, TypeRef};
+use hulk_ast::{AssignTarget, BinaryOp, ExprKind, Literal, TypeRef, UnaryOp, VectorExpr};
 
 use crate::typed::TypedExpr;
 use crate::types::registry::TypeRegistry;
@@ -364,9 +364,17 @@ fn compute_node_type(expr: &TypedExpr, registry: &TypeRegistry) -> Type {
         ExprKind::Unary(unary) => {
             let operand_ty = &unary.expr.anno;
             match unary.op {
-                UnaryOp::Negate if matches!(operand_ty, Type::Number | Type::Unknown | Type::Error) => Type::Number,
+                UnaryOp::Negate
+                    if matches!(operand_ty, Type::Number | Type::Unknown | Type::Error) =>
+                {
+                    Type::Number
+                }
                 UnaryOp::Negate => Type::Error,
-                UnaryOp::Not if matches!(operand_ty, Type::Boolean | Type::Unknown | Type::Error) => Type::Boolean,
+                UnaryOp::Not
+                    if matches!(operand_ty, Type::Boolean | Type::Unknown | Type::Error) =>
+                {
+                    Type::Boolean
+                }
                 UnaryOp::Not => Type::Error,
             }
         }
@@ -376,45 +384,85 @@ fn compute_node_type(expr: &TypedExpr, registry: &TypeRegistry) -> Type {
             let left_ty = &binary.left.anno;
             let right_ty = &binary.right.anno;
             match binary.op {
-                BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply |
-                BinaryOp::Divide | BinaryOp::Modulo | BinaryOp::Power => {
-                    if matches!(left_ty, Type::Number | Type::Unknown | Type::Error) &&
-                       matches!(right_ty, Type::Number | Type::Unknown | Type::Error) {
+                BinaryOp::Add
+                | BinaryOp::Subtract
+                | BinaryOp::Multiply
+                | BinaryOp::Divide
+                | BinaryOp::Modulo
+                | BinaryOp::Power => {
+                    if matches!(left_ty, Type::Number | Type::Unknown | Type::Error)
+                        && matches!(right_ty, Type::Number | Type::Unknown | Type::Error)
+                    {
                         Type::Number
                     } else {
                         Type::Error
                     }
                 }
                 BinaryOp::Equal | BinaryOp::NotEqual => {
-                    let valid = |t: &Type| matches!(t, Type::Number | Type::String | Type::Boolean | Type::Unknown | Type::Error);
-                    if valid(left_ty) && valid(right_ty) { Type::Boolean } else { Type::Error }
+                    let valid = |t: &Type| {
+                        matches!(
+                            t,
+                            Type::Number
+                                | Type::String
+                                | Type::Boolean
+                                | Type::Unknown
+                                | Type::Error
+                        )
+                    };
+                    if valid(left_ty) && valid(right_ty) {
+                        Type::Boolean
+                    } else {
+                        Type::Error
+                    }
                 }
-                BinaryOp::Less | BinaryOp::LessEqual | BinaryOp::Greater | BinaryOp::GreaterEqual => {
-                    if matches!(left_ty, Type::Number | Type::Unknown | Type::Error) &&
-                       matches!(right_ty, Type::Number | Type::Unknown | Type::Error) {
+                BinaryOp::Less
+                | BinaryOp::LessEqual
+                | BinaryOp::Greater
+                | BinaryOp::GreaterEqual => {
+                    if matches!(left_ty, Type::Number | Type::Unknown | Type::Error)
+                        && matches!(right_ty, Type::Number | Type::Unknown | Type::Error)
+                    {
                         Type::Boolean
                     } else {
                         Type::Error
                     }
                 }
                 BinaryOp::And | BinaryOp::Or => {
-                    if matches!(left_ty, Type::Boolean | Type::Unknown | Type::Error) &&
-                       matches!(right_ty, Type::Boolean | Type::Unknown | Type::Error) {
+                    if matches!(left_ty, Type::Boolean | Type::Unknown | Type::Error)
+                        && matches!(right_ty, Type::Boolean | Type::Unknown | Type::Error)
+                    {
                         Type::Boolean
                     } else {
                         Type::Error
                     }
                 }
                 BinaryOp::Concat | BinaryOp::ConcatSpace => {
-                    let allowed = |t: &Type| matches!(t, Type::Number | Type::String | Type::Boolean | Type::Unknown | Type::Error);
-                    if allowed(left_ty) && allowed(right_ty) { Type::String } else { Type::Error }
+                    let allowed = |t: &Type| {
+                        matches!(
+                            t,
+                            Type::Number
+                                | Type::String
+                                | Type::Boolean
+                                | Type::Unknown
+                                | Type::Error
+                        )
+                    };
+                    if allowed(left_ty) && allowed(right_ty) {
+                        Type::String
+                    } else {
+                        Type::Error
+                    }
                 }
             }
         }
 
         // ─── Control flow ────────────────────────────────────────────────────
         ExprKind::Let(let_expr) => let_expr.body.anno.clone(),
-        ExprKind::Block(block) => block.expressions.last().map(|e| e.anno.clone()).unwrap_or(Type::Object),
+        ExprKind::Block(block) => block
+            .expressions
+            .last()
+            .map(|e| e.anno.clone())
+            .unwrap_or(Type::Object),
         ExprKind::If(if_expr) => {
             let mut branch_types = vec![if_expr.then_branch.anno.clone()];
             for elif in &if_expr.elif_branches {
@@ -440,8 +488,7 @@ fn compute_node_type(expr: &TypedExpr, registry: &TypeRegistry) -> Type {
         // ─── Member ──────────────────────────────────────────────────────────
         ExprKind::Member(member) => {
             let obj_ty = &member.object.anno;
-            lookup_member_type(obj_ty, &member.member, registry)
-                .unwrap_or(Type::Error)
+            lookup_member_type(obj_ty, &member.member, registry).unwrap_or(Type::Error)
         }
 
         // ─── New ─────────────────────────────────────────────────────────────
@@ -468,17 +515,23 @@ fn compute_node_type(expr: &TypedExpr, registry: &TypeRegistry) -> Type {
         },
 
         // ─── Index ───────────────────────────────────────────────────────────
-        ExprKind::Index(index) => {
-            match &index.object.anno {
-                Type::Vector(inner) => *inner.clone(),
-                _ => Type::Error,
-            }
-        }
+        ExprKind::Index(index) => match &index.object.anno {
+            Type::Vector(inner) => *inner.clone(),
+            _ => Type::Error,
+        },
 
         // ─── Match ───────────────────────────────────────────────────────────
         ExprKind::Match(match_expr) => {
-            let case_types: Vec<Type> = match_expr.cases.iter().map(|c| c.body.anno.clone()).collect();
-            if case_types.is_empty() { Type::Error } else { lowest_common_ancestor(&case_types, registry) }
+            let case_types: Vec<Type> = match_expr
+                .cases
+                .iter()
+                .map(|c| c.body.anno.clone())
+                .collect();
+            if case_types.is_empty() {
+                Type::Error
+            } else {
+                lowest_common_ancestor(&case_types, registry)
+            }
         }
 
         // ─── Assignment ─────────────────────────────────────────────────────
@@ -498,7 +551,8 @@ fn lookup_member_type(ty: &Type, member_name: &str, registry: &TypeRegistry) -> 
             }
             // Method -> return Function type
             if let Some(method_sig) = registry.lookup_method(ty, member_name) {
-                let param_types: Vec<Type> = method_sig.params.iter().map(|(_, t)| t.clone()).collect();
+                let param_types: Vec<Type> =
+                    method_sig.params.iter().map(|(_, t)| t.clone()).collect();
                 return Some(Type::Function {
                     params: param_types,
                     return_type: Box::new(method_sig.return_type),
@@ -508,7 +562,8 @@ fn lookup_member_type(ty: &Type, member_name: &str, registry: &TypeRegistry) -> 
         }
         Type::Vector(_) | Type::Iterable(_) => {
             if let Some(method_sig) = registry.lookup_method(ty, member_name) {
-                let param_types: Vec<Type> = method_sig.params.iter().map(|(_, t)| t.clone()).collect();
+                let param_types: Vec<Type> =
+                    method_sig.params.iter().map(|(_, t)| t.clone()).collect();
                 return Some(Type::Function {
                     params: param_types,
                     return_type: Box::new(method_sig.return_type),
@@ -532,7 +587,11 @@ fn resolve_type_ref_static(tr: &TypeRef, registry: &TypeRegistry) -> Type {
             if tr.args.is_empty() {
                 Type::Named(tr.name.clone())
             } else {
-                let args: Vec<Type> = tr.args.iter().map(|arg| resolve_type_ref_static(arg, registry)).collect();
+                let args: Vec<Type> = tr
+                    .args
+                    .iter()
+                    .map(|arg| resolve_type_ref_static(arg, registry))
+                    .collect();
                 match tr.name.as_str() {
                     "Vector" if !args.is_empty() => Type::Vector(Box::new(args[0].clone())),
                     "Iterable" if !args.is_empty() => Type::Iterable(Box::new(args[0].clone())),

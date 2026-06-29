@@ -2,12 +2,12 @@
 
 use hulk_ast::{DeclarationKind, FunctionDecl, Program};
 use hulk_semantic::{Type, TypeRegistry};
-use inkwell::types::{BasicType, BasicMetadataTypeEnum};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType};
 
+use super::lower_expr;
 use crate::context::CodegenCtx;
 use crate::error::CodegenError;
 use crate::lower::{utils, LowerCtx};
-use super::lower_expr;
 
 /// Declares all user‑defined functions in the module.
 ///
@@ -33,9 +33,9 @@ fn declare_function(
     func: &FunctionDecl<Type>,
     registry: &TypeRegistry,
 ) -> Result<(), CodegenError> {
-    let sig = registry
-        .lookup_function(&func.name)
-        .ok_or_else(|| CodegenError::llvm_verification(format!("function '{}' not in registry", func.name)))?;
+    let sig = registry.lookup_function(&func.name).ok_or_else(|| {
+        CodegenError::llvm_verification(format!("function '{}' not in registry", func.name))
+    })?;
 
     // Map parameter types from the registry signature.
     let param_types: Vec<_> = sig
@@ -47,10 +47,8 @@ fn declare_function(
     let return_ty = utils::llvm_type(ctx, registry, &sig.return_type)?;
 
     // Convert to `BasicMetadataTypeEnum` for `fn_type`.
-    let param_metadata: Vec<BasicMetadataTypeEnum> = param_types
-        .into_iter()
-        .map(|t| t.into())
-        .collect();
+    let param_metadata: Vec<BasicMetadataTypeEnum> =
+        param_types.into_iter().map(|t| t.into()).collect();
 
     let fn_type = return_ty.fn_type(&param_metadata, false);
     let fn_value = ctx.module.add_function(&func.name, fn_type, None);
@@ -80,15 +78,11 @@ fn define_function(
     ctx: &mut CodegenCtx,
     func: &FunctionDecl<Type>,
     registry: &TypeRegistry,
-    program: &Program<Type>
+    program: &Program<Type>,
 ) -> Result<(), CodegenError> {
-    let fn_value = ctx
-        .functions
-        .get(&func.name)
-        .cloned()
-        .ok_or_else(|| {
-            CodegenError::llvm_verification(format!("function '{}' not declared", func.name))
-        })?;
+    let fn_value = ctx.functions.get(&func.name).cloned().ok_or_else(|| {
+        CodegenError::llvm_verification(format!("function '{}' not declared", func.name))
+    })?;
 
     let entry_bb = ctx.context.append_basic_block(fn_value, "entry");
     ctx.builder.position_at_end(entry_bb);
@@ -99,9 +93,9 @@ fn define_function(
     lower_ctx.push_scope();
 
     // Retrieve the function signature from the registry to get parameter types.
-    let sig = registry
-        .lookup_function(&func.name)
-        .ok_or_else(|| CodegenError::llvm_verification(format!("function '{}' not in registry", func.name)))?;
+    let sig = registry.lookup_function(&func.name).ok_or_else(|| {
+        CodegenError::llvm_verification(format!("function '{}' not in registry", func.name))
+    })?;
 
     // Collect all parameter values.
     let param_values = fn_value.get_params();
@@ -113,22 +107,30 @@ fn define_function(
             .ok_or_else(|| CodegenError::llvm_verification(format!("missing parameter {}", i)))?;
         // Use lower_ctx.codegen instead of ctx to avoid mutable borrow conflict.
         let llvm_param_ty = utils::llvm_type(lower_ctx.codegen, registry, param_ty)?;
-        let alloca = lower_ctx.codegen.builder
+        let alloca = lower_ctx
+            .codegen
+            .builder
             .build_alloca(llvm_param_ty, param_name)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        lower_ctx.codegen.builder
+        lower_ctx
+            .codegen
+            .builder
             .build_store(alloca, *param_value)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        lower_ctx.scope_stack.declare(param_name, alloca, llvm_param_ty, param_ty.clone(), false);
+        lower_ctx
+            .scope_stack
+            .declare(param_name, alloca, llvm_param_ty, param_ty.clone(), false);
     }
 
     // Lower the function body.
     let body_value = lower_expr(&mut lower_ctx, &func.body)?;
-    
+
     lower_ctx.pop_scope()?; // Pop the function's parameter scope.
-    
+
     // Return the body value.
-    lower_ctx.codegen.builder
+    lower_ctx
+        .codegen
+        .builder
         .build_return(Some(&body_value))
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 

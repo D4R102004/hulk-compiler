@@ -20,9 +20,9 @@ use inkwell::values::BasicValueEnum;
 use hulk_ast::{BlockExpr, IfExpr, WhileExpr};
 use hulk_semantic::Type;
 
+use super::lower_expr;
 use crate::error::CodegenError;
 use crate::lower::{utils, LowerCtx};
-use super::lower_expr;
 
 /// Lowers a block expression (sequence of expressions).
 ///
@@ -58,11 +58,20 @@ pub fn lower_if<'ctx>(
     result_type: &Type,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     let result_ty = utils::llvm_type(ctx.codegen, ctx.registry, result_type)?;
-    let result_alloca = ctx.codegen.builder.build_alloca(result_ty, "if_result")
+    let result_alloca = ctx
+        .codegen
+        .builder
+        .build_alloca(result_ty, "if_result")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Current function to append basic blocks to.
-    let parent_fn = ctx.codegen.builder.get_insert_block().unwrap().get_parent().unwrap();
+    let parent_fn = ctx
+        .codegen
+        .builder
+        .get_insert_block()
+        .unwrap()
+        .get_parent()
+        .unwrap();
 
     // Condition block for the main if.
     let cond_val = lower_expr(ctx, &if_expr.condition)?;
@@ -70,10 +79,15 @@ pub fn lower_if<'ctx>(
 
     let then_bb = ctx.codegen.context.append_basic_block(parent_fn, "if_then");
     let else_bb = ctx.codegen.context.append_basic_block(parent_fn, "if_else");
-    let merge_bb = ctx.codegen.context.append_basic_block(parent_fn, "if_merge");
+    let merge_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "if_merge");
 
     // Branch on condition.
-    ctx.codegen.builder.build_conditional_branch(cond_int, then_bb, else_bb)
+    ctx.codegen
+        .builder
+        .build_conditional_branch(cond_int, then_bb, else_bb)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ─── Then branch ──────────────────────────────────────────────────────
@@ -81,9 +95,13 @@ pub fn lower_if<'ctx>(
     ctx.codegen.builder.position_at_end(then_bb);
     let then_val = lower_expr(ctx, &if_expr.then_branch)?;
     let then_boxed = utils::ensure_boxed(ctx, then_val, &if_expr.then_branch.anno, result_type)?;
-    ctx.codegen.builder.build_store(result_alloca, then_boxed)
+    ctx.codegen
+        .builder
+        .build_store(result_alloca, then_boxed)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    ctx.codegen.builder.build_unconditional_branch(merge_bb)
+    ctx.codegen
+        .builder
+        .build_unconditional_branch(merge_bb)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ─── Elif chain ──────────────────────────────────────────────────────
@@ -95,19 +113,31 @@ pub fn lower_if<'ctx>(
         let elif_cond = lower_expr(ctx, &elif.condition)?;
         let elif_cond_int = elif_cond.into_int_value();
 
-        let elif_then_bb = ctx.codegen.context.append_basic_block(parent_fn, &format!("elif_then_{}", idx));
-        let elif_next_bb = ctx.codegen.context.append_basic_block(parent_fn, &format!("elif_else_{}", idx));
+        let elif_then_bb = ctx
+            .codegen
+            .context
+            .append_basic_block(parent_fn, &format!("elif_then_{}", idx));
+        let elif_next_bb = ctx
+            .codegen
+            .context
+            .append_basic_block(parent_fn, &format!("elif_else_{}", idx));
 
-        ctx.codegen.builder.build_conditional_branch(elif_cond_int, elif_then_bb, elif_next_bb)
+        ctx.codegen
+            .builder
+            .build_conditional_branch(elif_cond_int, elif_then_bb, elif_next_bb)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
         // Elif body.
         ctx.codegen.builder.position_at_end(elif_then_bb);
         let elif_val = lower_expr(ctx, &elif.body)?;
         let elif_boxed = utils::ensure_boxed(ctx, elif_val, &elif.body.anno, result_type)?;
-        ctx.codegen.builder.build_store(result_alloca, elif_boxed)
+        ctx.codegen
+            .builder
+            .build_store(result_alloca, elif_boxed)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        ctx.codegen.builder.build_unconditional_branch(merge_bb)
+        ctx.codegen
+            .builder
+            .build_unconditional_branch(merge_bb)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
         current_else_bb = elif_next_bb;
@@ -118,15 +148,22 @@ pub fn lower_if<'ctx>(
     ctx.codegen.builder.position_at_end(current_else_bb);
     let else_val = lower_expr(ctx, &if_expr.else_branch)?;
     let else_boxed = utils::ensure_boxed(ctx, else_val, &if_expr.else_branch.anno, result_type)?;
-    ctx.codegen.builder.build_store(result_alloca, else_boxed)
+    ctx.codegen
+        .builder
+        .build_store(result_alloca, else_boxed)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    ctx.codegen.builder.build_unconditional_branch(merge_bb)
+    ctx.codegen
+        .builder
+        .build_unconditional_branch(merge_bb)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ─── Merge ──────────────────────────────────────────────────────────
 
     ctx.codegen.builder.position_at_end(merge_bb);
-    let result = ctx.codegen.builder.build_load(result_ty, result_alloca, "if_result_load")
+    let result = ctx
+        .codegen
+        .builder
+        .build_load(result_ty, result_alloca, "if_result_load")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     Ok(result)
 }
@@ -150,7 +187,10 @@ pub fn lower_while<'ctx>(
     result_type: &Type,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     let result_ty = utils::llvm_type(ctx.codegen, ctx.registry, result_type)?;
-    let result_alloca = ctx.codegen.builder.build_alloca(result_ty, "while_result")
+    let result_alloca = ctx
+        .codegen
+        .builder
+        .build_alloca(result_ty, "while_result")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Store a default value in case the body is never executed.
@@ -161,21 +201,42 @@ pub fn lower_while<'ctx>(
             let ptr_type = ctx.codegen.context.ptr_type(Default::default());
             ptr_type.const_null().into()
         }
-        _ => return Err(CodegenError::unsupported (
-            format!("while loop result type {} not supported", result_type),
-            Some(while_expr.body.span),
-        )),
+        _ => {
+            return Err(CodegenError::unsupported(
+                format!("while loop result type {} not supported", result_type),
+                Some(while_expr.body.span),
+            ))
+        }
     };
-    ctx.codegen.builder.build_store(result_alloca, default_val)
+    ctx.codegen
+        .builder
+        .build_store(result_alloca, default_val)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-    let parent_fn = ctx.codegen.builder.get_insert_block().unwrap().get_parent().unwrap();
-    let cond_bb = ctx.codegen.context.append_basic_block(parent_fn, "while_cond");
-    let body_bb = ctx.codegen.context.append_basic_block(parent_fn, "while_body");
-    let exit_bb = ctx.codegen.context.append_basic_block(parent_fn, "while_exit");
+    let parent_fn = ctx
+        .codegen
+        .builder
+        .get_insert_block()
+        .unwrap()
+        .get_parent()
+        .unwrap();
+    let cond_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "while_cond");
+    let body_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "while_body");
+    let exit_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "while_exit");
 
     // Jump to condition.
-    ctx.codegen.builder.build_unconditional_branch(cond_bb)
+    ctx.codegen
+        .builder
+        .build_unconditional_branch(cond_bb)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ─── Condition block ────────────────────────────────────────────────
@@ -183,7 +244,9 @@ pub fn lower_while<'ctx>(
     ctx.codegen.builder.position_at_end(cond_bb);
     let cond_val = lower_expr(ctx, &while_expr.condition)?;
     let cond_int = cond_val.into_int_value();
-    ctx.codegen.builder.build_conditional_branch(cond_int, body_bb, exit_bb)
+    ctx.codegen
+        .builder
+        .build_conditional_branch(cond_int, body_bb, exit_bb)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ─── Body block ─────────────────────────────────────────────────────
@@ -191,15 +254,22 @@ pub fn lower_while<'ctx>(
     ctx.codegen.builder.position_at_end(body_bb);
     let body_val = lower_expr(ctx, &while_expr.body)?;
     let body_boxed = utils::ensure_boxed(ctx, body_val, &while_expr.body.anno, result_type)?;
-    ctx.codegen.builder.build_store(result_alloca, body_boxed)
+    ctx.codegen
+        .builder
+        .build_store(result_alloca, body_boxed)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    ctx.codegen.builder.build_unconditional_branch(cond_bb)
+    ctx.codegen
+        .builder
+        .build_unconditional_branch(cond_bb)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // ─── Exit block ─────────────────────────────────────────────────────
 
     ctx.codegen.builder.position_at_end(exit_bb);
-    let result = ctx.codegen.builder.build_load(result_ty, result_alloca, "while_result_load")
+    let result = ctx
+        .codegen
+        .builder
+        .build_load(result_ty, result_alloca, "while_result_load")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     Ok(result)
 }

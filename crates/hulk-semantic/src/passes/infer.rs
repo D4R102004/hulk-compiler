@@ -22,10 +22,10 @@ use hulk_ast::{
 
 use crate::environment::Environment;
 use crate::error::{SemanticError, SemanticErrorKind};
+use crate::passes::infer_utils::{patch_unknowns, recompute_annotations};
 use crate::typed::{TypedExpr, TypedProgram};
 use crate::types::registry::{MethodSignature, TypeRegistry};
 use crate::types::{lowest_common_ancestor, Type};
-use crate::passes::infer_utils::{patch_unknowns, recompute_annotations};
 
 // -----------------------------------------------------------------------------
 // Public entry point
@@ -313,7 +313,7 @@ impl<'a> InferState<'a> {
     /// arguments are reported using the span of the entire type declaration.
     fn infer_type(&mut self, ty_decl: &TypeDecl, decl_span: SourceSpan) -> TypeDecl<Type> {
         let name = ty_decl.name.clone();
-        
+
         // Perform two passes to ensure that every attribute is resolved before any method body sees it.
 
         // ─── First pass: infer all attributes ────────────────────────────────
@@ -2528,7 +2528,7 @@ mod tests {
         );
     }
 
-    /// Validates that multi‑function inference (where the return type of one function 
+    /// Validates that multi‑function inference (where the return type of one function
     /// is used as an argument to another) works correctly after types recomputation.
     #[test]
     fn min_max_clamp_inference() {
@@ -2573,9 +2573,11 @@ mod tests {
                 .lookup_function(name)
                 .expect("function should exist");
             assert_eq!(
-                sig.return_type, Type::Number,
+                sig.return_type,
+                Type::Number,
                 "{} should return Number, got {:?}",
-                name, sig.return_type
+                name,
+                sig.return_type
             );
         }
     }

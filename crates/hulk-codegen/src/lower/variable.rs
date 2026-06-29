@@ -1,12 +1,12 @@
-use inkwell::values::BasicValueEnum;
 use hulk_ast::SourceSpan;
 use hulk_semantic::Type;
+use inkwell::values::BasicValueEnum;
 
-use crate::error::CodegenError;
-use crate::lower::LowerCtx;
-use crate::lower::utils::{convert_to_protocol, is_heap_allocated_type};
-use crate::lower::builtins::lookup_constant;
 use super::lower_expr;
+use crate::error::CodegenError;
+use crate::lower::builtins::lookup_constant;
+use crate::lower::utils::{convert_to_protocol, is_heap_allocated_type};
+use crate::lower::LowerCtx;
 
 /// Lowers a variable reference.
 ///
@@ -103,29 +103,23 @@ pub fn lower_assign_variable<'ctx>(
             .functions
             .get("hulk_rt_release")
             .cloned()
-            .ok_or_else(|| CodegenError::unsupported(
-                "hulk_rt_release not declared",
-                Some(span),
-            ))?;
-            ctx.codegen
-                .builder
-                .build_call(release_fn, &[old_val.into()], "release_old_var")
-                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            .ok_or_else(|| CodegenError::unsupported("hulk_rt_release not declared", Some(span)))?;
+        ctx.codegen
+            .builder
+            .build_call(release_fn, &[old_val.into()], "release_old_var")
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-            let retain_fn = ctx
-                .codegen
-                .functions
-                .get("hulk_rt_retain")
-                .cloned()
-                .ok_or_else(|| CodegenError::unsupported(
-                    "hulk_rt_retain not declared",
-                    Some(span),
-                ))?;
-            ctx.codegen
-                .builder
-                .build_call(retain_fn, &[stored_val.into()], "retain_new_var")
-                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        }
+        let retain_fn = ctx
+            .codegen
+            .functions
+            .get("hulk_rt_retain")
+            .cloned()
+            .ok_or_else(|| CodegenError::unsupported("hulk_rt_retain not declared", Some(span)))?;
+        ctx.codegen
+            .builder
+            .build_call(retain_fn, &[stored_val.into()], "retain_new_var")
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    }
 
     // 6. Store the (possibly converted) value.
     ctx.store_var(name, stored_val, Some(span))?;

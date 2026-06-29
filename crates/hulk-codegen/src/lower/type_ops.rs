@@ -1,12 +1,12 @@
 //! Lowering of type tests (`is`) and downcasts (`as`).
 
-use hulk_ast::{DowncastExpr, TypeTestExpr, SourceSpan};
+use hulk_ast::{DowncastExpr, SourceSpan, TypeTestExpr};
 use hulk_semantic::Type;
 
+use super::lower_expr;
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
 use crate::runtime_decls::ensure_decl;
-use super::lower_expr;
 
 /// Lowers a type test expression (`expr is Type`).
 ///
@@ -19,7 +19,8 @@ pub fn lower_typetest<'ctx>(
     let target_vtable = resolve_vtable(ctx, &type_test.type_name.name, Some(type_test.expr.span))?;
 
     let check_fn = ensure_decl(ctx.codegen, "hulk_rt_downcast_check")?;
-    let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![obj_ptr.into(), target_vtable.into()];
+    let args: Vec<inkwell::values::BasicMetadataValueEnum> =
+        vec![obj_ptr.into(), target_vtable.into()];
     let call_site = ctx
         .codegen
         .builder
@@ -41,7 +42,8 @@ pub fn lower_downcast<'ctx>(
     let target_vtable = resolve_vtable(ctx, &downcast.type_name.name, Some(downcast.expr.span))?;
 
     let check_fn = ensure_decl(ctx.codegen, "hulk_rt_downcast_check")?;
-    let args: Vec<inkwell::values::BasicMetadataValueEnum> = vec![obj_ptr.into(), target_vtable.into()];
+    let args: Vec<inkwell::values::BasicMetadataValueEnum> =
+        vec![obj_ptr.into(), target_vtable.into()];
     let call_site = ctx
         .codegen
         .builder
@@ -52,9 +54,18 @@ pub fn lower_downcast<'ctx>(
     // Branch: if ok, continue; else trap.
     let current_block = ctx.codegen.builder.get_insert_block().unwrap();
     let parent_fn = current_block.get_parent().unwrap();
-    let ok_bb = ctx.codegen.context.append_basic_block(parent_fn, "downcast_ok");
-    let trap_bb = ctx.codegen.context.append_basic_block(parent_fn, "downcast_trap");
-    let merge_bb = ctx.codegen.context.append_basic_block(parent_fn, "downcast_merge");
+    let ok_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "downcast_ok");
+    let trap_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "downcast_trap");
+    let merge_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "downcast_merge");
 
     let cond_int = is_ok.into_int_value();
     ctx.codegen
@@ -113,19 +124,11 @@ fn resolve_vtable<'ctx>(
     type_name: &str,
     span: Option<SourceSpan>,
 ) -> Result<inkwell::values::PointerValue<'ctx>, CodegenError> {
-    let layout = ctx
-        .codegen
-        .type_layouts
-        .get(type_name)
-        .ok_or_else(|| CodegenError::unsupported (
-            format!("no layout for type '{}'", type_name),
-            span
-        ))?;
-    let vtable_global = layout
-        .vtable_global
-        .ok_or_else(|| CodegenError::unsupported (
-            format!("vtable for '{}' not built", type_name),
-            span
-        ))?;
+    let layout = ctx.codegen.type_layouts.get(type_name).ok_or_else(|| {
+        CodegenError::unsupported(format!("no layout for type '{}'", type_name), span)
+    })?;
+    let vtable_global = layout.vtable_global.ok_or_else(|| {
+        CodegenError::unsupported(format!("vtable for '{}' not built", type_name), span)
+    })?;
     Ok(vtable_global.as_pointer_value())
 }

@@ -13,20 +13,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // ─── Type tags ─────────────────────────────────────────────────────────
 pub const TAG_STRING: u8 = 0;
 pub const TAG_VECTOR: u8 = 1;
-pub const TAG_BOX: u8   = 2;
+pub const TAG_BOX: u8 = 2;
 pub const TAG_RANGE: u8 = 3;
-pub const TAG_NUMBER: u8 = 4;         // used inside HulkBox
-pub const TAG_BOOLEAN: u8 = 5;        // used inside HulkBox
-pub const TAG_DYN_VEC: u8 = 6;        // used for dynamic vectors (comprehensions)
+pub const TAG_NUMBER: u8 = 4; // used inside HulkBox
+pub const TAG_BOOLEAN: u8 = 5; // used inside HulkBox
+pub const TAG_DYN_VEC: u8 = 6; // used for dynamic vectors (comprehensions)
 pub const TAG_LITERAL_STRING: u8 = 7; // used for string literals (immutable, immortal)
-pub const TAG_OBJECT: u8 = 8;         // used for object instances
+pub const TAG_OBJECT: u8 = 8; // used for object instances
 
 // ─── Object header ─────────────────────────────────────────────────────
 #[repr(C)]
 pub struct ObjHeader {
     pub ref_count: i64,
-    pub gc_mark: u8,          // bool in C, stored as u8
-    pub type_tag: u8,         // 0 = String, 1 = Vector, 2 = Box
+    pub gc_mark: u8,  // bool in C, stored as u8
+    pub type_tag: u8, // 0 = String, 1 = Vector, 2 = Box
     pub next: *mut ObjHeader,
     pub vtable: *const (),
 }
@@ -59,9 +59,9 @@ pub struct HulkDynamicVector {
 #[repr(C)]
 pub struct HulkBox {
     pub header: ObjHeader,
-    pub original_tag: u8,    // TAG_NUMBER, TAG_BOOLEAN
+    pub original_tag: u8, // TAG_NUMBER, TAG_BOOLEAN
     pub _padding: [u8; 7],
-    pub payload: i64,        // bitcast of f64 or bool (as i64)
+    pub payload: i64, // bitcast of f64 or bool (as i64)
 }
 
 // ─── HulkRange ─────────────────────────────────────────────────────────
@@ -92,22 +92,27 @@ unsafe fn hulk_rt_string_from_bytes(data: &[u8]) -> *mut HulkString {
     }
     ptr::copy(data.as_ptr(), data_ptr, len as usize);
 
-    ptr::write(string_ptr, HulkString {
-        header: ObjHeader {
-            ref_count: 1,
-            gc_mark: 0,
-            type_tag: TAG_STRING,
-            next: ptr::null_mut(),
-            vtable: ptr::null(),
+    ptr::write(
+        string_ptr,
+        HulkString {
+            header: ObjHeader {
+                ref_count: 1,
+                gc_mark: 0,
+                type_tag: TAG_STRING,
+                next: ptr::null_mut(),
+                vtable: ptr::null(),
+            },
+            len,
+            data: data_ptr,
         },
-        len,
-        data: data_ptr,
-    });
+    );
     string_ptr
 }
 
 fn is_immortal_ptr(ptr: *mut std::ffi::c_void) -> bool {
-    if ptr.is_null() { return false; }
+    if ptr.is_null() {
+        return false;
+    }
     unsafe {
         let header = ptr as *mut ObjHeader;
         (*header).type_tag == TAG_LITERAL_STRING
@@ -115,11 +120,11 @@ fn is_immortal_ptr(ptr: *mut std::ffi::c_void) -> bool {
 }
 
 fn is_immortal_header(header: *mut ObjHeader) -> bool {
-    if header.is_null() { return false; }
-    unsafe {
-        (*header).type_tag == TAG_LITERAL_STRING
+    if header.is_null() {
+        return false;
     }
-} 
+    unsafe { (*header).type_tag == TAG_LITERAL_STRING }
+}
 
 // ─── Base runtime functions ──────────────────────────────────────────────
 
@@ -147,7 +152,9 @@ pub extern "C" fn hulk_rt_string_concat(
     a: *mut std::ffi::c_void,
     b: *mut std::ffi::c_void,
 ) -> *mut std::ffi::c_void {
-    if a.is_null() || b.is_null() { return ptr::null_mut(); }
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
     unsafe {
         let sa = a as *mut HulkString;
         let sb = b as *mut HulkString;
@@ -179,7 +186,9 @@ pub extern "C" fn hulk_rt_string_concat_space(
     a: *mut std::ffi::c_void,
     b: *mut std::ffi::c_void,
 ) -> *mut std::ffi::c_void {
-    if a.is_null() || b.is_null() { return ptr::null_mut(); }
+    if a.is_null() || b.is_null() {
+        return ptr::null_mut();
+    }
     unsafe {
         let sa = a as *mut HulkString;
         let sb = b as *mut HulkString;
@@ -203,14 +212,20 @@ pub extern "C" fn hulk_rt_string_equals(
     a: *mut std::ffi::c_void,
     b: *mut std::ffi::c_void,
 ) -> bool {
-    if a.is_null() && b.is_null() { return true; }
-    if a.is_null() || b.is_null() { return false; }
+    if a.is_null() && b.is_null() {
+        return true;
+    }
+    if a.is_null() || b.is_null() {
+        return false;
+    }
     unsafe {
         let sa = a as *mut HulkString;
         let sb = b as *mut HulkString;
         let len_a = (*sa).len as usize;
         let len_b = (*sb).len as usize;
-        if len_a != len_b { return false; }
+        if len_a != len_b {
+            return false;
+        }
         let slice_a = std::slice::from_raw_parts((*sa).data, len_a);
         let slice_b = std::slice::from_raw_parts((*sb).data, len_b);
         slice_a == slice_b
@@ -284,9 +299,12 @@ pub extern "C" fn hulk_rt_print(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_
                 print!("[");
                 for i in 0..len {
                     let elem = hulk_rt_vector_get(vec, i);
-                    if i > 0 { print!(", "); }
-                    if elem.is_null() { print!("null"); }
-                    else {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    if elem.is_null() {
+                        print!("null");
+                    } else {
                         // For simplicity, print the address; can be improved later.
                         print!("<obj@{:p}>", elem);
                     }
@@ -317,25 +335,30 @@ pub extern "C" fn hulk_rt_print(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_
 /// deallocation function.
 #[no_mangle]
 pub extern "C" fn hulk_rt_alloc(size: i64) -> *mut std::ffi::c_void {
-    if size <= 0 { return ptr::null_mut(); }
+    if size <= 0 {
+        return ptr::null_mut();
+    }
     let layout = Layout::from_size_align(size as usize, 8).unwrap_or_else(|_| Layout::new::<u8>());
     unsafe { alloc(layout) as *mut std::ffi::c_void }
 }
 
 /// Increments the reference count of an object pointed to by `ptr`.
-/// 
+///
 /// Useful for managing the lifetime of objects in a reference-counted memory model.
 #[no_mangle]
 pub extern "C" fn hulk_rt_retain(ptr: *mut std::ffi::c_void) {
-    if
-        ptr.is_null() ||
-        is_immortal_ptr(ptr) // Retain is a no-op for immortal types.
-    { return; }
+    if ptr.is_null() || is_immortal_ptr(ptr)
+    // Retain is a no-op for immortal types.
+    {
+        return;
+    }
     unsafe {
         let header = ptr as *mut ObjHeader;
         // WHY: ref_count == -1 is the immortal sentinel (CPython PEP 683 pattern).
         // String literals live in read-only .rodata; attempting to write would SIGSEGV.
-        if (*header).ref_count == -1 { return; }
+        if (*header).ref_count == -1 {
+            return;
+        }
         (*header).ref_count += 1;
     }
 }
@@ -344,15 +367,18 @@ pub extern "C" fn hulk_rt_retain(ptr: *mut std::ffi::c_void) {
 /// If the reference count reaches zero, the object is deallocated.
 #[no_mangle]
 pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
-    if
-        ptr.is_null() ||
-        is_immortal_ptr(ptr) // Retain is a no-op for immortal types.
-    { return; }
+    if ptr.is_null() || is_immortal_ptr(ptr)
+    // Retain is a no-op for immortal types.
+    {
+        return;
+    }
     unsafe {
         let header = ptr as *mut ObjHeader;
         // WHY: ref_count == -1 is the immortal sentinel (CPython PEP 683 pattern).
         // String literals live in read-only .rodata; attempting to write would SIGSEGV.
-        if (*header).ref_count == -1 { return; }
+        if (*header).ref_count == -1 {
+            return;
+        }
         (*header).ref_count -= 1;
         if (*header).ref_count == 0 {
             match (*header).type_tag {
@@ -390,7 +416,9 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
                 }
                 _ => {
                     // Fallback for unknown tags (should not happen)
-                    if is_immortal_header(header) { return; } // Do not deallocate immortal objects
+                    if is_immortal_header(header) {
+                        return;
+                    } // Do not deallocate immortal objects
                     let layout = Layout::from_size_align(32, 8).unwrap();
                     dealloc(ptr as *mut u8, layout);
                 }
@@ -404,19 +432,25 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
 /// Allocates a HulkVector and its data array, sets initial refcount to 1, and returns the pointer.
 #[no_mangle]
 pub extern "C" fn hulk_rt_vector_new(len: i64) -> *mut HulkVector {
-    if len < 0 { return ptr::null_mut(); }
+    if len < 0 {
+        return ptr::null_mut();
+    }
 
     // 1. Allocate the HulkVector struct itself.
     let vec_layout = Layout::new::<HulkVector>();
     let vec_ptr = unsafe { alloc(vec_layout) as *mut HulkVector };
-    if vec_ptr.is_null() { return ptr::null_mut(); }
+    if vec_ptr.is_null() {
+        return ptr::null_mut();
+    }
 
     // 2. Allocate the data array (len pointers).
     let data_layout = Layout::array::<*mut std::ffi::c_void>(len as usize)
         .unwrap_or_else(|_| Layout::new::<*mut std::ffi::c_void>());
     let data_ptr = unsafe { alloc(data_layout) as *mut *mut std::ffi::c_void };
     if data_ptr.is_null() {
-        unsafe { dealloc(vec_ptr as *mut u8, vec_layout); }
+        unsafe {
+            dealloc(vec_ptr as *mut u8, vec_layout);
+        }
         return ptr::null_mut();
     }
 
@@ -427,18 +461,21 @@ pub extern "C" fn hulk_rt_vector_new(len: i64) -> *mut HulkVector {
 
     // 4. Fill the vector fields.
     unsafe {
-        ptr::write(vec_ptr, HulkVector {
-            header: ObjHeader {
-                ref_count: 1,
-                gc_mark: 0,
-                type_tag: TAG_VECTOR,
-                next: ptr::null_mut(),
-                vtable: ptr::null(),
+        ptr::write(
+            vec_ptr,
+            HulkVector {
+                header: ObjHeader {
+                    ref_count: 1,
+                    gc_mark: 0,
+                    type_tag: TAG_VECTOR,
+                    next: ptr::null_mut(),
+                    vtable: ptr::null(),
+                },
+                len,
+                current_index: -1, // To call next() before current() is mandatory.
+                data: data_ptr,
             },
-            len,
-            current_index: -1, // To call next() before current() is mandatory.
-            data: data_ptr,
-        });
+        );
     }
 
     vec_ptr
@@ -450,7 +487,9 @@ pub extern "C" fn hulk_rt_vector_new(len: i64) -> *mut HulkVector {
 /// `vec` must be a valid, aligned pointer to a live `HulkVector`.
 #[no_mangle]
 pub unsafe extern "C" fn hulk_rt_vector_size(vec: *mut HulkVector) -> i64 {
-    if vec.is_null() { return 0; }
+    if vec.is_null() {
+        return 0;
+    }
     (*vec).len
 }
 
@@ -461,12 +500,19 @@ pub unsafe extern "C" fn hulk_rt_vector_size(vec: *mut HulkVector) -> i64 {
 /// # Safety
 /// `vec` must be null or a valid, aligned pointer to a live `HulkVector`.
 #[no_mangle]
-pub unsafe extern "C" fn hulk_rt_vector_get(vec: *mut HulkVector, index: i64) -> *mut std::ffi::c_void {
-    if vec.is_null() || index < 0 { return ptr::null_mut(); }
+pub unsafe extern "C" fn hulk_rt_vector_get(
+    vec: *mut HulkVector,
+    index: i64,
+) -> *mut std::ffi::c_void {
+    if vec.is_null() || index < 0 {
+        return ptr::null_mut();
+    }
     unsafe {
         let data = (*vec).data;
         let len = (*vec).len;
-        if index >= len { return ptr::null_mut(); }
+        if index >= len {
+            return ptr::null_mut();
+        }
         *data.offset(index as isize)
     }
 }
@@ -481,11 +527,15 @@ pub unsafe extern "C" fn hulk_rt_vector_set(
     index: i64,
     value: *mut std::ffi::c_void,
 ) {
-    if vec.is_null() || index < 0 { return; }
+    if vec.is_null() || index < 0 {
+        return;
+    }
     unsafe {
         let data = (*vec).data;
         let len = (*vec).len;
-        if index >= len { return; }
+        if index >= len {
+            return;
+        }
 
         let slot = data.offset(index as isize);
         let old = *slot;
@@ -511,7 +561,9 @@ pub unsafe extern "C" fn hulk_rt_vector_set(
 /// `vec` must be null or a valid, aligned pointer to a live `HulkVector`.
 #[no_mangle]
 pub unsafe extern "C" fn hulk_rt_vector_next(vec: *mut HulkVector) -> bool {
-    if vec.is_null() { return false; }
+    if vec.is_null() {
+        return false;
+    }
     unsafe {
         let idx = (*vec).current_index + 1; // Vectors are 0-indexed
         if idx < (*vec).len {
@@ -532,11 +584,15 @@ pub unsafe extern "C" fn hulk_rt_vector_next(vec: *mut HulkVector) -> bool {
 /// `vec` must be null or a valid, aligned pointer to a live `HulkVector`.
 #[no_mangle]
 pub unsafe extern "C" fn hulk_rt_vector_current(vec: *mut HulkVector) -> *mut std::ffi::c_void {
-    if vec.is_null() { return ptr::null_mut(); }
+    if vec.is_null() {
+        return ptr::null_mut();
+    }
     unsafe {
         let idx = (*vec).current_index;
         let pos = idx;
-        if pos < 0 || pos >= (*vec).len { return ptr::null_mut(); }
+        if pos < 0 || pos >= (*vec).len {
+            return ptr::null_mut();
+        }
         let data = (*vec).data;
         *data.offset(pos as isize)
     }
@@ -568,7 +624,9 @@ pub unsafe extern "C" fn hulk_rt_dynamic_vector_append(
     vec: *mut HulkDynamicVector,
     value: *mut std::ffi::c_void,
 ) {
-    if vec.is_null() { return; }
+    if vec.is_null() {
+        return;
+    }
     unsafe {
         let vec_ref = &mut *vec;
         vec_ref.data.push(value);
@@ -586,7 +644,9 @@ pub unsafe extern "C" fn hulk_rt_dynamic_vector_append(
 pub unsafe extern "C" fn hulk_rt_dynamic_vector_to_vector(
     dyn_vec: *mut HulkDynamicVector,
 ) -> *mut HulkVector {
-    if dyn_vec.is_null() { return ptr::null_mut(); }
+    if dyn_vec.is_null() {
+        return ptr::null_mut();
+    }
     unsafe {
         let vec_ref = &mut *dyn_vec;
         let len = vec_ref.data.len() as i64;
@@ -612,20 +672,25 @@ pub unsafe extern "C" fn hulk_rt_dynamic_vector_to_vector(
 pub extern "C" fn hulk_rt_range_new(min: f64, max: f64) -> *mut HulkRange {
     let layout = Layout::new::<HulkRange>();
     let ptr = unsafe { alloc(layout) as *mut HulkRange };
-    if ptr.is_null() { return ptr::null_mut(); }
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
     unsafe {
-        ptr::write(ptr, HulkRange {
-            header: ObjHeader {
-                ref_count: 1,
-                gc_mark: 0,
-                type_tag: TAG_RANGE,
-                next: ptr::null_mut(),
-                vtable: ptr::null(),
+        ptr::write(
+            ptr,
+            HulkRange {
+                header: ObjHeader {
+                    ref_count: 1,
+                    gc_mark: 0,
+                    type_tag: TAG_RANGE,
+                    next: ptr::null_mut(),
+                    vtable: ptr::null(),
+                },
+                min,
+                max,
+                current: min - 1.0,
             },
-            min,
-            max,
-            current: min - 1.0,
-        });
+        );
     }
     ptr
 }
@@ -638,7 +703,9 @@ pub extern "C" fn hulk_rt_range_new(min: f64, max: f64) -> *mut HulkRange {
 /// `rng` must be null or a valid, aligned pointer to a live `HulkRange`.
 #[no_mangle]
 pub unsafe extern "C" fn hulk_rt_range_next(rng: *mut HulkRange) -> bool {
-    if rng.is_null() { return false; }
+    if rng.is_null() {
+        return false;
+    }
     unsafe {
         (*rng).current += 1.0;
         (*rng).current < (*rng).max
@@ -654,7 +721,9 @@ pub unsafe extern "C" fn hulk_rt_range_next(rng: *mut HulkRange) -> bool {
 /// `rng` must be null or a valid, aligned pointer to a live `HulkRange`.
 #[no_mangle]
 pub unsafe extern "C" fn hulk_rt_range_current(rng: *mut HulkRange) -> f64 {
-    if rng.is_null() { return 0.0; }
+    if rng.is_null() {
+        return 0.0;
+    }
     unsafe { (*rng).current }
 }
 
@@ -662,23 +731,33 @@ pub unsafe extern "C" fn hulk_rt_range_current(rng: *mut HulkRange) -> f64 {
 
 /// Returns the square root of a floating-point number.
 #[no_mangle]
-pub extern "C" fn hulk_rt_sqrt(x: f64) -> f64 { x.sqrt() }
+pub extern "C" fn hulk_rt_sqrt(x: f64) -> f64 {
+    x.sqrt()
+}
 
 /// Returns the sine of a floating-point number (in radians).
 #[no_mangle]
-pub extern "C" fn hulk_rt_sin(x: f64) -> f64 { x.sin() }
+pub extern "C" fn hulk_rt_sin(x: f64) -> f64 {
+    x.sin()
+}
 
 /// Returns the cosine of a floating-point number (in radians).
 #[no_mangle]
-pub extern "C" fn hulk_rt_cos(x: f64) -> f64 { x.cos() }
+pub extern "C" fn hulk_rt_cos(x: f64) -> f64 {
+    x.cos()
+}
 
 /// Returns the exponential of a floating-point number (e^x).
 #[no_mangle]
-pub extern "C" fn hulk_rt_exp(x: f64) -> f64 { x.exp() }
+pub extern "C" fn hulk_rt_exp(x: f64) -> f64 {
+    x.exp()
+}
 
 /// Returns the logarithm of a floating-point number with the specified base.
 #[no_mangle]
-pub extern "C" fn hulk_rt_log(base: f64, x: f64) -> f64 { x.log(base) }
+pub extern "C" fn hulk_rt_log(base: f64, x: f64) -> f64 {
+    x.log(base)
+}
 
 // ─── Random Number Generator ─────────────────────────────────────────────────
 
@@ -697,7 +776,10 @@ fn init_rng() {
 /// Returns the next 64-bit random number.
 fn next_u64() -> u64 {
     let mut x = RNG_STATE.load(Ordering::Relaxed);
-    if x == 0 { init_rng(); x = RNG_STATE.load(Ordering::Relaxed); }
+    if x == 0 {
+        init_rng();
+        x = RNG_STATE.load(Ordering::Relaxed);
+    }
     x ^= x << 7;
     x ^= x >> 9;
     RNG_STATE.store(x, Ordering::Relaxed);
@@ -758,10 +840,12 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::os::unix::io::FromRawFd;
-    
+
     /// Helper: Converts a pointer to a `HulkString` into a Rust `String`.
     unsafe fn string_from_ptr(ptr: *mut std::ffi::c_void) -> String {
-        if ptr.is_null() { return String::new(); }
+        if ptr.is_null() {
+            return String::new();
+        }
         let s = ptr as *mut HulkString;
         let len = (*s).len as usize;
         let data = std::slice::from_raw_parts((*s).data, len);
@@ -800,7 +884,8 @@ mod tests {
             // Read from the read end of the pipe.
             let mut buffer = Vec::new();
             let mut file = std::fs::File::from_raw_fd(pipe_fds[0]);
-            file.read_to_end(&mut buffer).expect("reading from pipe failed");
+            file.read_to_end(&mut buffer)
+                .expect("reading from pipe failed");
 
             String::from_utf8_lossy(&buffer).to_string()
         }
@@ -812,7 +897,7 @@ mod tests {
         hulk_rt_noop();
     }
 
-    /// Smoke test that verifies that calling hulk_rt_retain and hulk_rt_release 
+    /// Smoke test that verifies that calling hulk_rt_retain and hulk_rt_release
     /// on a valid pointer does not cause an immediate runtime failure.
     /// Minimal sanity check for the memory management infrastructure.
     #[test]
@@ -883,7 +968,7 @@ mod tests {
             hulk_rt_release(c);
         }
     }
-    
+
     // ─── Vector tests ────────────────────────────────────────────────────────────────
 
     /// Tests that creating a vector, setting values, and retrieving them works as expected.
@@ -943,7 +1028,7 @@ mod tests {
             hulk_rt_release(vec as *mut std::ffi::c_void);
         }
     }
-    
+
     // ─── Range tests ────────────────────────────────────────────────────────────────
 
     /// Tests that creating a range and iterating over its values works as expected.
@@ -969,7 +1054,7 @@ mod tests {
         assert!(!rng.is_null());
         // SAFETY: rng is non-null (checked above) and points to a valid HulkRange.
         assert!(unsafe { !hulk_rt_range_next(rng) });
-        hulk_rt_release(rng as *mut std::ffi::c_void);  
+        hulk_rt_release(rng as *mut std::ffi::c_void);
     }
 
     // ─── Math tests ────────────────────────────────────────────────────────────
@@ -1027,7 +1112,7 @@ mod tests {
         hulk_rt_release(s);
     }
 
-    /// Tests that printing outputs the expected string representation. 
+    /// Tests that printing outputs the expected string representation.
     #[test]
     fn print_returns_its_argument() {
         let s = hulk_rt_number_to_string(99.0);
@@ -1073,5 +1158,4 @@ mod tests {
             hulk_rt_release(v3);
         }
     }
-
 }

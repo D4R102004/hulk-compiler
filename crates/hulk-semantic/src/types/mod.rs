@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 pub mod registry;
-pub use registry::{TypeRegistry, TypeInfo, seeded_registry};
+pub use registry::{seeded_registry, TypeInfo, TypeRegistry};
 
 // -----------------------------------------------------------------------------
 // Type enum

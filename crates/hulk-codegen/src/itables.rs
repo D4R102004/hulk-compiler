@@ -66,10 +66,7 @@ pub fn protocol_method_slot(
 ///   - Explicit casts (`as`) to a protocol type.
 ///
 /// The result is a set of pairs used to generate interface tables.
-fn collect_used_pairs(
-    program: &Program<Type>,
-    registry: &TypeRegistry,
-) -> HashSet<ItablePair> {
+fn collect_used_pairs(program: &Program<Type>, registry: &TypeRegistry) -> HashSet<ItablePair> {
     let mut pairs = HashSet::new();
 
     /// Records a conversion from `src_ty` to `target_ty` if the source is a concrete
@@ -154,12 +151,24 @@ fn collect_used_pairs(
             ExprKind::If(if_expr) => {
                 walk_expr(&if_expr.condition, None, registry, pairs, visitor);
                 let branch_expected = Some(&expr.anno);
-                walk_expr(&if_expr.then_branch, branch_expected, registry, pairs, visitor);
+                walk_expr(
+                    &if_expr.then_branch,
+                    branch_expected,
+                    registry,
+                    pairs,
+                    visitor,
+                );
                 for elif in &if_expr.elif_branches {
                     walk_expr(&elif.condition, None, registry, pairs, visitor);
                     walk_expr(&elif.body, branch_expected, registry, pairs, visitor);
                 }
-                walk_expr(&if_expr.else_branch, branch_expected, registry, pairs, visitor);
+                walk_expr(
+                    &if_expr.else_branch,
+                    branch_expected,
+                    registry,
+                    pairs,
+                    visitor,
+                );
             }
 
             ExprKind::While(while_expr) => {
@@ -181,7 +190,9 @@ fn collect_used_pairs(
                         Vec::new()
                     }
                 } else if let ExprKind::Member(member) = &call.callee.kind {
-                    if let Some(method_sig) = registry.lookup_method(&member.object.anno, &member.member) {
+                    if let Some(method_sig) =
+                        registry.lookup_method(&member.object.anno, &member.member)
+                    {
                         method_sig.params.iter().map(|(_, ty)| ty.clone()).collect()
                     } else {
                         Vec::new()
@@ -254,7 +265,10 @@ fn collect_used_pairs(
     }
 
     // Visitor closure that records conversions when an expression is used in a protocol context.
-    let mut visitor = |expr: &Expr<Type>, expected: Option<&Type>, registry: &TypeRegistry, pairs: &mut HashSet<ItablePair>| {
+    let mut visitor = |expr: &Expr<Type>,
+                       expected: Option<&Type>,
+                       registry: &TypeRegistry,
+                       pairs: &mut HashSet<ItablePair>| {
         if let Some(expected_ty) = expected {
             record_conversion(&expr.anno, expected_ty, registry, pairs);
         }
@@ -330,9 +344,9 @@ fn build_itable_for_pair(
     type_name: &str,
     protocol_name: &str,
 ) -> Result<(), CodegenError> {
-    let proto_info = registry
-        .lookup_protocol(protocol_name)
-        .ok_or_else(|| CodegenError::llvm_verification(format!("protocol `{}` not found", protocol_name)))?;
+    let proto_info = registry.lookup_protocol(protocol_name).ok_or_else(|| {
+        CodegenError::llvm_verification(format!("protocol `{}` not found", protocol_name))
+    })?;
 
     // Use the flattened method table (includes inherited methods).
     let proto_methods = &proto_info.flattened_methods;
@@ -344,7 +358,8 @@ fn build_itable_for_pair(
     let mut fn_ptrs = Vec::new();
 
     for method_name in proto_methods.keys() {
-        let fn_val = get_method_function(ctx, registry, type_name, method_name, Some(proto_info.span))?;
+        let fn_val =
+            get_method_function(ctx, registry, type_name, method_name, Some(proto_info.span))?;
         let fn_ptr = fn_val.as_global_value().as_pointer_value();
         fn_ptrs.push(fn_ptr);
     }
@@ -358,7 +373,8 @@ fn build_itable_for_pair(
     global.set_constant(true);
 
     // Store for later lookup.
-    ctx.itables.insert((type_name.to_string(), protocol_name.to_string()), global);
+    ctx.itables
+        .insert((type_name.to_string(), protocol_name.to_string()), global);
 
     Ok(())
 }
@@ -390,17 +406,18 @@ fn get_method_function<'ctx>(
         ("Vector", "current") => "hulk_rt_vector_current",
         ("Range", "next") => "hulk_rt_range_next",
         ("Range", "current") => "hulk_rt_range_current",
-        _ => return Err(CodegenError::unsupported(
-            format!("method `{}` of type `{}` not found", method_name, type_name),
-            span
-        )),
+        _ => {
+            return Err(CodegenError::unsupported(
+                format!("method `{}` of type `{}` not found", method_name, type_name),
+                span,
+            ))
+        }
     };
 
-    ctx.functions
-        .get(runtime_name)
-        .cloned()
-        .ok_or_else(|| CodegenError::unsupported(
+    ctx.functions.get(runtime_name).cloned().ok_or_else(|| {
+        CodegenError::unsupported(
             format!("runtime function `{}` not declared", runtime_name),
-            span
-        ))
-    }
+            span,
+        )
+    })
+}

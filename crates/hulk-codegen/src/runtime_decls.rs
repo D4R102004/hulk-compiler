@@ -14,7 +14,9 @@ use crate::error::CodegenError;
 
 /// Declares `hulk_rt_alloc(size: i64) -> ptr`.
 pub fn declare_alloc<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_alloc") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_alloc") {
+        return f;
+    }
     let i64_type = ctx.context.i64_type();
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[i64_type.into()], false);
@@ -23,7 +25,9 @@ pub fn declare_alloc<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_retain(ptr) -> void`.
 pub fn declare_retain<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_retain") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_retain") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let void_type = ctx.context.void_type();
     let fn_type = void_type.fn_type(&[ptr_type.into()], false);
@@ -32,7 +36,9 @@ pub fn declare_retain<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_release(ptr) -> void`.
 pub fn declare_release<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_release") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_release") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let void_type = ctx.context.void_type();
     let fn_type = void_type.fn_type(&[ptr_type.into()], false);
@@ -41,60 +47,80 @@ pub fn declare_release<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_string_concat(a: ptr, b: ptr) -> ptr`.
 pub fn declare_string_concat<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_string_concat") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_string_concat") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
-    ctx.module.add_function("hulk_rt_string_concat", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_string_concat", fn_type, None)
 }
 
 /// Declares `hulk_rt_string_concat_space(a: ptr, b: ptr) -> ptr`.
 pub fn declare_string_concat_space<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_string_concat_space") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_string_concat_space") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
-    ctx.module.add_function("hulk_rt_string_concat_space", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_string_concat_space", fn_type, None)
 }
 
 /// Declares `hulk_rt_number_to_string(num: f64) -> ptr`.
 pub fn declare_number_to_string<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_number_to_string") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_number_to_string") {
+        return f;
+    }
     let f64_type = ctx.context.f64_type();
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[f64_type.into()], false);
-    ctx.module.add_function("hulk_rt_number_to_string", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_number_to_string", fn_type, None)
 }
 
 /// Declares `hulk_rt_bool_to_string(b: i1) -> ptr`.
 pub fn declare_bool_to_string<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_bool_to_string") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_bool_to_string") {
+        return f;
+    }
     let bool_type = ctx.context.bool_type();
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[bool_type.into()], false);
-    ctx.module.add_function("hulk_rt_bool_to_string", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_bool_to_string", fn_type, None)
 }
 
 /// Declares `hulk_rt_downcast_check(obj: ptr, target_vtable: ptr) -> i1`.
 pub fn declare_downcast_check<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_downcast_check") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_downcast_check") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let bool_type = ctx.context.bool_type();
     let fn_type = bool_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
-    ctx.module.add_function("hulk_rt_downcast_check", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_downcast_check", fn_type, None)
 }
 
 /// Declares `hulk_rt_downcast_fail() -> !` (noreturn).
 pub fn declare_downcast_fail<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_downcast_fail") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_downcast_fail") {
+        return f;
+    }
     let void_type = ctx.context.void_type();
     let fn_type = void_type.fn_type(&[], false);
-    ctx.module.add_function("hulk_rt_downcast_fail", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_downcast_fail", fn_type, None)
 }
 
 // ─── Vector builtin methods ───────────────────────────────────────────────
 
 /// Declares `hulk_rt_vector_new(len: i64) -> ptr`.
 pub fn declare_vector_new<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_vector_new") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_vector_new") {
+        return f;
+    }
     let i64_type = ctx.context.i64_type();
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[i64_type.into()], false);
@@ -103,16 +129,21 @@ pub fn declare_vector_new<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_vector_size(vec: ptr) -> i64`.
 pub fn declare_vector_size<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_vector_size") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_vector_size") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let i64_type = ctx.context.i64_type();
     let fn_type = i64_type.fn_type(&[ptr_type.into()], false);
-    ctx.module.add_function("hulk_rt_vector_size", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_vector_size", fn_type, None)
 }
 
 /// Declares `hulk_rt_vector_get(vec: ptr, index: i64) -> ptr`.
 pub fn declare_vector_get<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_vector_get") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_vector_get") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let i64_type = ctx.context.i64_type();
     let fn_type = ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
@@ -121,7 +152,9 @@ pub fn declare_vector_get<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_vector_set(vec: ptr, index: i64, value: ptr) -> void`.
 pub fn declare_vector_set<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_vector_set") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_vector_set") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let i64_type = ctx.context.i64_type();
     let void_type = ctx.context.void_type();
@@ -131,26 +164,34 @@ pub fn declare_vector_set<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_vector_next(vec: ptr) -> i1`.
 pub fn declare_vector_next<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_vector_next") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_vector_next") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let bool_type = ctx.context.bool_type();
     let fn_type = bool_type.fn_type(&[ptr_type.into()], false);
-    ctx.module.add_function("hulk_rt_vector_next", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_vector_next", fn_type, None)
 }
 
 /// Declares `hulk_rt_vector_current(vec: ptr) -> ptr`.
 pub fn declare_vector_current<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_vector_current") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_vector_current") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[ptr_type.into()], false);
-    ctx.module.add_function("hulk_rt_vector_current", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_vector_current", fn_type, None)
 }
 
 // ─── Range builtin methods ────────────────────────────────────────────────
 
 /// Declares `hulk_rt_range_new(min: f64, max: f64) -> ptr`.
 pub fn declare_range_new<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_range_new") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_range_new") {
+        return f;
+    }
     let f64_type = ctx.context.f64_type();
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[f64_type.into(), f64_type.into()], false);
@@ -159,7 +200,9 @@ pub fn declare_range_new<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_range_next(rng: ptr) -> i1`.
 pub fn declare_range_next<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_range_next") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_range_next") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let bool_type = ctx.context.bool_type();
     let fn_type = bool_type.fn_type(&[ptr_type.into()], false);
@@ -168,18 +211,23 @@ pub fn declare_range_next<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_range_current(rng: ptr) -> f64`.
 pub fn declare_range_current<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_range_current") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_range_current") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let f64_type = ctx.context.f64_type();
     let fn_type = f64_type.fn_type(&[ptr_type.into()], false);
-    ctx.module.add_function("hulk_rt_range_current", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_range_current", fn_type, None)
 }
 
 // ─── Match fail trap ──────────────────────────────────────────────────────
 
 /// Declares `hulk_rt_match_fail() -> !` (noreturn).
 pub fn declare_match_fail<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_match_fail") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_match_fail") {
+        return f;
+    }
     let void_type = ctx.context.void_type();
     let fn_type = void_type.fn_type(&[], false);
     ctx.module.add_function("hulk_rt_match_fail", fn_type, None)
@@ -189,45 +237,59 @@ pub fn declare_match_fail<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_string_equals(a: ptr, b: ptr) -> i1`.
 pub fn declare_string_equals<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_string_equals") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_string_equals") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let bool_type = ctx.context.bool_type();
     let fn_type = bool_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
-    ctx.module.add_function("hulk_rt_string_equals", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_string_equals", fn_type, None)
 }
 
 // ─── Dynamic vector helpers for comprehensions ──────────────────────────
 
 /// Declares `hulk_rt_dynamic_vector_new() -> ptr`.
 pub fn declare_dynamic_vector_new<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_dynamic_vector_new") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_dynamic_vector_new") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[], false);
-    ctx.module.add_function("hulk_rt_dynamic_vector_new", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_dynamic_vector_new", fn_type, None)
 }
 
 /// Declares `hulk_rt_dynamic_vector_append(vec: ptr, value: ptr) -> void`.
 pub fn declare_dynamic_vector_append<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_dynamic_vector_append") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_dynamic_vector_append") {
+        return f;
+    }
     let void_type = ctx.context.void_type();
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = void_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
-    ctx.module.add_function("hulk_rt_dynamic_vector_append", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_dynamic_vector_append", fn_type, None)
 }
 
 /// Declares `hulk_rt_dynamic_vector_to_vector(vec: ptr) -> ptr`.
 pub fn declare_dynamic_vector_to_vector<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_dynamic_vector_to_vector") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_dynamic_vector_to_vector") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[ptr_type.into()], false);
-    ctx.module.add_function("hulk_rt_dynamic_vector_to_vector", fn_type, None)
+    ctx.module
+        .add_function("hulk_rt_dynamic_vector_to_vector", fn_type, None)
 }
 
 // ─── Print ──────────────────────────────────────────────────────────────────
 
 /// Declares `hulk_rt_print(obj: ptr) -> ptr`.
 pub fn declare_print<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_print") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_print") {
+        return f;
+    }
     let ptr_type = ctx.context.ptr_type(Default::default());
     let fn_type = ptr_type.fn_type(&[ptr_type.into()], false);
     ctx.module.add_function("hulk_rt_print", fn_type, None)
@@ -237,7 +299,9 @@ pub fn declare_print<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_sqrt(x: f64) -> f64`.
 pub fn declare_sqrt<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_sqrt") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_sqrt") {
+        return f;
+    }
     let f64_type = ctx.context.f64_type();
     let fn_type = f64_type.fn_type(&[f64_type.into()], false);
     ctx.module.add_function("hulk_rt_sqrt", fn_type, None)
@@ -245,7 +309,9 @@ pub fn declare_sqrt<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_sin(x: f64) -> f64`.
 pub fn declare_sin<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_sin") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_sin") {
+        return f;
+    }
     let f64_type = ctx.context.f64_type();
     let fn_type = f64_type.fn_type(&[f64_type.into()], false);
     ctx.module.add_function("hulk_rt_sin", fn_type, None)
@@ -253,7 +319,9 @@ pub fn declare_sin<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_cos(x: f64) -> f64`.
 pub fn declare_cos<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_cos") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_cos") {
+        return f;
+    }
     let f64_type = ctx.context.f64_type();
     let fn_type = f64_type.fn_type(&[f64_type.into()], false);
     ctx.module.add_function("hulk_rt_cos", fn_type, None)
@@ -261,7 +329,9 @@ pub fn declare_cos<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_exp(x: f64) -> f64`.
 pub fn declare_exp<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_exp") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_exp") {
+        return f;
+    }
     let f64_type = ctx.context.f64_type();
     let fn_type = f64_type.fn_type(&[f64_type.into()], false);
     ctx.module.add_function("hulk_rt_exp", fn_type, None)
@@ -269,7 +339,9 @@ pub fn declare_exp<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_log(base: f64, x: f64) -> f64`.
 pub fn declare_log<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_log") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_log") {
+        return f;
+    }
     let f64_type = ctx.context.f64_type();
     let fn_type = f64_type.fn_type(&[f64_type.into(), f64_type.into()], false);
     ctx.module.add_function("hulk_rt_log", fn_type, None)
@@ -277,7 +349,9 @@ pub fn declare_log<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
 
 /// Declares `hulk_rt_rand() -> f64`.
 pub fn declare_rand<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(f) = ctx.module.get_function("hulk_rt_rand") { return f; }
+    if let Some(f) = ctx.module.get_function("hulk_rt_rand") {
+        return f;
+    }
     let f64_type = ctx.context.f64_type();
     let fn_type = f64_type.fn_type(&[], false);
     ctx.module.add_function("hulk_rt_rand", fn_type, None)
@@ -308,7 +382,7 @@ pub fn ensure_decl<'ctx>(
         other => {
             return Err(CodegenError::unsupported(
                 format!("no on-demand declaration recipe for `{other}`"),
-                None
+                None,
             ));
         }
     };
@@ -336,59 +410,75 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
     // ─── Basic runtime functions ──────────────────────────────────────────
 
     let concat = declare_string_concat(ctx);
-    ctx.functions.insert("hulk_rt_string_concat".to_string(), concat);
+    ctx.functions
+        .insert("hulk_rt_string_concat".to_string(), concat);
 
     let concat_space = declare_string_concat_space(ctx);
-    ctx.functions.insert("hulk_rt_string_concat_space".to_string(), concat_space);
+    ctx.functions
+        .insert("hulk_rt_string_concat_space".to_string(), concat_space);
 
     let num_to_str = declare_number_to_string(ctx);
-    ctx.functions.insert("hulk_rt_number_to_string".to_string(), num_to_str);
+    ctx.functions
+        .insert("hulk_rt_number_to_string".to_string(), num_to_str);
 
     let bool_to_str = declare_bool_to_string(ctx);
-    ctx.functions.insert("hulk_rt_bool_to_string".to_string(), bool_to_str);
+    ctx.functions
+        .insert("hulk_rt_bool_to_string".to_string(), bool_to_str);
 
     let str_eq = declare_string_equals(ctx);
-    ctx.functions.insert("hulk_rt_string_equals".to_string(), str_eq);
+    ctx.functions
+        .insert("hulk_rt_string_equals".to_string(), str_eq);
 
     // ─── Vector builtin methods ───────────────────────────────────────────
 
     let vec_new = declare_vector_new(ctx);
     ctx.functions.insert("Vector::new".to_string(), vec_new);
-    ctx.functions.insert("hulk_rt_vector_new".to_string(), vec_new);
+    ctx.functions
+        .insert("hulk_rt_vector_new".to_string(), vec_new);
 
     let vec_size = declare_vector_size(ctx);
     ctx.functions.insert("Vector::size".to_string(), vec_size);
-    ctx.functions.insert("hulk_rt_vector_size".to_string(), vec_size);
+    ctx.functions
+        .insert("hulk_rt_vector_size".to_string(), vec_size);
 
     let vec_get = declare_vector_get(ctx);
     ctx.functions.insert("Vector::get".to_string(), vec_get);
-    ctx.functions.insert("hulk_rt_vector_get".to_string(), vec_get);
+    ctx.functions
+        .insert("hulk_rt_vector_get".to_string(), vec_get);
 
     let vec_set = declare_vector_set(ctx);
     ctx.functions.insert("Vector::set".to_string(), vec_set);
-    ctx.functions.insert("hulk_rt_vector_set".to_string(), vec_set);
+    ctx.functions
+        .insert("hulk_rt_vector_set".to_string(), vec_set);
 
     let vec_next = declare_vector_next(ctx);
     ctx.functions.insert("Vector::next".to_string(), vec_next);
-    ctx.functions.insert("hulk_rt_vector_next".to_string(), vec_next);
+    ctx.functions
+        .insert("hulk_rt_vector_next".to_string(), vec_next);
 
     let vec_current = declare_vector_current(ctx);
-    ctx.functions.insert("Vector::current".to_string(), vec_current);
-    ctx.functions.insert("hulk_rt_vector_current".to_string(), vec_current);
+    ctx.functions
+        .insert("Vector::current".to_string(), vec_current);
+    ctx.functions
+        .insert("hulk_rt_vector_current".to_string(), vec_current);
 
     // ─── Range builtin methods ────────────────────────────────────────────
 
     let range_new = declare_range_new(ctx);
-    ctx.functions.insert("hulk_rt_range_new".to_string(), range_new);
+    ctx.functions
+        .insert("hulk_rt_range_new".to_string(), range_new);
     ctx.functions.insert("Range::new".to_string(), range_new); // optional for consistency
 
     let range_next = declare_range_next(ctx);
     ctx.functions.insert("Range::next".to_string(), range_next);
-    ctx.functions.insert("hulk_rt_range_next".to_string(), range_next);
+    ctx.functions
+        .insert("hulk_rt_range_next".to_string(), range_next);
 
     let range_current = declare_range_current(ctx);
-    ctx.functions.insert("Range::current".to_string(), range_current);
-    ctx.functions.insert("hulk_rt_range_current".to_string(), range_current);
+    ctx.functions
+        .insert("Range::current".to_string(), range_current);
+    ctx.functions
+        .insert("hulk_rt_range_current".to_string(), range_current);
 
     // ─── Print ─────────────────────────────────────────────────────────────
 
@@ -414,4 +504,4 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
 
     let rand_fn = declare_rand(ctx);
     ctx.functions.insert("hulk_rt_rand".to_string(), rand_fn);
-    }
+}
