@@ -25,6 +25,7 @@ use crate::error::{SemanticError, SemanticErrorKind};
 use crate::typed::{TypedExpr, TypedProgram};
 use crate::types::registry::{MethodSignature, TypeRegistry};
 use crate::types::{lowest_common_ancestor, Type};
+use crate::passes::infer_utils::{patch_unknowns, recompute_annotations};
 
 // -----------------------------------------------------------------------------
 // Public entry point
@@ -135,14 +136,14 @@ impl<'a> InferState<'a> {
         let name = func.name.clone();
         let return_type_was_unknown = func.return_type.is_none();
 
-        // Seed the registry with Unknown for the return type if unannotated.
+        // Seed registry with Unknown for the return type if unannotated.
         if return_type_was_unknown {
             if let Some(sig) = self.registry.functions.get_mut(&name) {
                 sig.return_type = Type::Unknown;
             }
         }
 
-        self.param_constraints.clear(); // Clear entries from previous functions
+        self.param_constraints.clear();
         self.recursion_stack.insert(name.clone());
 
         let mut env = Environment::new();
@@ -165,11 +166,11 @@ impl<'a> InferState<'a> {
             }
         }
 
-        // Infer the body (this builds the typed tree with placeholder Unknowns).
+        // 1. Infer the body (placeholder Unknowns).
         let typed_body = self.infer_expr(&func.body, &mut env);
         self.recursion_stack.remove(&name);
 
-        // Resolve unannotated parameters from constraints.
+        // 2. Resolve unannotated parameters from constraints.
         let mut resolved_param_types = Vec::new();
         for p in &func.params {
             let mut ty = p
@@ -211,18 +212,18 @@ impl<'a> InferState<'a> {
             resolved_param_types.push((p.name.clone(), ty));
         }
 
-        // Update the registry with resolved parameter types.
-        if let Some(sig) = self.registry.functions.get_mut(&name) {
-            for (i, (_, ty)) in resolved_param_types.iter().enumerate() {
-                if i < sig.params.len() {
-                    sig.params[i].1 = ty.clone();
-                }
-            }
-        }
+        let param_map: HashMap<String, Type> = resolved_param_types.iter().cloned().collect();
 
-        // Determine the final resolved return type.
+        // 3. Patch variables with their resolved types (recursive calls remain Unknown).
+        let mut patched_body = typed_body;
+        patch_unknowns(&mut patched_body, &param_map, &name, &Type::Unknown);
+
+        // 4. Recompute annotations of the whole body (this fixes intermediate nodes).
+        recompute_annotations(&mut patched_body, self.registry);
+
+        // 5. Determine final return type from the recomputed body.
         let resolved_return_type = if return_type_was_unknown {
-            let body_type = typed_body.anno.clone();
+            let body_type = patched_body.anno.clone();
             if matches!(body_type, Type::Unknown | Type::Error) {
                 self.errors.push(SemanticError::error(
                     SemanticErrorKind::CannotInferType {
@@ -232,19 +233,16 @@ impl<'a> InferState<'a> {
                 ));
                 Type::Error
             } else {
-                if let Some(sig) = self.registry.functions.get_mut(&name) {
-                    sig.return_type = body_type.clone();
-                }
                 body_type
             }
         } else {
             let annotated = func.return_type.as_ref().unwrap();
             let ann_type = self.resolve_type_ref(annotated);
-            if !typed_body.anno.conforms_to(&ann_type, self.registry) {
+            if !patched_body.anno.conforms_to(&ann_type, self.registry) {
                 self.errors.push(SemanticError::error(
                     SemanticErrorKind::TypeMismatch {
                         expected: ann_type.clone(),
-                        found: typed_body.anno.clone(),
+                        found: patched_body.anno.clone(),
                     },
                     func.body.span,
                 ));
@@ -252,7 +250,16 @@ impl<'a> InferState<'a> {
             ann_type
         };
 
-        // If this function is a method, update the method signature in the type's methods.
+        // 6. Update registry with resolved parameter and return types.
+        if let Some(sig) = self.registry.functions.get_mut(&name) {
+            for (i, (_, ty)) in resolved_param_types.iter().enumerate() {
+                if i < sig.params.len() {
+                    sig.params[i].1 = ty.clone();
+                }
+            }
+            sig.return_type = resolved_return_type.clone();
+        }
+
         if let Some(owner) = &self.current_type_owner {
             if let Some(type_info) = self.registry.lookup_type_mut(owner) {
                 if let Some(method_sig) = type_info.methods.get_mut(&name) {
@@ -277,11 +284,7 @@ impl<'a> InferState<'a> {
             }
         }
 
-        // Build a map of parameter names to resolved types for patching.
-        let param_map: HashMap<String, Type> = resolved_param_types.into_iter().collect();
-
-        // Patch stale Unknown placeholders in the typed body.
-        let mut patched_body = typed_body;
+        // 7. Patch recursive calls with the now‑known return type.
         patch_unknowns(&mut patched_body, &param_map, &name, &resolved_return_type);
 
         // Preserve original syntactic annotations in the typed AST.
@@ -310,12 +313,24 @@ impl<'a> InferState<'a> {
     /// arguments are reported using the span of the entire type declaration.
     fn infer_type(&mut self, ty_decl: &TypeDecl, decl_span: SourceSpan) -> TypeDecl<Type> {
         let name = ty_decl.name.clone();
+        
+        // Perform two passes to ensure that every attribute is resolved before any method body sees it.
 
-        // Infer each member.
+        // ─── First pass: infer all attributes ────────────────────────────────
         let mut typed_members = Vec::new();
         for member in &ty_decl.members {
-            let typed = self.infer_type_member(member, &name);
-            typed_members.push(typed);
+            if let TypeMemberKind::Attribute(_) = &member.kind {
+                let typed = self.infer_type_member(member, &name);
+                typed_members.push(typed);
+            }
+        }
+
+        // ─── Second pass: infer all methods ──────────────────────────────────
+        for member in &ty_decl.members {
+            if let TypeMemberKind::Method(_) = &member.kind {
+                let typed = self.infer_type_member(member, &name);
+                typed_members.push(typed);
+            }
         }
 
         // Infer parent constructor arguments (if any) in a scope containing
@@ -488,11 +503,21 @@ impl<'a> InferState<'a> {
             let ty = binding.ty.clone();
             typed_expr(ExprKind::Variable(name.to_string()), ty, span)
         } else {
-            // Check for global constants (zero-arity functions like PI, E)
+            // Check if it is a function in the registry.
             if let Some(sig) = self.registry.lookup_function(name) {
-                if sig.params.is_empty() {
+                if sig.is_constant {
+                    // Constants are values, not callables.
                     let ty = sig.return_type.clone();
                     return typed_expr(ExprKind::Variable(name.to_string()), ty, span);
+                } else {
+                    // All other functions are callables.
+                    let param_types = sig.params.iter().map(|(_, ty)| ty.clone()).collect();
+                    let return_type = sig.return_type.clone();
+                    let func_type = Type::Function {
+                        params: param_types,
+                        return_type: Box::new(return_type),
+                    };
+                    return typed_expr(ExprKind::Variable(name.to_string()), func_type, span);
                 }
             }
             self.errors.push(SemanticError::error(
@@ -1197,36 +1222,6 @@ impl<'a> InferState<'a> {
             );
         }
 
-        // ─── Special case: global function call ─────────────────────────────
-
-        // Global functions (like `print`) are not values; they are only callable, and their
-        // return type is known from the registry, not from a `Type::Function` annotation.
-        if let ExprKind::Variable(name) = &call.callee.kind {
-            if let Some(sig) = self.registry.lookup_function(name) {
-                let params: Vec<(String, Type)> = sig.params.clone();
-                let return_type = sig.return_type.clone();
-                let typed_callee = typed_expr(
-                    ExprKind::Variable(name.clone()),
-                    sig.return_type.clone(),
-                    call.callee.span,
-                );
-
-                let mut typed_args = Vec::new();
-                for arg in &call.args {
-                    typed_args.push(self.infer_expr(arg, env));
-                }
-                self.check_call_arity_and_types(&typed_args, &params, call.callee.span);
-                return typed_expr(
-                    ExprKind::Call(CallExpr {
-                        callee: Box::new(typed_callee),
-                        args: typed_args,
-                    }),
-                    return_type,
-                    call.callee.span,
-                );
-            }
-        }
-
         // ─── Infer the callee expression ─────────────────────────────────────
 
         let typed_callee = self.infer_expr(&call.callee, env);
@@ -1907,236 +1902,6 @@ fn typed_expr(kind: ExprKind<Type>, anno: Type, span: SourceSpan) -> TypedExpr {
     TypedExpr { kind, anno, span }
 }
 
-/// Walks a typed expression and replaces `Type::Unknown` annotations with
-/// resolved types for parameters and self‑recursive calls.
-fn patch_unknowns(
-    expr: &mut TypedExpr,
-    param_types: &HashMap<String, Type>,
-    current_function: &str,
-    return_type: &Type,
-) {
-    // Patch the current node if it's a variable or a recursive call.
-    match &mut expr.kind {
-        ExprKind::Variable(name) => {
-            if let Some(ty) = param_types.get(name) {
-                expr.anno = ty.clone();
-            }
-        }
-        ExprKind::Call(call) => {
-            if let ExprKind::Variable(callee_name) = &call.callee.kind {
-                if callee_name == current_function {
-                    expr.anno = return_type.clone();
-                    call.callee.anno = return_type.clone(); // patch the nested callee too
-                }
-            }
-            // Cover methods that call themselves (e. g. via self.m())
-            if let ExprKind::Member(member) = &call.callee.kind {
-                if member.member == *current_function {
-                    if let ExprKind::SelfRef = member.object.kind {
-                        expr.anno = return_type.clone();
-                        call.callee.anno = return_type.clone();
-                    }
-                }
-            }
-            // Recurse into children.
-            patch_unknowns(&mut call.callee, param_types, current_function, return_type);
-            for arg in &mut call.args {
-                patch_unknowns(arg, param_types, current_function, return_type);
-            }
-            // Return early because we already recursed into children.
-            return;
-        }
-        _ => {}
-    }
-
-    // For all other node types, recurse into their children.
-    match &mut expr.kind {
-        ExprKind::Unary(unary) => {
-            patch_unknowns(&mut unary.expr, param_types, current_function, return_type);
-        }
-        ExprKind::Binary(binary) => {
-            patch_unknowns(&mut binary.left, param_types, current_function, return_type);
-            patch_unknowns(
-                &mut binary.right,
-                param_types,
-                current_function,
-                return_type,
-            );
-        }
-        ExprKind::Let(let_expr) => {
-            for binding in &mut let_expr.bindings {
-                patch_unknowns(
-                    &mut binding.initializer,
-                    param_types,
-                    current_function,
-                    return_type,
-                );
-            }
-            patch_unknowns(
-                &mut let_expr.body,
-                param_types,
-                current_function,
-                return_type,
-            );
-        }
-        ExprKind::Assign(assign) => {
-            patch_unknowns(
-                &mut assign.value,
-                param_types,
-                current_function,
-                return_type,
-            );
-            // Target contains expressions; patch them.
-            match &mut assign.target {
-                AssignTarget::Variable(_) => {}
-                AssignTarget::Member { object, .. } => {
-                    patch_unknowns(object, param_types, current_function, return_type);
-                }
-                AssignTarget::Index { object, index } => {
-                    patch_unknowns(object, param_types, current_function, return_type);
-                    patch_unknowns(index, param_types, current_function, return_type);
-                }
-            }
-        }
-        ExprKind::Block(block) => {
-            for e in &mut block.expressions {
-                patch_unknowns(e, param_types, current_function, return_type);
-            }
-        }
-        ExprKind::If(if_expr) => {
-            patch_unknowns(
-                &mut if_expr.condition,
-                param_types,
-                current_function,
-                return_type,
-            );
-            patch_unknowns(
-                &mut if_expr.then_branch,
-                param_types,
-                current_function,
-                return_type,
-            );
-            for elif in &mut if_expr.elif_branches {
-                patch_unknowns(
-                    &mut elif.condition,
-                    param_types,
-                    current_function,
-                    return_type,
-                );
-                patch_unknowns(&mut elif.body, param_types, current_function, return_type);
-            }
-            patch_unknowns(
-                &mut if_expr.else_branch,
-                param_types,
-                current_function,
-                return_type,
-            );
-        }
-        ExprKind::While(while_expr) => {
-            patch_unknowns(
-                &mut while_expr.condition,
-                param_types,
-                current_function,
-                return_type,
-            );
-            patch_unknowns(
-                &mut while_expr.body,
-                param_types,
-                current_function,
-                return_type,
-            );
-        }
-        ExprKind::For(for_expr) => {
-            patch_unknowns(
-                &mut for_expr.iterable,
-                param_types,
-                current_function,
-                return_type,
-            );
-            patch_unknowns(
-                &mut for_expr.body,
-                param_types,
-                current_function,
-                return_type,
-            );
-        }
-        ExprKind::Call(call) => {
-            // We already handled Call in the earlier match; this is a catch‑all for safety.
-            patch_unknowns(&mut call.callee, param_types, current_function, return_type);
-            for arg in &mut call.args {
-                patch_unknowns(arg, param_types, current_function, return_type);
-            }
-        }
-        ExprKind::Member(member) => {
-            patch_unknowns(
-                &mut member.object,
-                param_types,
-                current_function,
-                return_type,
-            );
-        }
-        ExprKind::New(new_expr) => {
-            for arg in &mut new_expr.args {
-                patch_unknowns(arg, param_types, current_function, return_type);
-            }
-        }
-        ExprKind::TypeTest(type_test) => {
-            patch_unknowns(
-                &mut type_test.expr,
-                param_types,
-                current_function,
-                return_type,
-            );
-        }
-        ExprKind::Downcast(downcast) => {
-            patch_unknowns(
-                &mut downcast.expr,
-                param_types,
-                current_function,
-                return_type,
-            );
-        }
-        ExprKind::Vector(vector) => match vector {
-            VectorExpr::Literal(items) => {
-                for item in items {
-                    patch_unknowns(item, param_types, current_function, return_type);
-                }
-            }
-            VectorExpr::Comprehension(comp) => {
-                patch_unknowns(&mut comp.expr, param_types, current_function, return_type);
-                patch_unknowns(
-                    &mut comp.iterable,
-                    param_types,
-                    current_function,
-                    return_type,
-                );
-            }
-        },
-        ExprKind::Index(index) => {
-            patch_unknowns(
-                &mut index.object,
-                param_types,
-                current_function,
-                return_type,
-            );
-            patch_unknowns(&mut index.index, param_types, current_function, return_type);
-        }
-        ExprKind::Match(match_expr) => {
-            patch_unknowns(
-                &mut match_expr.value,
-                param_types,
-                current_function,
-                return_type,
-            );
-            for case in &mut match_expr.cases {
-                patch_unknowns(&mut case.body, param_types, current_function, return_type);
-            }
-        }
-        // Leaves: Literal, Variable, SelfRef, BaseRef already handled above.
-        _ => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2744,15 +2509,15 @@ mod tests {
     /// Tests that a method reference is correctly typed as a function
     /// by using it in a context that expects a function type.
     #[test]
-    #[ignore = "parser does not support function type annotations yet"]
     fn method_reference_type_is_function() {
         let src = "
             type A {
                 f(): Number => 42;
             }
             let a = new A() in {
-                let g: (): Number = a.f;   // explicit function type annotation
-                print(g());
+                let g = a.f in {
+                    print(g());
+                }
             }
         ";
         let result = analyze(&parse(Lexer::new(src).tokenize().unwrap()).unwrap());
@@ -2761,5 +2526,57 @@ mod tests {
             "method reference with function type annotation should work: {:?}",
             result.err()
         );
+    }
+
+    /// Validates that multi‑function inference (where the return type of one function 
+    /// is used as an argument to another) works correctly after types recomputation.
+    #[test]
+    fn min_max_clamp_inference() {
+        let src = r#"
+            function min_val(a, b) {
+                if (a < b) a else b;
+            }
+
+            function max_val(a, b) {
+                if (a > b) a else b;
+            }
+
+            function clamp(val, lo, hi) {
+                min_val(max_val(val, lo), hi);
+            }
+
+            {
+                if (min_val(3, 5) == 3) print("ok") else print("fail");
+                if (max_val(3, 5) == 5) print("ok") else print("fail");
+                if (clamp(10, 0, 5) == 5) print("ok") else print("fail");
+                if (clamp(-3, 0, 5) == 0) print("ok") else print("fail");
+                if (clamp(3, 0, 5) == 3) print("ok") else print("fail");
+            }
+        "#;
+
+        let tokens = Lexer::new(src).tokenize().unwrap();
+        let program = parse(tokens).unwrap();
+        let result = analyze(&program);
+
+        assert!(
+            result.is_ok(),
+            "min/max/clamp should infer correctly; got errors: {:?}",
+            result.err()
+        );
+
+        // Optional: verify the inferred return types are Number.
+        let verified = result.unwrap();
+        let registry = &verified.registry;
+
+        for name in ["min_val", "max_val", "clamp"] {
+            let sig = registry
+                .lookup_function(name)
+                .expect("function should exist");
+            assert_eq!(
+                sig.return_type, Type::Number,
+                "{} should return Number, got {:?}",
+                name, sig.return_type
+            );
+        }
     }
 }

@@ -110,6 +110,7 @@ fn collect_function(
         params,
         return_type,
         span: decl_span,
+        is_constant: false, // global functions are never treated as constants
     };
 
     registry.functions.insert(func.name.clone(), sig);

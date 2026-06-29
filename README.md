@@ -32,8 +32,11 @@ Source Code
        │
        ▼
 ┌──────────────┐
-│ hulk-codegen │  Generates executable output (not yet implemented)
-└──────────────┘
+│ hulk-codegen │  Lowers the typed AST to LLVM IR and emits Linux x86_64 object files
+└──────┬───────┘
+       │
+       ▼
+   Executable
 ```
 
 Each stage is its own crate and only depends on the ones before it:
@@ -44,12 +47,13 @@ Each stage is its own crate and only depends on the ones before it:
 | `hulk-lexer` | Done | `hulk-ast` |
 | `hulk-parser` | Done | `hulk-ast`, `hulk-lexer` |
 | `hulk-semantic` | Done | `hulk-ast` |
-| `hulk-codegen` | **Not yet implemented** (empty crate, scaffolded for future work) | `hulk-ast`, `hulk-semantic` |
+| `hulk-codegen` | Done — lowers to LLVM, emits Linux x86_64 object code, and links against the `hulk-rt` runtime; currently exposed via the smoke example and internal tests, not yet integrated into the CLI driver | `hulk-ast`, `hulk-semantic` |
 | `hulk-cli` | Wires lexer → parser → semantic analysis together | `hulk-lexer`, `hulk-parser`, `hulk-semantic` |
 
 ## Requirements
 
 - [Rust](https://rustup.rs/) 1.94.1 or later
+- LLVM 17 development headers and tools (for code generation). See the `hulk-codegen` README for platform-specific setup.
 
 ## Setup
 ```bash
@@ -59,6 +63,8 @@ cargo build --all
 ```
 
 ## Usage
+
+### Semantic validation (CLI)
 ```bash
 cargo run -p hulk-cli -- path/to/program.hulk
 # lexes, parses, and runs full semantic analysis on the program.
@@ -68,10 +74,17 @@ cargo run -p hulk-cli -- path/to/program.hulk
 #   each with its source location, and exits with a non-zero status.
 ```
 
-There is no code generation yet, so this does not produce an executable — it
-validates that the program is lexically, syntactically, and semantically
-correct, and shows the typed AST that a future `hulk-codegen` stage would
-consume.
+### Code generation (smoke test)
+```bash
+# Build the runtime library first
+cargo build -p hulk-rt --release
+# Run the smoke test, which compiles a minimal program to a Linux x86_64 executable
+cargo run -p hulk-codegen --example smoke --release
+# The resulting executable is placed in a temporary directory and can be copied
+# to a Linux environment (WSL/Ubuntu) for execution.
+```
+
+The compiler currently produces Linux x86_64 binaries, even when developed on Windows. The `smoke` example demonstrates the full end-to-end pipeline from IR to object file to linked executable. Full integration of code generation into the CLI driver is planned for the next phase.
 
 ## Current Frontend Status
 
@@ -135,14 +148,40 @@ constructs (`if`/`elif`/`else`, vector literals, `match`).
   observed by the other while both are mid-inference); this case currently
   produces a deterministic "cannot infer type" error.
 
+## Current Code Generation Status
+
+`hulk-codegen` lowers a fully type-checked `VerifiedProgram` into a Linux x86_64
+executable via LLVM. It supports:
+
+- **Object layout** – builds struct types, computes field offsets, and creates
+  vtables for virtual dispatch.
+- **Itables** – generates interface tables for protocol dispatch.
+- **Lowering** – translates all major HULK constructs to LLVM IR, including:
+  - Literals, variables, `let`, assignments, blocks.
+  - Unary/binary operators, arithmetic, comparisons, concatenation.
+  - Control flow (`if`/`elif`/`else`, `while`, `for`).
+  - Function and method calls (static, virtual, and `base` delegation).
+  - Object construction (`new`), member access, attribute privacy.
+  - Type tests (`is`) and downcasts (`as`), with runtime checks.
+  - Vector literals and comprehensions.
+  - Pattern matching (`match`) with exhaustive checking.
+- **Runtime integration** – declares and links against `hulk-rt`, a small
+  runtime library that provides allocation, string operations, and iteration
+  support.
+- **Cross‑compilation** – produces Linux ELF binaries even when developed on
+  Windows, leveraging LLVM's target machine and `clang`/`cc` as the linker.
+
+The codegen pipeline is exercised by the `smoke` example and by integration tests
+inside the crate. Full integration into the CLI driver is planned for the next
+phase.
+
 ## Running Tests
 ```bash
 cargo test --all
 ```
 
-This runs the lexer, parser, and semantic-analysis test suites, including
-`hulk-semantic`'s integration tests, which lex, parse, and `analyze` real
-HULK source end to end.
+This runs the lexer, parser, semantic-analysis, and code-generation test suites,
+including end-to-end tests that compile real HULK source to object files.
 
 ## Team
 

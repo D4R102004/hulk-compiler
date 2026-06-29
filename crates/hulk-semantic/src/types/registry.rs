@@ -38,6 +38,7 @@ pub struct TypeRegistry {
 /// Information about a user‑defined `type` declaration.
 #[derive(Debug, Clone)]
 pub struct TypeInfo {
+    /// The name of the type (as declared in source).
     pub name: String,
     /// Constructor parameters (type arguments) of the type.
     pub params: Vec<(String, Type)>,
@@ -52,6 +53,7 @@ pub struct TypeInfo {
     /// Flag to mark builtin value types (`Number`, `String`, `Boolean`)
     /// so that inheritance from them can be rejected.
     pub is_builtin_value: bool,
+    /// The source span of the `type` declaration.
     pub span: SourceSpan,
 }
 
@@ -94,6 +96,7 @@ pub struct FunctionSignature {
     pub params: Vec<(String, Type)>,
     pub return_type: Type,
     pub span: SourceSpan,
+    pub is_constant: bool,  // true for PI, E, etc.
 }
 
 // -----------------------------------------------------------------------------
@@ -319,6 +322,7 @@ pub fn seeded_registry() -> TypeRegistry {
             params: vec![("x".to_string(), Type::Object)],
             return_type: Type::Object,
             span: SourceSpan::new(0, 0),
+            is_constant: false,
         },
     );
 
@@ -330,6 +334,7 @@ pub fn seeded_registry() -> TypeRegistry {
                 params: vec![("x".to_string(), Type::Number)],
                 return_type: Type::Number,
                 span: SourceSpan::new(0, 0),
+                is_constant: false,
             },
         );
     }
@@ -344,6 +349,7 @@ pub fn seeded_registry() -> TypeRegistry {
             ],
             return_type: Type::Number,
             span: SourceSpan::new(0, 0),
+            is_constant: false,
         },
     );
 
@@ -354,6 +360,7 @@ pub fn seeded_registry() -> TypeRegistry {
             params: Vec::new(),
             return_type: Type::Number,
             span: SourceSpan::new(0, 0),
+            is_constant: false,
         },
     );
 
@@ -367,6 +374,7 @@ pub fn seeded_registry() -> TypeRegistry {
             ],
             return_type: Type::Named("Range".to_string()),
             span: SourceSpan::new(0, 0),
+            is_constant: false,
         },
     );
 
@@ -378,6 +386,7 @@ pub fn seeded_registry() -> TypeRegistry {
                 params: Vec::new(),
                 return_type: Type::Number,
                 span: SourceSpan::new(0, 0),
+                is_constant: true, // treated as constants
             },
         );
     }

@@ -25,3 +25,8 @@ target
 *.out
 *.toc
 *.gz
+hulk
+
+# Compiler outoput
+output.o
+output
