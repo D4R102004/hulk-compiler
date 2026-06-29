@@ -32,7 +32,7 @@ pub fn lower_vector<'ctx>(
 fn lower_vector_literal<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     items: &[Expr<Type>],
-    elem_type: &Type,
+    _elem_type: &Type, // The element type of the vector (kept for future generic vectors).
     span: SourceSpan,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     let len = items.len() as u64;
@@ -73,7 +73,8 @@ fn lower_vector_literal<'ctx>(
         let idx_val = ctx.codegen.context.i64_type().const_int(i as u64, false);
 
         let mut elem_val = lower_expr(ctx, item)?;
-        elem_val = ensure_boxed(ctx, elem_val, &item.anno, elem_type)?;
+        // If the element type is primitive (Number, Boolean), box it for storage in vector.
+        elem_val = ensure_boxed(ctx, elem_val, &item.anno, &Type::Object)?;
 
         ctx.codegen
             .builder
