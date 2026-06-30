@@ -25,6 +25,8 @@ pub struct CodegenCtx<'ctx> {
     pub functions: HashMap<String, FunctionValue<'ctx>>,
     /// Monotonically increasing id used to give every string-literal global a unique name
     string_literal_count: u32,
+    /// Monotonically increasing id used to give every lambda function a unique name
+    lambda_count: u32,
     /// Type layouts for user‑defined classes.
     pub type_layouts: HashMap<String, TypeLayout<'ctx>>,
     /// The target machine this module is built for. Owned here rather than re-created
@@ -50,6 +52,7 @@ impl<'ctx> CodegenCtx<'ctx> {
             builder,
             functions: HashMap::new(),
             string_literal_count: 0,
+            lambda_count: 0,
             type_layouts: HashMap::new(),
             target_machine,
             itables: HashMap::new(),
@@ -59,6 +62,12 @@ impl<'ctx> CodegenCtx<'ctx> {
     pub fn next_string_literal_id(&mut self) -> u32 {
         let id = self.string_literal_count;
         self.string_literal_count += 1;
+        id
+    }
+
+    pub fn next_lambda_id(&mut self) -> u32 {
+        let id = self.lambda_count;
+        self.lambda_count += 1;
         id
     }
 }

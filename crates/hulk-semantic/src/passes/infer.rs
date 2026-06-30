@@ -15,9 +15,9 @@ use std::collections::{HashMap, HashSet};
 use hulk_ast::{
     AssignExpr, AssignTarget, AttributeDecl, BinaryExpr, BinaryOp, BlockExpr, CallExpr,
     Declaration, DeclarationKind, DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl,
-    IfExpr, IndexExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr,
-    Pattern, Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeParent, TypeRef,
-    TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
+    IfExpr, IndexExpr, LambdaExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr,
+    NewExpr, Pattern, Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeParent,
+    TypeRef, TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
 };
 
 use crate::environment::Environment;
@@ -466,6 +466,7 @@ impl<'a> InferState<'a> {
             ExprKind::While(while_expr) => self.infer_while(while_expr, env),
             ExprKind::For(for_expr) => self.infer_for(for_expr, env),
             ExprKind::Call(call) => self.infer_call(call, env),
+            ExprKind::Lambda(lambda) => self.infer_lambda(lambda, span, env),
             ExprKind::Member(member) => self.infer_member(member, env),
             ExprKind::New(new_expr) => self.infer_new(new_expr, span, env),
             ExprKind::TypeTest(type_test) => self.infer_type_test(type_test, span, env),
@@ -487,6 +488,64 @@ impl<'a> InferState<'a> {
             Literal::Boolean(_) => Type::Boolean,
         };
         typed_expr(ExprKind::Literal(lit.clone()), ty, span)
+    }
+
+    // -------------------------------------------------------------------------
+    // Lambda expressions
+    // -------------------------------------------------------------------------
+
+    fn infer_lambda(
+        &mut self,
+        lambda: &LambdaExpr,
+        span: SourceSpan,
+        env: &mut Environment,
+    ) -> TypedExpr {
+        let mut lambda_env = env.clone();
+        lambda_env.push_scope();
+
+        let mut param_types = Vec::new();
+        for param in &lambda.params {
+            let ty = param
+                .type_annotation
+                .as_ref()
+                .map(|tr| self.resolve_type_ref(tr))
+                .unwrap_or(Type::Unknown);
+            lambda_env.declare(&param.name, ty.clone(), span);
+            param_types.push(ty);
+        }
+
+        let typed_body = self.infer_expr(&lambda.body, &mut lambda_env);
+
+        let return_type = if let Some(annotation) = &lambda.return_type {
+            let annotated = self.resolve_type_ref(annotation);
+            if !typed_body.anno.conforms_to(&annotated, self.registry) {
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::TypeMismatch {
+                        expected: annotated.clone(),
+                        found: typed_body.anno.clone(),
+                    },
+                    lambda.body.span,
+                ));
+            }
+            annotated
+        } else {
+            typed_body.anno.clone()
+        };
+
+        let lambda_type = Type::Function {
+            params: param_types,
+            return_type: Box::new(return_type),
+        };
+
+        typed_expr(
+            ExprKind::Lambda(LambdaExpr::new(
+                lambda.params.clone(),
+                lambda.return_type.clone(),
+                typed_body,
+            )),
+            lambda_type,
+            span,
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -1820,6 +1879,14 @@ impl<'a> InferState<'a> {
                     match tr.name.as_str() {
                         "Vector" if !args.is_empty() => Type::Vector(Box::new(args[0].clone())),
                         "Iterable" if !args.is_empty() => Type::Iterable(Box::new(args[0].clone())),
+                        "Function" if !args.is_empty() => {
+                            let return_type = args.last().cloned().unwrap_or(Type::Object);
+                            let params = args[..args.len() - 1].to_vec();
+                            Type::Function {
+                                params,
+                                return_type: Box::new(return_type),
+                            }
+                        }
                         _ => Type::Named(tr.name.clone()),
                     }
                 }
