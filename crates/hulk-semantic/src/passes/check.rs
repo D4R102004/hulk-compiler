@@ -247,6 +247,8 @@ impl<'a> Checker<'a> {
                 }
             }
 
+            ExprKind::Lambda(lambda) => self.check_expr(&lambda.body),
+
             ExprKind::Member(member) => {
                 // Recurse into the object (also checks for Unknown).
                 self.check_expr(&member.object);
@@ -435,6 +437,14 @@ impl<'a> Checker<'a> {
                     match tr.name.as_str() {
                         "Vector" if !args.is_empty() => Type::Vector(Box::new(args[0].clone())),
                         "Iterable" if !args.is_empty() => Type::Iterable(Box::new(args[0].clone())),
+                        "Function" if !args.is_empty() => {
+                            let return_type = args.last().cloned().unwrap_or(Type::Object);
+                            let params = args[..args.len() - 1].to_vec();
+                            Type::Function {
+                                params,
+                                return_type: Box::new(return_type),
+                            }
+                        }
                         _ => Type::Named(tr.name.clone()),
                     }
                 }
@@ -634,6 +644,7 @@ mod tests {
                 ExprKind::For(for_expr) => find_recursive_call(&for_expr.iterable)
                     .or_else(|| find_recursive_call(&for_expr.body)),
                 ExprKind::Member(member) => find_recursive_call(&member.object),
+                ExprKind::Lambda(lambda) => find_recursive_call(&lambda.body),
                 ExprKind::New(new_expr) => {
                     for arg in &new_expr.args {
                         if let Some(found) = find_recursive_call(arg) {

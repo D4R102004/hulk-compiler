@@ -262,6 +262,7 @@ where
                 traverse_expr(arg, f);
             }
         }
+        ExprKind::Lambda(lambda) => traverse_expr(&lambda.body, f),
         ExprKind::Member(member) => traverse_expr(&member.object, f),
         ExprKind::New(new_expr) => {
             for arg in &new_expr.args {

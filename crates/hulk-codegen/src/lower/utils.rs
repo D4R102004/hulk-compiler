@@ -300,6 +300,20 @@ pub fn resolve_type_ref_to_type(tr: &TypeRef, registry: &TypeRegistry) -> Type {
             Type::Vector(Box::new(Type::Unknown))
         }
         "Iterable" if !tr.args.is_empty() => Type::Iterable(Box::new(Type::Unknown)),
+        "Function" if !tr.args.is_empty() => {
+            let mut params = Vec::new();
+            for arg in &tr.args[..tr.args.len() - 1] {
+                params.push(resolve_type_ref_to_type(arg, registry));
+            }
+            let return_type = resolve_type_ref_to_type(
+                tr.args.last().expect("function type has return type"),
+                registry,
+            );
+            Type::Function {
+                params,
+                return_type: Box::new(return_type),
+            }
+        }
         name => {
             // It could be a user‑defined type or protocol.
             if registry.types.contains_key(name) || registry.protocols.contains_key(name) {

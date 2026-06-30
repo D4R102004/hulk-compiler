@@ -380,6 +380,14 @@ fn resolve_type_ref(tr: &TypeRef) -> Type {
                 match tr.name.as_str() {
                     "Vector" if !args.is_empty() => Type::Vector(Box::new(args[0].clone())),
                     "Iterable" if !args.is_empty() => Type::Iterable(Box::new(args[0].clone())),
+                    "Function" if !args.is_empty() => {
+                        let return_type = args.last().cloned().unwrap_or(Type::Object);
+                        let params = args[..args.len() - 1].to_vec();
+                        Type::Function {
+                            params,
+                            return_type: Box::new(return_type),
+                        }
+                    }
                     // For other named types with arguments (if any), we store the name and
                     // arguments in the `args` field of `TypeRef`, but our `Type` enum does
                     // not support user‑defined generics. We simply treat it as a plain

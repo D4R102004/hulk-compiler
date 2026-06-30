@@ -251,7 +251,15 @@ impl TypeRef {
 
 impl fmt::Display for TypeRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.args.is_empty() {
+        if self.name == "Function" && !self.args.is_empty() {
+            let return_type = self.args.last().expect("function type has return type");
+            let params = self.args[..self.args.len() - 1]
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            write!(f, "({}) -> {}", params, return_type)
+        } else if self.args.is_empty() {
             write!(f, "{}", self.name)
         } else {
             let args = self
@@ -353,6 +361,7 @@ pub enum ExprKind<A = ()> {
     While(WhileExpr<A>),
     For(ForExpr<A>),
     Call(CallExpr<A>),
+    Lambda(LambdaExpr<A>),
     Member(MemberExpr<A>),
     New(NewExpr<A>),
     TypeTest(TypeTestExpr<A>),
@@ -574,6 +583,27 @@ pub struct CallExpr<A = ()> {
     pub args: Vec<Expr<A>>,
 }
 
+/// Anonymous function expression: `(x: T, y) => body`.
+///
+/// The body is still a HULK expression, so both inline expression bodies and
+/// block bodies are represented without needing a separate return statement.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LambdaExpr<A = ()> {
+    pub params: Vec<Param>,
+    pub return_type: Option<TypeRef>,
+    pub body: Box<Expr<A>>,
+}
+
+impl<A> LambdaExpr<A> {
+    pub fn new(params: Vec<Param>, return_type: Option<TypeRef>, body: Expr<A>) -> Self {
+        Self {
+            params,
+            return_type,
+            body: Box::new(body),
+        }
+    }
+}
+
 /// Dot access: `object.member`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemberExpr<A = ()> {
@@ -778,6 +808,7 @@ where
                 walk_expr(arg, visit);
             }
         }
+        ExprKind::Lambda(lambda) => walk_expr(&lambda.body, visit),
         ExprKind::Member(member) => walk_expr(&member.object, visit),
         ExprKind::New(new_expr) => {
             for arg in &new_expr.args {
@@ -865,6 +896,15 @@ mod tests {
     fn type_ref_display_with_args() {
         let t = TypeRef::with_args("Iterable", vec![TypeRef::named("Number")]);
         assert_eq!(t.to_string(), "Iterable<Number>");
+    }
+
+    #[test]
+    fn type_ref_display_function_type() {
+        let t = TypeRef::with_args(
+            "Function",
+            vec![TypeRef::named("Number"), TypeRef::named("Boolean")],
+        );
+        assert_eq!(t.to_string(), "(Number) -> Boolean");
     }
 
     #[test]
