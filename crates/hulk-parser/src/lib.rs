@@ -19,9 +19,8 @@ use hulk_ast::{
     AssignExpr, AssignTarget, AttributeDecl, BinaryOp, BlockExpr, Declaration, DeclarationKind,
     DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl, IfExpr, IndexExpr, LambdaExpr,
     LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr, Param, Pattern,
-    Program,
-    ProtocolDecl, ProtocolMethod, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeParent,
-    TypeRef, TypeTestExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
+    Program, ProtocolDecl, ProtocolMethod, SourceSpan, TypeDecl, TypeMember, TypeMemberKind,
+    TypeParent, TypeRef, TypeTestExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
 };
 use hulk_lexer::{Span, Token, TokenKind};
 
@@ -757,6 +756,7 @@ impl Ll1Parser {
             TokenKind::For => self.finish_for_expression(span),
             TokenKind::New => self.finish_new_expression(span),
             TokenKind::Match => self.finish_match_expression(span),
+            TokenKind::Function => self.parse_anon_function_after_keyword(span),
             other => Err(ParseError::new(
                 ParseErrorKind::ExpectedExpression {
                     found: token_kind_name(&other),
@@ -764,6 +764,28 @@ impl Ll1Parser {
                 span,
             )),
         }
+    }
+
+    fn parse_anon_function_after_keyword(&mut self, span: SourceSpan) -> Result<Expr, ParseError> {
+        let params = self.parse_param_list()?;
+        let return_type = if self.match_kind(&TokenKind::Colon) {
+            Some(self.parse_type_ref()?)
+        } else {
+            None
+        };
+        let body = if self.match_kind(&TokenKind::FatArrow) || self.match_kind(&TokenKind::Arrow) {
+            let expression = self.parse_expression()?;
+            self.match_kind(&TokenKind::Semicolon);
+            expression
+        } else if self.check(&TokenKind::LBrace) {
+            self.parse_block_expression()?
+        } else {
+            return Err(self.error_unexpected("`=>`, `->`, or function block"));
+        };
+        Ok(Expr::new(
+            ExprKind::Lambda(LambdaExpr::new(params, return_type, body)),
+            span,
+        ))
     }
 
     fn parse_lambda_expression(&mut self) -> Result<Expr, ParseError> {
@@ -1009,7 +1031,11 @@ impl Ll1Parser {
         };
 
         let mut cursor = close_paren + 1;
-        if self.token_at(cursor).map(|k| same_variant(k, &TokenKind::Colon)).unwrap_or(false) {
+        if self
+            .token_at(cursor)
+            .map(|k| same_variant(k, &TokenKind::Colon))
+            .unwrap_or(false)
+        {
             cursor += 1;
             cursor = self.skip_type_ref_tokens(cursor);
         }
@@ -1046,7 +1072,10 @@ impl Ll1Parser {
         while let Some(kind) = self.token_at(index) {
             match kind {
                 TokenKind::FatArrow | TokenKind::Eof
-                    if angle_depth == 0 && paren_depth == 0 && bracket_depth == 0 => break,
+                    if angle_depth == 0 && paren_depth == 0 && bracket_depth == 0 =>
+                {
+                    break
+                }
                 TokenKind::LParen => paren_depth += 1,
                 TokenKind::RParen => {
                     if paren_depth == 0 && angle_depth == 0 && bracket_depth == 0 {
@@ -1114,6 +1143,7 @@ impl Ll1Parser {
                 | TokenKind::For
                 | TokenKind::New
                 | TokenKind::Match
+                | TokenKind::Function
         )
     }
 
@@ -1433,7 +1463,6 @@ mod tests {
             other => panic!("expected let entry, got {other:?}"),
         }
     }
-
 
     #[test]
     fn parses_lambda_expression() {

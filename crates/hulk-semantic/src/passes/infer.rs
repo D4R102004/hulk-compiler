@@ -15,9 +15,9 @@ use std::collections::{HashMap, HashSet};
 use hulk_ast::{
     AssignExpr, AssignTarget, AttributeDecl, BinaryExpr, BinaryOp, BlockExpr, CallExpr,
     Declaration, DeclarationKind, DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl,
-    IfExpr, IndexExpr, LambdaExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr,
-    Pattern, Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeParent, TypeRef,
-    TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
+    IfExpr, IndexExpr, LambdaExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr,
+    NewExpr, Pattern, Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeParent,
+    TypeRef, TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
 };
 
 use crate::environment::Environment;
