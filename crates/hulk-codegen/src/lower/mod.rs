@@ -34,6 +34,7 @@ pub mod control;
 pub mod decl;
 pub mod for_loop;
 pub mod index;
+pub mod lambda;
 pub mod literal;
 pub mod member;
 pub mod method;
@@ -246,6 +247,9 @@ pub fn lower_expr<'ctx>(
         ExprKind::Call(call) => call::lower_call(ctx, call),
         ExprKind::New(new_expr) => new::lower_new(ctx, new_expr, Some(expr.span)),
         ExprKind::Member(member_expr) => member::lower_member(ctx, member_expr, Some(expr.span)),
+
+        // ─── Lambda expressions ───────────────────────────────────────────────
+        ExprKind::Lambda(lambda_expr) => lambda::lower_lambda(ctx, lambda_expr, &expr.anno),
 
         // ─── Type tests and downcasts ──────────────────────────────────────────
         ExprKind::TypeTest(type_test) => type_ops::lower_typetest(ctx, type_test),
