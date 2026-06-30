@@ -218,6 +218,10 @@ fn collect_used_pairs(program: &Program<Type>, registry: &TypeRegistry) -> HashS
                 walk_expr(&call.callee, None, registry, pairs, visitor);
             }
 
+            ExprKind::Lambda(lambda) => {
+                walk_expr(&lambda.body, None, registry, pairs, visitor);
+            }
+
             ExprKind::Member(member) => {
                 walk_expr(&member.object, None, registry, pairs, visitor);
             }

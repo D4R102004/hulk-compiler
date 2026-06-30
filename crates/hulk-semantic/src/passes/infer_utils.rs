@@ -184,6 +184,9 @@ pub fn patch_unknowns(
                 patch_unknowns(arg, param_types, current_function, return_type);
             }
         }
+        ExprKind::Lambda(lambda) => {
+            patch_unknowns(&mut lambda.body, param_types, current_function, return_type);
+        }
         ExprKind::Member(member) => {
             patch_unknowns(
                 &mut member.object,
@@ -310,6 +313,7 @@ pub fn recompute_annotations(expr: &mut TypedExpr, registry: &TypeRegistry) {
                 recompute_annotations(arg, registry);
             }
         }
+        ExprKind::Lambda(lambda) => recompute_annotations(&mut lambda.body, registry),
         ExprKind::Member(member) => recompute_annotations(&mut member.object, registry),
         ExprKind::New(new_expr) => {
             for arg in &mut new_expr.args {
@@ -485,6 +489,15 @@ fn compute_node_type(expr: &TypedExpr, registry: &TypeRegistry) -> Type {
             }
         }
 
+        // ─── Lambda ─────────────────────────────────────────────────────────
+        ExprKind::Lambda(lambda) => match &expr.anno {
+            Type::Function { params, .. } => Type::Function {
+                params: params.clone(),
+                return_type: Box::new(lambda.body.anno.clone()),
+            },
+            other => other.clone(),
+        },
+
         // ─── Member ──────────────────────────────────────────────────────────
         ExprKind::Member(member) => {
             let obj_ty = &member.object.anno;
@@ -595,6 +608,14 @@ fn resolve_type_ref_static(tr: &TypeRef, registry: &TypeRegistry) -> Type {
                 match tr.name.as_str() {
                     "Vector" if !args.is_empty() => Type::Vector(Box::new(args[0].clone())),
                     "Iterable" if !args.is_empty() => Type::Iterable(Box::new(args[0].clone())),
+                    "Function" if !args.is_empty() => {
+                        let return_type = args.last().cloned().unwrap_or(Type::Object);
+                        let params = args[..args.len() - 1].to_vec();
+                        Type::Function {
+                            params,
+                            return_type: Box::new(return_type),
+                        }
+                    }
                     _ => Type::Named(tr.name.clone()),
                 }
             }
