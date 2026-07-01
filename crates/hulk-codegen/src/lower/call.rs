@@ -87,6 +87,20 @@ pub fn lower_call<'ctx>(
                                 }
                             }
                         }
+                    } else if let Type::Iterable(_) = &param_ty {
+                        // WHY: Iterable<T> is a fat pointer { data_ptr, itable_ptr }.
+                        // When passing a Named class to an Iterable<T> parameter, we
+                        // must box it to the fat pointer — same pattern as Named protocol.
+                        if let Type::Named(_) = &arg_expr.anno {
+                            if !ctx.registry.is_protocol(&arg_expr.anno) {
+                                arg_val = crate::lower::utils::convert_to_protocol(
+                                    ctx,
+                                    arg_val,
+                                    &arg_expr.anno,
+                                    param_ty,
+                                )?;
+                            }
+                        }
                     }
                     args.push(arg_val.into());
                 }
@@ -865,6 +879,20 @@ fn lower_and_box_args<'ctx>(
                             param_ty,
                         )?;
                     }
+                }
+            }
+        } else if let Type::Iterable(_) = &param_ty {
+            // WHY: Iterable<T> is a fat pointer { data_ptr, itable_ptr }.
+            // When passing a Named class to an Iterable<T> parameter, we
+            // must box it to the fat pointer — same pattern as Named protocol.
+            if let Type::Named(_) = &arg_expr.anno {
+                if !ctx.registry.is_protocol(&arg_expr.anno) {
+                    arg_val = crate::lower::utils::convert_to_protocol(
+                        ctx,
+                        arg_val,
+                        &arg_expr.anno,
+                        param_ty,
+                    )?;
                 }
             }
         }
