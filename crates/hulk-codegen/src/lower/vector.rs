@@ -1,6 +1,6 @@
 //! Lowering of vector expressions: literals, comprehensions, and indexing.
 
-use hulk_ast::{Expr, SourceSpan, VectorComprehension, VectorExpr};
+use hulk_ast::{Expr, ExprNewExpr, SourceSpan, VectorComprehension, Vector, VectorGenerator};
 use hulk_semantic::Type;
 use inkwell::values::BasicValueEnum;
 
@@ -224,4 +224,112 @@ fn lower_vector_comprehension<'ctx>(
         .basic()
         .unwrap();
     Ok(result)
+}
+
+/// Lowers `new ElemType[size]` and `new ElemType[size]{ i -> expr }`.
+///
+/// Allocates a fixed-size vector with `hulk_rt_vector_new(size)`. Without a
+/// generator the backing array is left zero-initialized (null slots), which
+/// is safe because every current use assigns each slot via `v[i] := x`
+/// before reading it. With a generator, loops `i` from `0` to `size - 1`,
+/// evaluates the generator body with `i` bound as a `Number`, boxes the
+/// result if primitive, and stores + retains it via `hulk_rt_vector_set`.
+pub fn lower_new_vector<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    new_expr: &NewExpr<Type>,
+    span: SourceSpan,
+) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+    let size_expr = new_expr
+        .size
+        .as_ref()
+        .expect("lower_new_vector called without a size");
+
+    let size_val = lower_expr(ctx, size_expr)?.into_float_value();
+    let size_i64 = ctx
+        .codegen
+        .builder
+        .build_float_to_signed_int(size_val, ctx.codegen.context.i64_type(), "size_cast")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    let new_fn = ctx
+        .codegen
+        .functions
+        .get("hulk_rt_vector_new")
+        .copied()
+        .ok_or_else(|| CodegenError::unsupported("hulk_rt_vector_new not declared", Some(span)))?;
+    let vec_ptr = ctx
+        .codegen
+        .builder
+        .build_call(new_fn, &[size_i64.into()], "vec_alloc")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+        .try_as_basic_value()
+        .unwrap_basic()
+        .into_pointer_value();
+
+    let Some(generator) = &new_expr.generator else {
+        return Ok(vec_ptr.into()); // no initializer: zero-filled slots.
+    };
+
+    // ── Bounded loop: for i in 0..size { vec[i] := generator.body } ──────
+    let set_fn = ctx.codegen.functions.get("hulk_rt_vector_set").copied()
+        .ok_or_else(|| CodegenError::unsupported("hulk_rt_vector_set not declared", Some(span)))?;
+    let retain_fn = ctx.codegen.functions.get("hulk_rt_retain").copied()
+        .ok_or_else(|| CodegenError::unsupported("hulk_rt_retain not declared", Some(span)))?;
+
+    let i64_ty = ctx.codegen.context.i64_type();
+    let idx_alloca = ctx.codegen.builder.build_alloca(i64_ty, "gen_idx")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.codegen.builder.build_store(idx_alloca, i64_ty.const_int(0, false))
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    let parent_fn = ctx.codegen.builder.get_insert_block().unwrap().get_parent().unwrap();
+    let cond_bb = ctx.codegen.context.append_basic_block(parent_fn, "gen_cond");
+    let body_bb = ctx.codegen.context.append_basic_block(parent_fn, "gen_body");
+    let exit_bb = ctx.codegen.context.append_basic_block(parent_fn, "gen_exit");
+    ctx.codegen.builder.build_unconditional_branch(cond_bb)
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    // cond: i < size
+    ctx.codegen.builder.position_at_end(cond_bb);
+    let idx_val = ctx.codegen.builder.build_load(i64_ty, idx_alloca, "idx")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?.into_int_value();
+    let cmp = ctx.codegen.builder
+        .build_int_compare(inkwell::IntPredicate::SLT, idx_val, size_i64, "idx_lt_size")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.codegen.builder.build_conditional_branch(cmp, body_bb, exit_bb)
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    // body: bind i (as Number/f64) in a fresh scope, eval generator.body, store.
+    ctx.codegen.builder.position_at_end(body_bb);
+    ctx.push_scope();
+    let idx_as_f64 = ctx.codegen.builder
+        .build_signed_int_to_float(idx_val, ctx.codegen.context.f64_type(), "idx_f64")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    let var_ptr = ctx.codegen.builder
+        .build_alloca(ctx.codegen.context.f64_type(), &generator.var)
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.codegen.builder.build_store(var_ptr, idx_as_f64)
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.scope_stack.declare(&generator.var, var_ptr, ctx.codegen.context.f64_type().into(), Type::Number, false);
+
+    let mut elem_val = lower_expr(ctx, &generator.body)?;
+    elem_val = crate::lower::utils::ensure_boxed(ctx, elem_val, &generator.body.anno, &Type::Object)?;
+    ctx.codegen.builder
+        .build_call(set_fn, &[vec_ptr.into(), idx_val.into(), elem_val.into()], "gen_set")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.codegen.builder
+        .build_call(retain_fn, &[elem_val.into()], "gen_retain")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.pop_scope()?;
+
+    let next_idx = ctx.codegen.builder
+        .build_int_add(idx_val, i64_ty.const_int(1, false), "idx_next")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.codegen.builder.build_store(idx_alloca, next_idx)
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.codegen.builder.build_unconditional_branch(cond_bb)
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    ctx.codegen.builder.position_at_end(exit_bb);
+    Ok(vec_ptr.into())
 }
