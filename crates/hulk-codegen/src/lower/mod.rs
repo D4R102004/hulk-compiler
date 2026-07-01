@@ -270,11 +270,6 @@ pub fn lower_expr<'ctx>(
 mod tests {
     use super::*;
     use crate::{itables, layout, lower, runtime_decls};
-    use hulk_ast::{
-        AssignExpr, AssignTarget, BinaryExpr, BinaryOp, BlockExpr, ElifBranch, Expr, ExprKind,
-        ForExpr, IfExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, Pattern, SourceSpan,
-        TypeRef, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
-    };
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
     use hulk_semantic::analyze;
