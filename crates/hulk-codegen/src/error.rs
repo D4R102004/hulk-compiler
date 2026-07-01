@@ -6,8 +6,8 @@
 //! are reported and handled separately from the lexical/syntax/semantic
 //! error classes the compiler driver already knows about.
 
-use std::fmt;
 use hulk_ast::SourceSpan;
+use std::fmt;
 
 /// A code generation error with an optional source location.
 #[derive(Debug)]
@@ -73,7 +73,9 @@ impl CodegenError {
 
     pub fn unsupported(construct: impl Into<String>, span: Option<SourceSpan>) -> Self {
         Self {
-            kind: CodegenErrorKind::Unsupported { construct: construct.into() },
+            kind: CodegenErrorKind::Unsupported {
+                construct: construct.into(),
+            },
             span,
         }
     }
@@ -119,8 +121,15 @@ impl fmt::Display for CodegenError {
             CodegenErrorKind::TargetEmission(msg) => {
                 write!(f, "failed to emit object code: {msg}")
             }
-            CodegenErrorKind::Link { driver, status, stderr } => {
-                write!(f, "linker `{driver}` failed (exit status {status:?}):\n{stderr}")
+            CodegenErrorKind::Link {
+                driver,
+                status,
+                stderr,
+            } => {
+                write!(
+                    f,
+                    "linker `{driver}` failed (exit status {status:?}):\n{stderr}"
+                )
             }
             CodegenErrorKind::Unsupported { construct } => {
                 write!(f, "unsupported construct: {construct}")

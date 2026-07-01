@@ -15,16 +15,16 @@
 //! `hulk_rt_bool_to_string`). The `@@` operator inserts a literal space
 //! between the two operands.
 
+use hulk_ast::{BinaryExpr, BinaryOp, UnaryExpr, UnaryOp};
+use hulk_semantic::Type;
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
-use hulk_ast::{BinaryOp, UnaryExpr, BinaryExpr, UnaryOp};
-use hulk_semantic::Type;
 
+use super::lower_expr;
 use crate::error::CodegenError;
+use crate::lower::utils::{cmp_float, to_string};
 use crate::lower::LowerCtx;
 use crate::runtime_decls::{self, declare_string_concat, declare_string_concat_space};
-use crate::lower::utils::{cmp_float, to_string};
-use super::lower_expr;
 
 /// Lowers a unary expression.
 ///
@@ -43,8 +43,7 @@ pub fn lower_unary<'ctx>(
 
     match unary.op {
         UnaryOp::Negate => {
-            let float_val = operand
-                .into_float_value();
+            let float_val = operand.into_float_value();
             let neg = ctx
                 .codegen
                 .builder
@@ -53,8 +52,7 @@ pub fn lower_unary<'ctx>(
             Ok(neg.into())
         }
         UnaryOp::Not => {
-            let int_val = operand
-                .into_int_value();
+            let int_val = operand.into_int_value();
             let not = ctx
                 .codegen
                 .builder
@@ -94,39 +92,48 @@ pub fn lower_binary<'ctx>(
 
     let result = match binary.op {
         // ─── Arithmetic operators ────────────────────────────────────────
-
         BinaryOp::Add => {
             let lf = left.into_float_value();
             let rf = right.into_float_value();
-            ctx.codegen.builder.build_float_add(lf, rf, "add")
+            ctx.codegen
+                .builder
+                .build_float_add(lf, rf, "add")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Subtract => {
             let lf = left.into_float_value();
             let rf = right.into_float_value();
-            ctx.codegen.builder.build_float_sub(lf, rf, "sub")
+            ctx.codegen
+                .builder
+                .build_float_sub(lf, rf, "sub")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Multiply => {
             let lf = left.into_float_value();
             let rf = right.into_float_value();
-            ctx.codegen.builder.build_float_mul(lf, rf, "mul")
+            ctx.codegen
+                .builder
+                .build_float_mul(lf, rf, "mul")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Divide => {
             let lf = left.into_float_value();
             let rf = right.into_float_value();
-            ctx.codegen.builder.build_float_div(lf, rf, "div")
+            ctx.codegen
+                .builder
+                .build_float_div(lf, rf, "div")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Modulo => {
             let lf = left.into_float_value();
             let rf = right.into_float_value();
-            ctx.codegen.builder.build_float_rem(lf, rf, "rem")
+            ctx.codegen
+                .builder
+                .build_float_rem(lf, rf, "rem")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
@@ -134,68 +141,71 @@ pub fn lower_binary<'ctx>(
             // Call `llvm.pow.f64` intrinsic.
             let lf = left.into_float_value();
             let rf = right.into_float_value();
-            let pow_fn = ctx.codegen.module.get_function("llvm.pow.f64")
+            let pow_fn = ctx
+                .codegen
+                .module
+                .get_function("llvm.pow.f64")
                 .unwrap_or_else(|| {
                     let f64_type = ctx.codegen.context.f64_type();
                     let fn_type = f64_type.fn_type(&[f64_type.into(), f64_type.into()], false);
-                    ctx.codegen.module.add_function("llvm.pow.f64", fn_type, None)
+                    ctx.codegen
+                        .module
+                        .add_function("llvm.pow.f64", fn_type, None)
                 });
-            let call = ctx.codegen.builder.build_call(pow_fn, &[lf.into(), rf.into()], "pow")
+            let call = ctx
+                .codegen
+                .builder
+                .build_call(pow_fn, &[lf.into(), rf.into()], "pow")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
-                .try_as_basic_value().unwrap_basic();
+                .try_as_basic_value()
+                .unwrap_basic();
             call
         }
 
         // ─── Comparison operators ──────────────────────────────────────
-
-        BinaryOp::Equal => {
-            lower_equality(ctx, true, left, right, &binary.left.anno)?
-        }
-        BinaryOp::NotEqual => {
-            lower_equality(ctx, false, left, right, &binary.left.anno)?
-        }
-        BinaryOp::Less => {
-            cmp_float(ctx, FloatPredicate::OLT, left, right, "lt")?
-        }
-        BinaryOp::LessEqual => {
-            cmp_float(ctx, FloatPredicate::OLE, left, right, "le")?
-        }
-        BinaryOp::Greater => {
-            cmp_float(ctx, FloatPredicate::OGT, left, right, "gt")?
-        }
-        BinaryOp::GreaterEqual => {
-            cmp_float(ctx, FloatPredicate::OGE, left, right, "ge")?
-        }
+        BinaryOp::Equal => lower_equality(ctx, true, left, right, &binary.left.anno)?,
+        BinaryOp::NotEqual => lower_equality(ctx, false, left, right, &binary.left.anno)?,
+        BinaryOp::Less => cmp_float(ctx, FloatPredicate::OLT, left, right, "lt")?,
+        BinaryOp::LessEqual => cmp_float(ctx, FloatPredicate::OLE, left, right, "le")?,
+        BinaryOp::Greater => cmp_float(ctx, FloatPredicate::OGT, left, right, "gt")?,
+        BinaryOp::GreaterEqual => cmp_float(ctx, FloatPredicate::OGE, left, right, "ge")?,
 
         // ─── Logical operators ─────────────────────────────────────────
-
         BinaryOp::And => {
             let li = left.into_int_value();
             let ri = right.into_int_value();
-            ctx.codegen.builder.build_and(li, ri, "and")
+            ctx.codegen
+                .builder
+                .build_and(li, ri, "and")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
         BinaryOp::Or => {
             let li = left.into_int_value();
             let ri = right.into_int_value();
-            ctx.codegen.builder.build_or(li, ri, "or")
+            ctx.codegen
+                .builder
+                .build_or(li, ri, "or")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into()
         }
 
         // ─── Concatenation operators ──────────────────────────────────
-
         BinaryOp::Concat | BinaryOp::ConcatSpace => {
             // Auto‑stringify operands.
-            let left_str = to_string(ctx, left, &binary.left.anno).map_err(|e| e.with_span(binary.left.span))?;
-            let right_str = to_string(ctx, right, &binary.right.anno).map_err(|e| e.with_span(binary.right.span))?;
+            let left_str = to_string(ctx, left, &binary.left.anno)
+                .map_err(|e| e.with_span(binary.left.span))?;
+            let right_str = to_string(ctx, right, &binary.right.anno)
+                .map_err(|e| e.with_span(binary.right.span))?;
             let concat_fn = if matches!(binary.op, BinaryOp::Concat) {
                 declare_string_concat(ctx.codegen)
             } else {
                 declare_string_concat_space(ctx.codegen)
             };
-            let call = ctx.codegen.builder.build_call(concat_fn, &[left_str.into(), right_str.into()], "concat")
+            let call = ctx
+                .codegen
+                .builder
+                .build_call(concat_fn, &[left_str.into(), right_str.into()], "concat")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .try_as_basic_value()
                 .unwrap_basic();
@@ -224,20 +234,36 @@ fn lower_equality<'ctx>(
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     match left_type {
         Type::Number => {
-            let pred = if is_eq { FloatPredicate::OEQ } else { FloatPredicate::ONE };
+            let pred = if is_eq {
+                FloatPredicate::OEQ
+            } else {
+                FloatPredicate::ONE
+            };
             cmp_float(ctx, pred, left, right, if is_eq { "eq" } else { "ne" })
         }
         Type::Boolean => {
-            let pred = if is_eq { IntPredicate::EQ } else { IntPredicate::NE };
-            Ok(ctx.codegen.builder
-                .build_int_compare(pred,
-                    left.into_int_value(), right.into_int_value(), "bool_eq")
+            let pred = if is_eq {
+                IntPredicate::EQ
+            } else {
+                IntPredicate::NE
+            };
+            Ok(ctx
+                .codegen
+                .builder
+                .build_int_compare(
+                    pred,
+                    left.into_int_value(),
+                    right.into_int_value(),
+                    "bool_eq",
+                )
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into())
         }
         Type::String => {
             let str_eq_fn = runtime_decls::declare_string_equals(ctx.codegen);
-            let result = ctx.codegen.builder
+            let result = ctx
+                .codegen
+                .builder
                 .build_call(str_eq_fn, &[left.into(), right.into()], "str_eq")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .try_as_basic_value()
@@ -245,7 +271,9 @@ fn lower_equality<'ctx>(
             if is_eq {
                 Ok(result)
             } else {
-                Ok(ctx.codegen.builder
+                Ok(ctx
+                    .codegen
+                    .builder
                     .build_not(result.into_int_value(), "str_ne")
                     .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                     .into())
@@ -254,14 +282,24 @@ fn lower_equality<'ctx>(
         _ => {
             // WHY: Named/Object/protocol fat pointers — reference equality
             let i64_ty = ctx.codegen.context.i64_type();
-            let li = ctx.codegen.builder
+            let li = ctx
+                .codegen
+                .builder
                 .build_ptr_to_int(left.into_pointer_value(), i64_ty, "lp_int")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            let ri = ctx.codegen.builder
+            let ri = ctx
+                .codegen
+                .builder
                 .build_ptr_to_int(right.into_pointer_value(), i64_ty, "rp_int")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            let pred = if is_eq { IntPredicate::EQ } else { IntPredicate::NE };
-            Ok(ctx.codegen.builder
+            let pred = if is_eq {
+                IntPredicate::EQ
+            } else {
+                IntPredicate::NE
+            };
+            Ok(ctx
+                .codegen
+                .builder
                 .build_int_compare(pred, li, ri, "ptr_eq")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
                 .into())

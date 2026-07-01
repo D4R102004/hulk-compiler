@@ -7,14 +7,14 @@
 //! For math functions, LLVM intrinsics are used when available; otherwise, a
 //! fallback to `hulk-rt` is provided.
 
-use inkwell::values::BasicValueEnum;
 use hulk_ast::CallExpr;
 use hulk_semantic::Type;
+use inkwell::values::BasicValueEnum;
 
-use crate::error::CodegenError;
-use crate::lower::LowerCtx;
-use crate::lower::utils::ensure_boxed;
 use super::lower_expr;
+use crate::error::CodegenError;
+use crate::lower::utils::ensure_boxed;
+use crate::lower::LowerCtx;
 
 // ─── Constants ──────────────────────────────────────────────────────────
 
@@ -22,8 +22,8 @@ use super::lower_expr;
 pub fn lookup_constant(name: &str) -> Option<f64> {
     match name {
         "PI" => Some(std::f64::consts::PI),
-        "E"  => Some(std::f64::consts::E),
-        _    => None,
+        "E" => Some(std::f64::consts::E),
+        _ => None,
     }
 }
 
@@ -42,12 +42,12 @@ pub fn lower_builtin_call<'ctx>(
 
     match callee_name.as_str() {
         "print" => Some(lower_print(ctx, call)),
-        "sqrt"  => Some(lower_math_unary(ctx, "sqrt", call, "llvm.sqrt.f64")),
-        "sin"   => Some(lower_math_unary(ctx, "sin",  call, "llvm.sin.f64")),
-        "cos"   => Some(lower_math_unary(ctx, "cos",  call, "llvm.cos.f64")),
-        "exp"   => Some(lower_math_unary(ctx, "exp",  call, "llvm.exp.f64")),
-        "log"   => Some(lower_log(ctx, call)),
-        "rand"  => Some(lower_rand(ctx, call)),
+        "sqrt" => Some(lower_math_unary(ctx, "sqrt", call, "llvm.sqrt.f64")),
+        "sin" => Some(lower_math_unary(ctx, "sin", call, "llvm.sin.f64")),
+        "cos" => Some(lower_math_unary(ctx, "cos", call, "llvm.cos.f64")),
+        "exp" => Some(lower_math_unary(ctx, "exp", call, "llvm.exp.f64")),
+        "log" => Some(lower_log(ctx, call)),
+        "rand" => Some(lower_rand(ctx, call)),
         "range" => Some(lower_range(ctx, call)),
         _ => None,
     }
@@ -76,11 +76,17 @@ fn lower_print<'ctx>(
     let arg = &call.args[0];
     let val = lower_expr(ctx, arg)?;
     let boxed = ensure_boxed(ctx, val, &arg.anno, &Type::Object)?;
-    let print_fn = ctx.codegen.functions
+    let print_fn = ctx
+        .codegen
+        .functions
         .get("hulk_rt_print")
         .copied()
-        .ok_or_else(|| CodegenError::unsupported("hulk_rt_print not declared", Some(call.callee.span)))?;
-    let result = ctx.codegen.builder
+        .ok_or_else(|| {
+            CodegenError::unsupported("hulk_rt_print not declared", Some(call.callee.span))
+        })?;
+    let result = ctx
+        .codegen
+        .builder
         .build_call(print_fn, &[boxed.into()], "print_call")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .try_as_basic_value()
@@ -117,7 +123,9 @@ fn lower_math_unary<'ctx>(
 
     // Prefer LLVM intrinsic
     if let Some(intrin) = ctx.codegen.module.get_function(intrinsic_name) {
-        let result = ctx.codegen.builder
+        let result = ctx
+            .codegen
+            .builder
             .build_call(intrin, &[arg.into()], &format!("{}_intrinsic", name))
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
             .try_as_basic_value()
@@ -127,14 +135,17 @@ fn lower_math_unary<'ctx>(
 
     // Fallback to hulk-rt
     let fn_name = format!("hulk_rt_{}", name);
-    let rt_fn = ctx.codegen.functions
+    let rt_fn = ctx
+        .codegen
+        .functions
         .get(&fn_name)
         .copied()
-        .ok_or_else(|| CodegenError::unsupported(
-            format!("{} not declared", fn_name),
-            Some(call.callee.span),
-        ))?;
-    let result = ctx.codegen.builder
+        .ok_or_else(|| {
+            CodegenError::unsupported(format!("{} not declared", fn_name), Some(call.callee.span))
+        })?;
+    let result = ctx
+        .codegen
+        .builder
         .build_call(rt_fn, &[arg.into()], &format!("{}_rt", name))
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .try_as_basic_value()
@@ -166,29 +177,41 @@ fn lower_log<'ctx>(
 
     // Use natural log intrinsic if available
     if let Some(ln_fn) = ctx.codegen.module.get_function("llvm.log.f64") {
-        let ln_x = ctx.codegen.builder
+        let ln_x = ctx
+            .codegen
+            .builder
             .build_call(ln_fn, &[x.into()], "ln_x")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
             .try_as_basic_value()
             .unwrap_basic()
             .into_float_value();
-        let ln_base = ctx.codegen.builder
+        let ln_base = ctx
+            .codegen
+            .builder
             .build_call(ln_fn, &[base.into()], "ln_base")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
             .try_as_basic_value()
             .unwrap_basic()
             .into_float_value();
-        let result = ctx.codegen.builder
+        let result = ctx
+            .codegen
+            .builder
             .build_float_div(ln_x, ln_base, "log_result")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         Ok(result.into())
     } else {
         // Fallback to runtime
-        let rt_fn = ctx.codegen.functions
+        let rt_fn = ctx
+            .codegen
+            .functions
             .get("hulk_rt_log")
             .copied()
-            .ok_or_else(|| CodegenError::unsupported("hulk_rt_log not declared", Some(call.callee.span)))?;
-        let result = ctx.codegen.builder
+            .ok_or_else(|| {
+                CodegenError::unsupported("hulk_rt_log not declared", Some(call.callee.span))
+            })?;
+        let result = ctx
+            .codegen
+            .builder
             .build_call(rt_fn, &[base.into(), x.into()], "log_rt")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
             .try_as_basic_value()
@@ -214,11 +237,17 @@ fn lower_rand<'ctx>(
             Some(call.callee.span),
         ));
     }
-    let rand_fn = ctx.codegen.functions
+    let rand_fn = ctx
+        .codegen
+        .functions
         .get("hulk_rt_rand")
         .copied()
-        .ok_or_else(|| CodegenError::unsupported("hulk_rt_rand not declared", Some(call.callee.span)))?;
-    let result = ctx.codegen.builder
+        .ok_or_else(|| {
+            CodegenError::unsupported("hulk_rt_rand not declared", Some(call.callee.span))
+        })?;
+    let result = ctx
+        .codegen
+        .builder
         .build_call(rand_fn, &[], "rand_call")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .try_as_basic_value()
@@ -246,11 +275,17 @@ fn lower_range<'ctx>(
     }
     let min = lower_expr(ctx, &call.args[0])?.into_float_value();
     let max = lower_expr(ctx, &call.args[1])?.into_float_value();
-    let range_fn = ctx.codegen.functions
+    let range_fn = ctx
+        .codegen
+        .functions
         .get("hulk_rt_range_new")
         .copied()
-        .ok_or_else(|| CodegenError::unsupported("hulk_rt_range_new not declared", Some(call.callee.span)))?;
-    let result = ctx.codegen.builder
+        .ok_or_else(|| {
+            CodegenError::unsupported("hulk_rt_range_new not declared", Some(call.callee.span))
+        })?;
+    let result = ctx
+        .codegen
+        .builder
         .build_call(range_fn, &[min.into(), max.into()], "range_new")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
         .try_as_basic_value()

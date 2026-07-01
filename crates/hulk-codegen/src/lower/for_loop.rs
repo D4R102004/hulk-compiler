@@ -5,11 +5,11 @@ use inkwell::values::BasicValueEnum;
 use hulk_ast::ForExpr;
 use hulk_semantic::Type;
 
+use super::lower_expr;
 use crate::error::CodegenError;
 use crate::lower::call::lower_method_call_val;
-use crate::lower::LowerCtx;
 use crate::lower::utils::ensure_unboxed;
-use super::lower_expr;
+use crate::lower::LowerCtx;
 
 /// Lowers a `for` loop.
 ///
@@ -31,10 +31,15 @@ pub fn lower_for<'ctx>(
         .registry
         .lookup_method(&iterable_expr.anno, "current")
         .map(|sig| sig.return_type)
-        .ok_or_else(|| CodegenError::unsupported(
-            format!("iterable type `{}` does not support `current()`", iterable_expr.anno),
-            Some(iterable_expr.span)
-        ))?;
+        .ok_or_else(|| {
+            CodegenError::unsupported(
+                format!(
+                    "iterable type `{}` does not support `current()`",
+                    iterable_expr.anno
+                ),
+                Some(iterable_expr.span),
+            )
+        })?;
     let elem_llvm_ty = crate::lower::utils::llvm_type(ctx.codegen, ctx.registry, &elem_ty)?;
 
     // Compute the LLVM type of the iterable itself (needed for the persistent alloca).
@@ -73,13 +78,19 @@ pub fn lower_for<'ctx>(
             // Fat pointer: { ptr, ptr } – null both.
             let ptr_type = ctx.codegen.context.ptr_type(Default::default());
             let null_ptr = ptr_type.const_null();
-            let null_struct = ctx.codegen.context.const_struct(&[null_ptr.into(), null_ptr.into()], false);
+            let null_struct = ctx
+                .codegen
+                .context
+                .const_struct(&[null_ptr.into(), null_ptr.into()], false);
             BasicValueEnum::StructValue(null_struct)
         }
         _ => {
             return Err(CodegenError::unsupported(
-                format!("default value for type `{}` not implemented", body_expr.anno),
-                Some(body_expr.span)
+                format!(
+                    "default value for type `{}` not implemented",
+                    body_expr.anno
+                ),
+                Some(body_expr.span),
             ));
         }
     };
@@ -112,9 +123,18 @@ pub fn lower_for<'ctx>(
         .unwrap()
         .get_parent()
         .unwrap();
-    let cond_bb = ctx.codegen.context.append_basic_block(parent_fn, "for_cond");
-    let body_bb = ctx.codegen.context.append_basic_block(parent_fn, "for_body");
-    let exit_bb = ctx.codegen.context.append_basic_block(parent_fn, "for_exit");
+    let cond_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "for_cond");
+    let body_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "for_body");
+    let exit_bb = ctx
+        .codegen
+        .context
+        .append_basic_block(parent_fn, "for_exit");
 
     // Jump to condition.
     ctx.codegen
@@ -126,7 +146,9 @@ pub fn lower_for<'ctx>(
     ctx.codegen.builder.position_at_end(cond_bb);
 
     // Load the persistent iterable and call next().
-    let iter_for_next = ctx.codegen.builder
+    let iter_for_next = ctx
+        .codegen
+        .builder
         .build_load(iter_llvm_ty, iter_alloca, "iter_next_load")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     let next_val = lower_method_call_val(ctx, iter_for_next, &iter_ty, "next", iterable_expr.span)?;
@@ -141,18 +163,26 @@ pub fn lower_for<'ctx>(
     ctx.codegen.builder.position_at_end(body_bb);
 
     // Load the persistent iterable and call current().
-    let iter_for_current = ctx.codegen.builder
+    let iter_for_current = ctx
+        .codegen
+        .builder
         .build_load(iter_llvm_ty, iter_alloca, "iter_current_load")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    let current_val = lower_method_call_val(ctx, iter_for_current, &iter_ty, "current", iterable_expr.span)?;
+    let current_val = lower_method_call_val(
+        ctx,
+        iter_for_current,
+        &iter_ty,
+        "current",
+        iterable_expr.span,
+    )?;
 
-    // hulk_rt_range_current returns f64 directly (never boxed).
-    let unboxed_current = if matches!(&iter_ty, Type::Named(n) if n == "Range") {
-        current_val
+    // Only Vector boxes its elements as HulkBox* (via hulk_rt_vector_current).
+    let unboxed_current = if matches!(&iter_ty, Type::Vector(_)) {
+        ensure_unboxed(ctx, current_val, &elem_ty)?
     }
-    // hulk_rt_vector_current returns HulkBox* (needs unboxing for primitive elements).
+    // Range and all user-defined generator types return the element value directly
     else {
-        ensure_unboxed(ctx, current_val, &elem_ty, Some(iterable_expr.span))?
+        current_val
     };
 
     // Bind the loop variable.
@@ -166,7 +196,8 @@ pub fn lower_for<'ctx>(
         .builder
         .build_store(var_ptr, unboxed_current)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    ctx.scope_stack.declare(&for_expr.var, var_ptr, elem_llvm_ty, elem_ty.clone(), false);
+    ctx.scope_stack
+        .declare(&for_expr.var, var_ptr, elem_llvm_ty, elem_ty.clone(), false);
 
     // Lower the body.
     let body_val = lower_expr(ctx, body_expr)?;

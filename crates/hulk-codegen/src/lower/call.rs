@@ -1,16 +1,16 @@
 //! Lowering of function and method calls.
 
-use inkwell::values::{BasicValueEnum, BasicMetadataValueEnum};
-use inkwell::types::BasicType;
 use hulk_ast::{CallExpr, SourceSpan};
 use hulk_semantic::{Type, TypedExpr};
+use inkwell::types::BasicType;
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
 
-use crate::error::CodegenError;
-use crate::lower::LowerCtx;
-use crate::lower::builtins::lower_builtin_call;
-use crate::lower::utils::{field_indices, llvm_type, is_protocol_or_iterable as is_protocol_type};
-use crate::layout::has_subtypes;
 use super::lower_expr;
+use crate::error::CodegenError;
+use crate::layout::has_subtypes;
+use crate::lower::builtins::lower_builtin_call;
+use crate::lower::utils::{field_indices, is_protocol_or_iterable as is_protocol_type, llvm_type};
+use crate::lower::LowerCtx;
 
 /// Lowers a call expression.
 ///
@@ -42,7 +42,6 @@ pub fn lower_call<'ctx>(
 
     match &call.callee.kind {
         // ─── Global function call ──────────────────────────────────────────
-
         hulk_ast::ExprKind::Variable(name) => {
             if let Some(fn_val) = ctx.codegen.functions.get(name).copied() {
                 // Extract the parameter types from the callee's own annotation.
@@ -55,8 +54,8 @@ pub fn lower_call<'ctx>(
                                 "call to variable `{}` with non-function type `{:?}`",
                                 name, other
                             ),
-                            Some(call.callee.span)
-                            ),);
+                            Some(call.callee.span),
+                        ));
                     }
                 };
 
@@ -65,7 +64,12 @@ pub fn lower_call<'ctx>(
                 for (arg_expr, param_ty) in call.args.iter().zip(param_types) {
                     let mut arg_val = lower_expr(ctx, arg_expr)?;
                     if matches!(param_ty, Type::Object) {
-                        arg_val = crate::lower::utils::ensure_boxed(ctx, arg_val, &arg_expr.anno, param_ty)?;
+                        arg_val = crate::lower::utils::ensure_boxed(
+                            ctx,
+                            arg_val,
+                            &arg_expr.anno,
+                            param_ty,
+                        )?;
                     } else if let Type::Named(_) = &param_ty {
                         // WHY: Go/Kotlin interface boxing pattern — when passing a Named
                         // concrete class where a Named protocol is expected, build the
@@ -75,9 +79,26 @@ pub fn lower_call<'ctx>(
                             if let Type::Named(_) = &arg_expr.anno {
                                 if !ctx.registry.is_protocol(&arg_expr.anno) {
                                     arg_val = crate::lower::utils::convert_to_protocol(
-                                        ctx, arg_val, &arg_expr.anno, param_ty,
+                                        ctx,
+                                        arg_val,
+                                        &arg_expr.anno,
+                                        param_ty,
                                     )?;
                                 }
+                            }
+                        }
+                    } else if let Type::Iterable(_) = &param_ty {
+                        // WHY: Iterable<T> is a fat pointer { data_ptr, itable_ptr }.
+                        // When passing a Named class to an Iterable<T> parameter, we
+                        // must box it to the fat pointer — same pattern as Named protocol.
+                        if let Type::Named(_) = &arg_expr.anno {
+                            if !ctx.registry.is_protocol(&arg_expr.anno) {
+                                arg_val = crate::lower::utils::convert_to_protocol(
+                                    ctx,
+                                    arg_val,
+                                    &arg_expr.anno,
+                                    param_ty,
+                                )?;
                             }
                         }
                     }
@@ -89,21 +110,23 @@ pub fn lower_call<'ctx>(
                     .builder
                     .build_call(fn_val, &args, "call")
                     .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-                let result = call_site
-                    .try_as_basic_value()
-                    .unwrap_basic();
+                let result = call_site.try_as_basic_value().unwrap_basic();
                 return Ok(result);
             }
         }
 
         // ─── Method call (`obj.method(args)`) ─────────────────────────────
-
         hulk_ast::ExprKind::Member(member) => {
-            return lower_method_call(ctx, *member.object.clone(), &member.member, &call.args, call.callee.span);
+            return lower_method_call(
+                ctx,
+                *member.object.clone(),
+                &member.member,
+                &call.args,
+                call.callee.span,
+            );
         }
 
         // ─── `base` call ──────────────────────────────────────────────────
-
         hulk_ast::ExprKind::BaseRef => {
             return lower_base_call(ctx, call);
         }
@@ -114,10 +137,16 @@ pub fn lower_call<'ctx>(
     // Generic function‑value call (e.g., a variable holding a method reference).
     let callee_val = lower_expr(ctx, &call.callee)?;
     match &call.callee.anno {
-        Type::Function { .. } => lower_function_value(ctx, callee_val, &call.callee.anno, &call.args, Some(call.callee.span)),
-        _ => Err(CodegenError::unsupported (
+        Type::Function { .. } => lower_function_value(
+            ctx,
+            callee_val,
+            &call.callee.anno,
+            &call.args,
+            Some(call.callee.span),
+        ),
+        _ => Err(CodegenError::unsupported(
             format!("unable to resolve call to type `{}`", call.callee.anno),
-            Some(call.callee.span)
+            Some(call.callee.span),
         )),
     }
 }
@@ -142,14 +171,127 @@ pub fn lower_method_call_val<'ctx>(
         if name == "Range" {
             return lower_builtin_range_call(ctx, obj_val, method_name, &[], span);
         }
+        // WHY: Python, Java, C# for loops use vtable dispatch on any type that
+        // implements the iterator protocol — no hardcoded allow-list.  User-defined
+        // generator types expose next()/current() as ordinary class methods and
+        // must be dispatched via vtable exactly like any other method call.
+        return lower_named_method_from_val(ctx, obj_val, name, method_name, span);
     }
     if is_protocol_type(obj_type, ctx.registry) {
         return lower_protocol_call(ctx, obj_val, obj_type, method_name, &[], span);
     }
     Err(CodegenError::unsupported(
-        format!("iterable method `{}` not supported on type `{}`", method_name, obj_type),
+        format!(
+            "iterable method `{}` not supported on type `{}`",
+            method_name, obj_type
+        ),
         Some(span),
     ))
+}
+
+/// Dispatch a zero-argument method call on an already-evaluated user-defined
+/// class value via vtable (or direct call when the type is monomorphic).
+///
+/// This is the `lower_method_call_val` counterpart of `lower_class_method_call`:
+/// the receiver has already been lowered into `obj_val`, so we skip `lower_expr`.
+fn lower_named_method_from_val<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    obj_val: BasicValueEnum<'ctx>,
+    type_name: &str,
+    method_name: &str,
+    span: SourceSpan,
+) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+    let obj_ptr = obj_val.into_pointer_value();
+    let call_args: Vec<BasicMetadataValueEnum> = vec![obj_ptr.into()];
+
+    // Devirtualize when the type has no subtypes.
+    if !has_subtypes(type_name, ctx.registry) {
+        let owner =
+            crate::layout::owning_type_for_method(type_name, method_name, ctx.registry)
+                .unwrap_or_else(|| type_name.to_string());
+        let qualified_name = format!("{}::{}", owner, method_name);
+        if let Some(fn_val) = ctx.codegen.functions.get(&qualified_name) {
+            let call_site = ctx
+                .codegen
+                .builder
+                .build_call(*fn_val, &call_args, "direct_method_call")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            return Ok(call_site.try_as_basic_value().unwrap_basic());
+        }
+    }
+
+    // Vtable dispatch.
+    let layout = ctx.codegen.type_layouts.get(type_name).ok_or_else(|| {
+        CodegenError::unsupported(format!("no layout for type '{}'", type_name), Some(span))
+    })?;
+    let struct_ty = layout.struct_ty; // Copy — released before builder borrow
+    let slot_idx = *layout.method_slots.get(method_name).ok_or_else(|| {
+        CodegenError::unsupported(
+            format!("method '{}' not in vtable for type '{}'", method_name, type_name),
+            Some(span),
+        )
+    })?;
+
+    let i32_type = ctx.codegen.context.i32_type();
+    let ptr_type = ctx.codegen.context.ptr_type(Default::default());
+    let vtable_ptr_ptr = unsafe {
+        ctx.codegen
+            .builder
+            .build_gep(
+                struct_ty,
+                obj_ptr,
+                &[
+                    i32_type.const_int(0, false),
+                    i32_type.const_int(field_indices::VTABLE as u64, false),
+                ],
+                "vtable_ptr_ptr",
+            )
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+    };
+    let vtable_ptr = ctx
+        .codegen
+        .builder
+        .build_load(ptr_type, vtable_ptr_ptr, "vtable_ptr")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+        .into_pointer_value();
+
+    let slot_val = i32_type.const_int(slot_idx as u64, false);
+    let fn_ptr_ptr = unsafe {
+        ctx.codegen
+            .builder
+            .build_gep(ptr_type, vtable_ptr, &[slot_val], "fn_ptr_ptr")
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+    };
+    let fn_ptr = ctx
+        .codegen
+        .builder
+        .build_load(ptr_type, fn_ptr_ptr, "fn_ptr")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+        .into_pointer_value();
+
+    let fn_owner =
+        crate::layout::owning_type_for_method(type_name, method_name, ctx.registry)
+            .unwrap_or_else(|| type_name.to_string());
+    let qualified_name = format!("{}::{}", fn_owner, method_name);
+    let fn_decl = ctx
+        .codegen
+        .functions
+        .get(&qualified_name)
+        .cloned()
+        .ok_or_else(|| {
+            CodegenError::unsupported(
+                format!("method '{}' not declared", qualified_name),
+                Some(span),
+            )
+        })?;
+    let fn_type = fn_decl.get_type();
+
+    let call_site = ctx
+        .codegen
+        .builder
+        .build_indirect_call(fn_type, fn_ptr, &call_args, "method_call")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    Ok(call_site.try_as_basic_value().unwrap_basic())
 }
 
 pub fn lower_method_call<'ctx>(
@@ -210,7 +352,7 @@ fn lower_class_method_call<'ctx>(
         _ => {
             return Err(CodegenError::unsupported(
                 format!("method call on non-named type: {:?}", obj_type),
-                Some(span)
+                Some(span),
             ));
         }
     };
@@ -219,10 +361,9 @@ fn lower_class_method_call<'ctx>(
     let method_sig = ctx
         .registry
         .lookup_method(obj_type, method_name)
-        .ok_or_else(|| CodegenError::unsupported(
-            format!("method '{}' not found", method_name),
-            Some(span)
-        ))?;
+        .ok_or_else(|| {
+            CodegenError::unsupported(format!("method '{}' not found", method_name), Some(span))
+        })?;
 
     // 4. Prepare the call arguments: first `self` (the object pointer), then the rest.
     let mut call_args = vec![obj_ptr.into()];
@@ -241,31 +382,23 @@ fn lower_class_method_call<'ctx>(
                 .builder
                 .build_call(*fn_val, &call_args, "direct_method_call")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            let result = call_site
-                .try_as_basic_value()
-                .unwrap_basic();
+            let result = call_site.try_as_basic_value().unwrap_basic();
             return Ok(result);
         }
         // Fallback to vtable if function not found.
     }
 
     // 6. Look up the type layout to obtain the method slot index.
-    let layout = ctx
-        .codegen
-        .type_layouts
-        .get(type_name)
-        .ok_or_else(|| CodegenError::unsupported(
-            format!("no layout for type '{}'", type_name),
-            Some(span)
-        ))?;
+    let layout = ctx.codegen.type_layouts.get(type_name).ok_or_else(|| {
+        CodegenError::unsupported(format!("no layout for type '{}'", type_name), Some(span))
+    })?;
 
-    let slot_idx = *layout
-        .method_slots
-        .get(method_name)
-        .ok_or_else(|| CodegenError::unsupported(
+    let slot_idx = *layout.method_slots.get(method_name).ok_or_else(|| {
+        CodegenError::unsupported(
             format!("method '{}' not found in type '{}'", method_name, type_name),
-            Some(span)
-        ))?;
+            Some(span),
+        )
+    })?;
 
     // 7. Load the vtable pointer from the object header (field index 3).
     let i32_type = ctx.codegen.context.i32_type();
@@ -276,7 +409,10 @@ fn lower_class_method_call<'ctx>(
             .build_gep(
                 layout.struct_ty,
                 obj_ptr,
-                &[i32_type.const_int(0, false), i32_type.const_int(field_indices::VTABLE as u64, false)],
+                &[
+                    i32_type.const_int(0, false),
+                    i32_type.const_int(field_indices::VTABLE as u64, false),
+                ],
                 "vtable_ptr_ptr",
             )
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
@@ -289,7 +425,11 @@ fn lower_class_method_call<'ctx>(
         .into_pointer_value();
 
     // 8. Load the function pointer from the vtable at the computed slot index.
-    let slot_val = ctx.codegen.context.i32_type().const_int(slot_idx as u64, false);
+    let slot_val = ctx
+        .codegen
+        .context
+        .i32_type()
+        .const_int(slot_idx as u64, false);
     let fn_ptr_ptr = unsafe {
         ctx.codegen
             .builder
@@ -317,7 +457,7 @@ fn lower_class_method_call<'ctx>(
         .ok_or_else(|| {
             CodegenError::unsupported(
                 format!("method '{}' not declared", qualified_name),
-                Some(span)
+                Some(span),
             )
         })?;
     let fn_type = fn_decl.get_type();
@@ -328,9 +468,7 @@ fn lower_class_method_call<'ctx>(
         .builder
         .build_indirect_call(fn_type, fn_ptr, &call_args, "method_call")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    let result = call_site
-        .try_as_basic_value()
-        .unwrap_basic();
+    let result = call_site.try_as_basic_value().unwrap_basic();
     Ok(result)
 }
 
@@ -344,36 +482,33 @@ fn lower_base_call<'ctx>(
         _ => {
             return Err(CodegenError::unsupported(
                 "base call outside of an overriding method",
-                Some(call.callee.span)
+                Some(call.callee.span),
             ));
         }
     };
 
     // Look up the parent type.
-    let parent_name = ctx
-        .registry
-        .parent_of(current_type)
-        .ok_or_else(|| {
-            CodegenError::unsupported(
-                format!("type '{}' has no parent", current_type),
-                Some(call.callee.span)
-            )
-            })?;
+    let parent_name = ctx.registry.parent_of(current_type).ok_or_else(|| {
+        CodegenError::unsupported(
+            format!("type '{}' has no parent", current_type),
+            Some(call.callee.span),
+        )
+    })?;
 
     // Look up the parent method signature.
-    let parent_info = ctx
-        .registry
-        .lookup_type(&parent_name)
-        .ok_or_else(|| {
-            CodegenError::unsupported(
-                format!("parent type '{}' not found", parent_name),
-                Some(call.callee.span)
-            )
-        })?;
+    let parent_info = ctx.registry.lookup_type(&parent_name).ok_or_else(|| {
+        CodegenError::unsupported(
+            format!("parent type '{}' not found", parent_name),
+            Some(call.callee.span),
+        )
+    })?;
     if !parent_info.methods.contains_key(current_method) {
         return Err(CodegenError::unsupported(
-            format!("method '{}' not found in parent type '{}'", current_method, parent_name),
-            Some(call.callee.span)
+            format!(
+                "method '{}' not found in parent type '{}'",
+                current_method, parent_name
+            ),
+            Some(call.callee.span),
         ));
     }
 
@@ -387,7 +522,7 @@ fn lower_base_call<'ctx>(
         .ok_or_else(|| {
             CodegenError::unsupported(
                 format!("parent method '{}' not declared", qualified_name),
-                Some(call.callee.span)
+                Some(call.callee.span),
             )
         })?;
 
@@ -399,12 +534,7 @@ fn lower_base_call<'ctx>(
     let (self_alloca, self_llvm_ty, _) = ctx
         .scope_stack
         .lookup("self")
-        .ok_or_else(|| {
-            CodegenError::unsupported(
-                "self not in scope",
-                Some(call.callee.span)
-            )
-        })?;
+        .ok_or_else(|| CodegenError::unsupported("self not in scope", Some(call.callee.span)))?;
     let self_val = ctx
         .codegen
         .builder
@@ -422,9 +552,7 @@ fn lower_base_call<'ctx>(
         .builder
         .build_call(fn_val, &args, "base_call")
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    let result = call_site
-        .try_as_basic_value()
-        .unwrap_basic();
+    let result = call_site.try_as_basic_value().unwrap_basic();
     Ok(result)
 }
 
@@ -447,12 +575,12 @@ fn lower_function_value<'ctx>(
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     // Extract the function type details.
     let (param_types, return_type) = match callee_ty {
-        Type::Function { params, return_type } => (params, return_type.as_ref()),
+        Type::Function {
+            params,
+            return_type,
+        } => (params, return_type.as_ref()),
         _ => {
-            return Err(CodegenError::unsupported(
-                "expected function type",
-                span,
-            ));
+            return Err(CodegenError::unsupported("expected function type", span));
         }
     };
 
@@ -490,7 +618,11 @@ fn lower_function_value<'ctx>(
     let fn_ptr_typed = ctx
         .codegen
         .builder
-        .build_pointer_cast(fn_ptr, ctx.codegen.context.ptr_type(Default::default()), "fn_ptr_typed") 
+        .build_pointer_cast(
+            fn_ptr,
+            ctx.codegen.context.ptr_type(Default::default()),
+            "fn_ptr_typed",
+        )
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Prepare arguments: first self_ptr, then the rest.
@@ -525,20 +657,24 @@ fn lower_builtin_vector_call<'ctx>(
         "set" => "hulk_rt_vector_set",
         "next" => "hulk_rt_vector_next",
         "current" => "hulk_rt_vector_current",
-        _ => return Err(CodegenError::unsupported (
-            format!("Vector method `{}` not implemented", method_name),
-            Some(span),
-        )),
+        _ => {
+            return Err(CodegenError::unsupported(
+                format!("Vector method `{}` not implemented", method_name),
+                Some(span),
+            ))
+        }
     };
     let fn_val = ctx
         .codegen
         .functions
         .get(runtime_name)
         .cloned()
-        .ok_or_else(|| CodegenError::unsupported(
-            format!("runtime function `{}` not declared", runtime_name),
-            Some(span),
-        ))?;
+        .ok_or_else(|| {
+            CodegenError::unsupported(
+                format!("runtime function `{}` not declared", runtime_name),
+                Some(span),
+            )
+        })?;
 
     let mut call_args = vec![obj_ptr.into()];
     for arg in args {
@@ -565,20 +701,24 @@ fn lower_builtin_range_call<'ctx>(
     let runtime_name = match method_name {
         "next" => "hulk_rt_range_next",
         "current" => "hulk_rt_range_current",
-        _ => return Err(CodegenError::unsupported(
-            format!("Range method `{}` not implemented", method_name),
-            Some(span),
-        )),
+        _ => {
+            return Err(CodegenError::unsupported(
+                format!("Range method `{}` not implemented", method_name),
+                Some(span),
+            ))
+        }
     };
     let fn_val = ctx
         .codegen
         .functions
         .get(runtime_name)
         .cloned()
-        .ok_or_else(|| CodegenError::unsupported(
-            format!("runtime function `{}` not declared", runtime_name),
-            Some(span),
-        ))?;
+        .ok_or_else(|| {
+            CodegenError::unsupported(
+                format!("runtime function `{}` not declared", runtime_name),
+                Some(span),
+            )
+        })?;
 
     let mut call_args = vec![obj_ptr.into()];
     for arg in args {
@@ -623,18 +763,25 @@ fn lower_protocol_call<'ctx>(
     let protocol_name = match obj_type {
         Type::Named(name) => name.as_str(),
         Type::Iterable(_) => "Iterable",
-        _ => return Err(CodegenError::unsupported (
-            format!("expected protocol type, got {:?}", obj_type),
-            Some(span),
-        )),
+        _ => {
+            return Err(CodegenError::unsupported(
+                format!("expected protocol type, got {:?}", obj_type),
+                Some(span),
+            ))
+        }
     };
 
     // 3. Get the method slot index in the protocol's flattened method table.
     let slot = crate::itables::protocol_method_slot(ctx.registry, protocol_name, method_name)
-        .ok_or_else(|| CodegenError::unsupported (
-            format!("method `{}` not found in protocol `{}`", method_name, protocol_name),
-            Some(span),
-        ))?;
+        .ok_or_else(|| {
+            CodegenError::unsupported(
+                format!(
+                    "method `{}` not found in protocol `{}`",
+                    method_name, protocol_name
+                ),
+                Some(span),
+            )
+        })?;
 
     // 4. Load the function pointer from the itable.
     let ptr_type = ctx.codegen.context.ptr_type(Default::default());
@@ -656,10 +803,9 @@ fn lower_protocol_call<'ctx>(
     let method_sig = ctx
         .registry
         .lookup_method(obj_type, method_name)
-        .ok_or_else(|| CodegenError::unsupported (
-            format!("method `{}` not found", method_name),
-            Some(span),
-        ))?;
+        .ok_or_else(|| {
+            CodegenError::unsupported(format!("method `{}` not found", method_name), Some(span))
+        })?;
     let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum> = Vec::new();
     for (_, ty) in &method_sig.params {
         let llvm_ty = llvm_type(ctx.codegen, ctx.registry, ty)?;
@@ -674,7 +820,11 @@ fn lower_protocol_call<'ctx>(
     let fn_ptr_typed = ctx
         .codegen
         .builder
-        .build_pointer_cast(fn_ptr, ctx.codegen.context.ptr_type(Default::default()), "fn_ptr_typed")
+        .build_pointer_cast(
+            fn_ptr,
+            ctx.codegen.context.ptr_type(Default::default()),
+            "fn_ptr_typed",
+        )
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // 7. Prepare arguments: data_ptr as `self`, then the rest.
@@ -723,9 +873,26 @@ fn lower_and_box_args<'ctx>(
                 if let Type::Named(_) = &arg_expr.anno {
                     if !ctx.registry.is_protocol(&arg_expr.anno) {
                         arg_val = crate::lower::utils::convert_to_protocol(
-                            ctx, arg_val, &arg_expr.anno, param_ty,
+                            ctx,
+                            arg_val,
+                            &arg_expr.anno,
+                            param_ty,
                         )?;
                     }
+                }
+            }
+        } else if let Type::Iterable(_) = &param_ty {
+            // WHY: Iterable<T> is a fat pointer { data_ptr, itable_ptr }.
+            // When passing a Named class to an Iterable<T> parameter, we
+            // must box it to the fat pointer — same pattern as Named protocol.
+            if let Type::Named(_) = &arg_expr.anno {
+                if !ctx.registry.is_protocol(&arg_expr.anno) {
+                    arg_val = crate::lower::utils::convert_to_protocol(
+                        ctx,
+                        arg_val,
+                        &arg_expr.anno,
+                        param_ty,
+                    )?;
                 }
             }
         }

@@ -13,12 +13,17 @@ parser because semantic actions can construct the AST directly.
 
 ```ebnf
 Program      -> Declaration* Expr ';'* EOF
-Declaration  -> FunctionDecl | TypeDecl | ProtocolDecl
+Declaration  -> FunctionDecl | MacroDecl | TypeDecl | ProtocolDecl
 
 FunctionDecl -> 'function' id FunctionTail
+MacroDecl    -> 'def' id FunctionTail
 FunctionTail -> ParamList ReturnType? FunctionBody
 ReturnType   -> ':' TypeRef
-FunctionBody -> '=>' Expr ';'? | Block
+TypeRef      -> FunctionType | IterablePrefix? NamedTypeRef TypeSuffix*
+FunctionType -> '(' (TypeRef (',' TypeRef)*)? ')' '->' TypeRef
+IterablePrefix -> '*'
+TypeSuffix   -> '[]' | '*'
+FunctionBody -> ('=>' | '->') Expr ';'? | Block
 
 TypeDecl     -> 'type' id ParamList? Parent? '{' TypeMember* '}'
 Parent       -> 'inherits' id ConstructorArgs?
@@ -88,6 +93,7 @@ Primary -> number
          | id
          | 'self'
          | 'base'
+         | Lambda
          | '(' Expr ')'
          | Block
          | Vector
@@ -97,6 +103,23 @@ Primary -> number
          | For
          | New
          | Match
+```
+
+## Lambda, vector and type sugar
+
+```ebnf
+Lambda      -> '(' ParamListBody ')' ReturnType? '=>' Expr
+```
+
+The parser peeks through a parenthesized prefix to distinguish `(x) => ...`
+from a normal parenthesized expression. Type annotations also support function
+types, vector sugar and iterable sugar:
+
+```hulk
+(Number[]) -> Boolean   // Function<Vector<Number>, Boolean>
+Number[]                // Vector<Number>
+*Number[]               // Iterable<Number>
+Number*                 // Iterable<Number>, kept for reference compatibility
 ```
 
 ## Vector ambiguity resolution
@@ -124,7 +147,7 @@ parenthesized inside the head.
 | --- | --- |
 | `Program` | `parse_program` |
 | `Declaration` | `parse_declaration` |
-| `FunctionDecl` | `parse_function_declaration_after_keyword` |
+| `FunctionDecl` / `MacroDecl` | `parse_function_declaration_after_keyword` |
 | `TypeDecl` | `parse_type_declaration_after_keyword` |
 | `ProtocolDecl` | `parse_protocol_declaration_after_keyword` |
 | `Expr` | `parse_expression` |
@@ -141,3 +164,5 @@ parenthesized inside the head.
 | `Power` | `parse_power` |
 | `Postfix` | `parse_postfix` |
 | `Primary` | `parse_primary` |
+| `Lambda` | `parse_lambda_expression` |
+| `TypeRef` | `parse_type_ref` |

@@ -35,7 +35,8 @@ fn main() {
     std::fs::create_dir_all(&work_dir).expect("create work dir");
 
     let context = Context::create();
-    let ctx = hulk_codegen::build_smoke_module(&context).expect("smoke module should build and verify");
+    let ctx =
+        hulk_codegen::build_smoke_module(&context).expect("smoke module should build and verify");
 
     let ll_path = work_dir.join("smoke.ll");
     hulk_codegen::emit_llvm_ir_to_file(&ctx, &ll_path).expect("write .ll");
@@ -60,7 +61,10 @@ fn main() {
     };
 
     let mut cmd = Command::new(linker);
-    cmd.arg(&obj_path).arg("-L").arg(&rt_lib_dir).arg("-lhulk_rt");
+    cmd.arg(&obj_path)
+        .arg("-L")
+        .arg(&rt_lib_dir)
+        .arg("-lhulk_rt");
     if let Some(flag) = target_flag {
         cmd.arg(flag);
     }
@@ -82,7 +86,10 @@ fn main() {
     println!();
     println!("SUCCESS: IR -> object -> link chain verified (cross-compilation to Linux x86_64).");
     println!();
-    println!("Next step: copy {} to your WSL/Ubuntu environment and run it:", exe_path.display());
+    println!(
+        "Next step: copy {} to your WSL/Ubuntu environment and run it:",
+        exe_path.display()
+    );
     println!("    wsl {}", exe_path.display());
     println!("    # should exit 0 with no output");
 }

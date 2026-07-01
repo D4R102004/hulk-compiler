@@ -17,10 +17,10 @@ use std::fmt;
 
 use hulk_ast::{
     AssignExpr, AssignTarget, AttributeDecl, BinaryOp, BlockExpr, Declaration, DeclarationKind,
-    DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl, IfExpr, IndexExpr, LetBinding,
-    LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr, Param, Pattern, Program,
-    ProtocolDecl, ProtocolMethod, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeParent,
-    TypeRef, TypeTestExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
+    DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl, IfExpr, IndexExpr, LambdaExpr,
+    LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr, Param, Pattern,
+    Program, ProtocolDecl, ProtocolMethod, SourceSpan, TypeDecl, TypeMember, TypeMemberKind,
+    TypeParent, TypeRef, TypeTestExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
 };
 use hulk_lexer::{Span, Token, TokenKind};
 
@@ -150,7 +150,9 @@ impl Ll1Parser {
         let span = self.peek_span();
 
         match &self.peek().kind {
-            TokenKind::Function => {
+            // WHY: 'def' macros are parsed as global function-like declarations here.
+            // Later phases may choose to transpile them differently.
+            TokenKind::Function | TokenKind::Def => {
                 self.advance();
                 let function = self.parse_function_declaration_after_keyword()?;
                 Ok(Declaration::new(DeclarationKind::Function(function), span))
@@ -185,14 +187,18 @@ impl Ll1Parser {
             None
         };
 
-        let body = if self.match_kind(&TokenKind::FatArrow) {
+        // WHY: HULK spec uses `=>` for function bodies, but the 'define' macro
+        // extension conventionally uses `->` (same token as function-type arrows).
+        // Accept both so `def f(x): T -> expr` and `function f(x): T => expr`
+        // work identically.
+        let body = if self.match_kind(&TokenKind::FatArrow) || self.match_kind(&TokenKind::Arrow) {
             let expression = self.parse_expression()?;
             self.match_kind(&TokenKind::Semicolon);
             expression
         } else if self.check(&TokenKind::LBrace) {
             self.parse_block_expression()?
         } else {
-            return Err(self.error_unexpected("`=>` or function block"));
+            return Err(self.error_unexpected("`=>`, `->`, or function block"));
         };
 
         Ok(FunctionDecl::new(name, params, return_type, body))
@@ -300,6 +306,10 @@ impl Ll1Parser {
 
     fn parse_param_list(&mut self) -> Result<Vec<Param>, ParseError> {
         self.consume(&TokenKind::LParen, "`(` before parameter list")?;
+        self.parse_param_list_after_lparen()
+    }
+
+    fn parse_param_list_after_lparen(&mut self) -> Result<Vec<Param>, ParseError> {
         let mut params = Vec::new();
 
         if !self.check(&TokenKind::RParen) {
@@ -339,23 +349,16 @@ impl Ll1Parser {
     }
 
     fn parse_type_ref(&mut self) -> Result<TypeRef, ParseError> {
-        let name = self.consume_identifier()?;
-        let mut ty = if self.match_kind(&TokenKind::Lt) {
-            let mut args = Vec::new();
-            loop {
-                args.push(self.parse_type_ref()?);
-                if !self.match_kind(&TokenKind::Comma) {
-                    break;
-                }
-            }
-            self.consume(&TokenKind::Gt, "`>` after type arguments")?;
-            TypeRef::with_args(name, args)
-        } else {
-            TypeRef::named(name)
-        };
+        if self.check(&TokenKind::LParen) {
+            return self.parse_function_type_ref();
+        }
+
+        let iterable_prefix = self.match_kind(&TokenKind::Star);
+        let mut ty = self.parse_named_type_ref()?;
 
         loop {
             if self.match_kind(&TokenKind::Star) {
+                // Backwards-compatible spelling from the reference docs: `T*`.
                 ty = TypeRef::with_args("Iterable", vec![ty]);
             } else if self.match_kind(&TokenKind::LBracket) {
                 self.consume(&TokenKind::RBracket, "`]` after vector type suffix")?;
@@ -365,7 +368,56 @@ impl Ll1Parser {
             }
         }
 
+        if iterable_prefix {
+            // Project sugar requested by the user: `*T[]` means an iterable of T.
+            // If the immediate type has just been built as `Vector<T>`, unwrap it
+            // so the semantic type becomes `Iterable<T>`, not `Iterable<Vector<T>>`.
+            ty = match ty {
+                TypeRef { name, mut args } if name == "Vector" && args.len() == 1 => {
+                    TypeRef::with_args("Iterable", vec![args.remove(0)])
+                }
+                other => TypeRef::with_args("Iterable", vec![other]),
+            };
+        }
+
         Ok(ty)
+    }
+
+    fn parse_named_type_ref(&mut self) -> Result<TypeRef, ParseError> {
+        let name = self.consume_identifier()?;
+        if self.match_kind(&TokenKind::Lt) {
+            let mut args = Vec::new();
+            loop {
+                args.push(self.parse_type_ref()?);
+                if !self.match_kind(&TokenKind::Comma) {
+                    break;
+                }
+            }
+            self.consume(&TokenKind::Gt, "`>` after type arguments")?;
+            Ok(TypeRef::with_args(name, args))
+        } else {
+            Ok(TypeRef::named(name))
+        }
+    }
+
+    fn parse_function_type_ref(&mut self) -> Result<TypeRef, ParseError> {
+        self.consume(&TokenKind::LParen, "`(` before function type parameters")?;
+        let mut args = Vec::new();
+
+        if !self.check(&TokenKind::RParen) {
+            loop {
+                args.push(self.parse_type_ref()?);
+                if !self.match_kind(&TokenKind::Comma) {
+                    break;
+                }
+            }
+        }
+
+        self.consume(&TokenKind::RParen, "`)` after function type parameters")?;
+        self.consume(&TokenKind::Arrow, "`->` in function type")?;
+        args.push(self.parse_type_ref()?);
+
+        Ok(TypeRef::with_args("Function", args))
     }
 
     /// Lowest-precedence expression entry point.
@@ -672,6 +724,10 @@ impl Ll1Parser {
             ));
         }
 
+        if self.check(&TokenKind::LParen) && self.lookahead_starts_lambda_expression() {
+            return self.parse_lambda_expression();
+        }
+
         let token = self.advance();
         let span = token_span(token.span);
 
@@ -700,6 +756,7 @@ impl Ll1Parser {
             TokenKind::For => self.finish_for_expression(span),
             TokenKind::New => self.finish_new_expression(span),
             TokenKind::Match => self.finish_match_expression(span),
+            TokenKind::Function => self.parse_anon_function_after_keyword(span),
             other => Err(ParseError::new(
                 ParseErrorKind::ExpectedExpression {
                     found: token_kind_name(&other),
@@ -707,6 +764,46 @@ impl Ll1Parser {
                 span,
             )),
         }
+    }
+
+    fn parse_anon_function_after_keyword(&mut self, span: SourceSpan) -> Result<Expr, ParseError> {
+        let params = self.parse_param_list()?;
+        let return_type = if self.match_kind(&TokenKind::Colon) {
+            Some(self.parse_type_ref()?)
+        } else {
+            None
+        };
+        let body = if self.match_kind(&TokenKind::FatArrow) || self.match_kind(&TokenKind::Arrow) {
+            let expression = self.parse_expression()?;
+            self.match_kind(&TokenKind::Semicolon);
+            expression
+        } else if self.check(&TokenKind::LBrace) {
+            self.parse_block_expression()?
+        } else {
+            return Err(self.error_unexpected("`=>`, `->`, or function block"));
+        };
+        Ok(Expr::new(
+            ExprKind::Lambda(LambdaExpr::new(params, return_type, body)),
+            span,
+        ))
+    }
+
+    fn parse_lambda_expression(&mut self) -> Result<Expr, ParseError> {
+        let paren = self.consume(&TokenKind::LParen, "`(` before lambda parameter list")?;
+        let span = token_span(paren.span);
+        let params = self.parse_param_list_after_lparen()?;
+        let return_type = if self.match_kind(&TokenKind::Colon) {
+            Some(self.parse_type_ref()?)
+        } else {
+            None
+        };
+        self.consume(&TokenKind::FatArrow, "`=>` after lambda parameters")?;
+        let body = self.parse_expression()?;
+
+        Ok(Expr::new(
+            ExprKind::Lambda(LambdaExpr::new(params, return_type, body)),
+            span,
+        ))
     }
 
     fn parse_block_expression(&mut self) -> Result<Expr, ParseError> {
@@ -924,11 +1021,99 @@ impl Ll1Parser {
         Ok(expr)
     }
 
-    /// FIRST(Declaration) = { function, type, protocol }.
+    fn lookahead_starts_lambda_expression(&self) -> bool {
+        if !matches!(&self.peek().kind, TokenKind::LParen) {
+            return false;
+        }
+
+        let Some(close_paren) = self.find_matching_paren(self.current) else {
+            return false;
+        };
+
+        let mut cursor = close_paren + 1;
+        if self
+            .token_at(cursor)
+            .map(|k| same_variant(k, &TokenKind::Colon))
+            .unwrap_or(false)
+        {
+            cursor += 1;
+            cursor = self.skip_type_ref_tokens(cursor);
+        }
+
+        self.token_at(cursor)
+            .map(|kind| same_variant(kind, &TokenKind::FatArrow))
+            .unwrap_or(false)
+    }
+
+    fn find_matching_paren(&self, start: usize) -> Option<usize> {
+        let mut depth = 0usize;
+        for index in start..self.tokens.len() {
+            match &self.tokens[index].kind {
+                TokenKind::LParen => depth += 1,
+                TokenKind::RParen => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+                TokenKind::Eof => return None,
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn skip_type_ref_tokens(&self, start: usize) -> usize {
+        let mut index = start;
+        let mut angle_depth = 0usize;
+        let mut paren_depth = 0usize;
+        let mut bracket_depth = 0usize;
+
+        while let Some(kind) = self.token_at(index) {
+            match kind {
+                TokenKind::FatArrow | TokenKind::Eof
+                    if angle_depth == 0 && paren_depth == 0 && bracket_depth == 0 =>
+                {
+                    break
+                }
+                TokenKind::LParen => paren_depth += 1,
+                TokenKind::RParen => {
+                    if paren_depth == 0 && angle_depth == 0 && bracket_depth == 0 {
+                        break;
+                    }
+                    paren_depth = paren_depth.saturating_sub(1);
+                }
+                TokenKind::Lt => angle_depth += 1,
+                TokenKind::Gt => {
+                    if angle_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
+                        break;
+                    }
+                    angle_depth = angle_depth.saturating_sub(1);
+                }
+                TokenKind::LBracket => bracket_depth += 1,
+                TokenKind::RBracket => {
+                    if bracket_depth == 0 && angle_depth == 0 && paren_depth == 0 {
+                        break;
+                    }
+                    bracket_depth = bracket_depth.saturating_sub(1);
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+
+        index
+    }
+
+    fn token_at(&self, index: usize) -> Option<&TokenKind> {
+        self.tokens.get(index).map(|token| &token.kind)
+    }
+
+    /// FIRST(Declaration) = { function, def, type, protocol }.
     fn lookahead_starts_declaration(&self) -> bool {
         matches!(
             &self.peek().kind,
-            TokenKind::Function | TokenKind::Type | TokenKind::Protocol
+            TokenKind::Function | TokenKind::Def | TokenKind::Type | TokenKind::Protocol
         )
     }
 
@@ -958,6 +1143,7 @@ impl Ll1Parser {
                 | TokenKind::For
                 | TokenKind::New
                 | TokenKind::Match
+                | TokenKind::Function
         )
     }
 
@@ -1275,6 +1461,74 @@ mod tests {
                 ));
             }
             other => panic!("expected let entry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_lambda_expression() {
+        let program = parse_source("let f = (x: Number): Boolean => { x % 2 == 0; } in f(4);");
+
+        match program.entry.kind {
+            ExprKind::Let(let_expr) => {
+                assert!(matches!(
+                    let_expr.bindings[0].initializer.kind,
+                    ExprKind::Lambda(_)
+                ));
+            }
+            other => panic!("expected let entry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_function_type_vector_sugar() {
+        let program = parse_source("function apply(xs: Number[], f: (Number[]) -> Boolean): Boolean => f(xs); print(true);");
+
+        match &program.declarations[0].kind {
+            DeclarationKind::Function(function) => {
+                assert_eq!(
+                    function.params[0]
+                        .type_annotation
+                        .as_ref()
+                        .map(ToString::to_string),
+                    Some("Vector<Number>".to_string())
+                );
+                assert_eq!(
+                    function.params[1]
+                        .type_annotation
+                        .as_ref()
+                        .map(ToString::to_string),
+                    Some("(Vector<Number>) -> Boolean".to_string())
+                );
+            }
+            other => panic!("expected function declaration, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_iterable_prefix_vector_sugar() {
+        let program = parse_source("function sum(xs: *Number[]): Number => 0; print(sum([1]));");
+
+        match &program.declarations[0].kind {
+            DeclarationKind::Function(function) => {
+                assert_eq!(
+                    function.params[0]
+                        .type_annotation
+                        .as_ref()
+                        .map(ToString::to_string),
+                    Some("Iterable<Number>".to_string())
+                );
+            }
+            other => panic!("expected function declaration, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parses_def_as_global_macro_like_function() {
+        let program = parse_source("def twice(x: Number): Number => x * 2; print(twice(21));");
+
+        match &program.declarations[0].kind {
+            DeclarationKind::Function(function) => assert_eq!(function.name, "twice"),
+            other => panic!("expected function declaration, got {other:?}"),
         }
     }
 
