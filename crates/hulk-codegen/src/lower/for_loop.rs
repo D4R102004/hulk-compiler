@@ -176,12 +176,13 @@ pub fn lower_for<'ctx>(
         iterable_expr.span,
     )?;
 
-    // WHY: hulk_rt_range_current returns f64 directly (never boxed).
-    // hulk_rt_vector_current returns HulkBox* (needs unboxing for primitive elements).
-    let unboxed_current = if matches!(&iter_ty, Type::Named(n) if n == "Range") {
-        current_val
-    } else {
+    // WHY: Only Vector boxes its elements as HulkBox* (via hulk_rt_vector_current).
+    // Range and all user-defined generator types return the element value directly
+    // (f64 for Number, ptr for object types) — ensure_unboxed would panic on those.
+    let unboxed_current = if matches!(&iter_ty, Type::Vector(_)) {
         ensure_unboxed(ctx, current_val, &elem_ty)?
+    } else {
+        current_val
     };
 
     // Bind the loop variable.
