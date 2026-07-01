@@ -141,8 +141,8 @@ pub fn declare_vector_size<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> 
         return f;
     }
     let ptr_type = ctx.context.ptr_type(Default::default());
-    let i64_type = ctx.context.i64_type();
-    let fn_type = i64_type.fn_type(&[ptr_type.into()], false);
+    let f64_type = ctx.context.f64_type();
+    let fn_type = f64_type.fn_type(&[ptr_type.into()], false);
     ctx.module
         .add_function("hulk_rt_vector_size", fn_type, None)
 }
