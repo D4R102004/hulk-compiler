@@ -118,6 +118,7 @@ pub fn compile(
     // Declare downcast check and fail functions (used in type tests and downcasts)
     let _downcast_check = runtime_decls::declare_downcast_check(&codegen);
     let _downcast_fail = runtime_decls::declare_downcast_fail(&codegen);
+    let _internal_error = runtime_decls::declare_internal_error(&codegen);
 
     // Lower the entry expression and capture its value.
     let entry_result = {
