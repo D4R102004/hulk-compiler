@@ -1389,6 +1389,7 @@ fn token_kind_name(kind: &TokenKind) -> String {
         TokenKind::Protocol => "`protocol`".to_string(),
         TokenKind::Extends => "`extends`".to_string(),
         TokenKind::Def => "`def`".to_string(),
+        TokenKind::Dollar => "`$`".to_string(),
         TokenKind::Match => "`match`".to_string(),
         TokenKind::Case => "`case`".to_string(),
         TokenKind::Underscore => "`_`".to_string(),

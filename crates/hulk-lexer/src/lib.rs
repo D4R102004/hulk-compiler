@@ -91,8 +91,13 @@ pub enum TokenKind {
     As,
     Protocol,
     Extends,
+
+    // ── Macros ─────────────────────────────────────────────────
     /// `def` keyword for macro definitions
     Def,
+    /// `$` sigil for macro variable placeholder parameters.
+    Dollar,
+
 
     // ── Extra feature: pattern matching ───────────────────────────────
     Match,
@@ -379,6 +384,7 @@ impl Lexer {
                         TokenKind::At
                     }
                 }
+                '$' => TokenKind::Dollar,
 
                 // ── String literals ───────────────────────────────────────
                 '"' => self.lex_string(span)?,
