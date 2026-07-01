@@ -813,24 +813,57 @@ impl Ll1Parser {
     }
 
     fn finish_block_expression(&mut self, span: SourceSpan) -> Result<Expr, ParseError> {
-        let mut expressions = Vec::new();
-
-        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
-            if self.match_kind(&TokenKind::Semicolon) {
-                continue;
-            }
-
-            expressions.push(self.parse_expression()?);
-
-            if self.match_kind(&TokenKind::Semicolon) {
-                continue;
-            }
-
-            if !self.check(&TokenKind::RBrace) {
-                self.consume(&TokenKind::Semicolon, "`;` between block expressions")?;
-            }
+        // ── Empty block `{}` ──────────────────────────────────────────────
+        if self.check(&TokenKind::RBrace) {
+            self.advance();
+            return Ok(Expr::new(
+                ExprKind::Block(BlockExpr::new(Vec::new())),
+                span,
+            ));
         }
 
+        // ── Parse the first expression (mandatory) ──────────────────────
+        let first = self.parse_expression()?;
+
+        // ── Disambiguate: `{ expr, ... }` → vector literal ─────────────
+        if self.check(&TokenKind::Comma) {
+            let mut items = vec![first];
+            // Parse comma‑separated expressions, allowing a trailing comma.
+            while self.match_kind(&TokenKind::Comma) {
+                if self.check(&TokenKind::RBrace) {
+                    break; // trailing comma is allowed
+                }
+                items.push(self.parse_expression()?);
+            }
+            self.consume(&TokenKind::RBrace, "`}` after vector literal")?;
+            return Ok(Expr::new(
+                ExprKind::Vector(VectorExpr::Literal(items)),
+                span,
+            ));
+        }
+
+        // ── Otherwise: normal `;`‑separated block ──────────────────────
+        let mut expressions = vec![first];
+
+        // If there is a semicolon after the first expression, parse the rest.
+        if self.match_kind(&TokenKind::Semicolon) {
+            while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+                // Skip redundant semicolons (allow empty statements).
+                if self.match_kind(&TokenKind::Semicolon) {
+                    continue;
+                }
+                expressions.push(self.parse_expression()?);
+                // After an expression, we expect either a semicolon or the closing brace.
+                if self.match_kind(&TokenKind::Semicolon) {
+                    continue;
+                }
+                if !self.check(&TokenKind::RBrace) {
+                    self.consume(&TokenKind::Semicolon, "`;` between block expressions")?;
+                }
+            }
+        }
+        // If there was no semicolon after the first expression, the block
+        // contains only that single expression. In either case, consume the `}`.
         self.consume(&TokenKind::RBrace, "`}` after expression block")?;
         Ok(Expr::new(
             ExprKind::Block(BlockExpr::new(expressions)),

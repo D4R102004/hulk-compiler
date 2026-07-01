@@ -1,6 +1,6 @@
 //! Lowering of vector expressions: literals, comprehensions, and indexing.
 
-use hulk_ast::{Expr, ExprNewExpr, SourceSpan, VectorComprehension, Vector, VectorGenerator};
+use hulk_ast::{Expr, NewExpr, SourceSpan, VectorComprehension, VectorExpr};
 use hulk_semantic::Type;
 use inkwell::values::BasicValueEnum;
 
