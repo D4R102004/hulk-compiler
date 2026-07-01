@@ -32,6 +32,8 @@ pub enum CodegenErrorKind {
     },
     /// Unsupported language construct encountered (internal).
     Unsupported { construct: String },
+    /// Internal unnidentified compiler error.
+    Internal(String),
 }
 
 // ─── Constructors ─────────────────────────────────────────────────────────
@@ -75,6 +77,13 @@ impl CodegenError {
                 construct: construct.into(),
             },
             span,
+        }
+    }
+
+    pub fn internal(msg: impl Into<String>, span: Option<SourceSpan>) -> Self {
+        Self {
+            kind: CodegenErrorKind::Internal(msg.into()),
+            span: span,
         }
     }
 
@@ -124,6 +133,9 @@ impl fmt::Display for CodegenError {
             }
             CodegenErrorKind::Unsupported { construct } => {
                 write!(f, "unsupported construct: {construct}")
+            }
+            CodegenErrorKind::Internal(msg) => {
+                write!(f, "internal compiler error: {msg}")
             }
         }
     }

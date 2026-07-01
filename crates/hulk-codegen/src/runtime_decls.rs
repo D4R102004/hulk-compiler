@@ -114,6 +114,14 @@ pub fn declare_downcast_fail<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx
         .add_function("hulk_rt_downcast_fail", fn_type, None)
 }
 
+/// Declares `hulk_rt_internal_error() -> !` (noreturn).
+pub fn declare_internal_error<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(f) = ctx.module.get_function("hulk_rt_internal_error") { return f; }
+    let void_type = ctx.context.void_type();
+    let fn_type = void_type.fn_type(&[], false);
+    ctx.module.add_function("hulk_rt_internal_error", fn_type, None)
+}
+
 // ─── Vector builtin methods ───────────────────────────────────────────────
 
 /// Declares `hulk_rt_vector_new(len: i64) -> ptr`.
@@ -375,6 +383,7 @@ pub fn ensure_decl<'ctx>(
         "hulk_rt_match_fail" => declare_match_fail(ctx),
         "hulk_rt_downcast_check" => declare_downcast_check(ctx),
         "hulk_rt_downcast_fail" => declare_downcast_fail(ctx),
+        "hulk_rt_internal_error" => declare_internal_error(ctx),
         "hulk_rt_string_equals" => declare_string_equals(ctx),
         "hulk_rt_dynamic_vector_new" => declare_dynamic_vector_new(ctx),
         "hulk_rt_dynamic_vector_append" => declare_dynamic_vector_append(ctx),
@@ -428,6 +437,9 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
     let str_eq = declare_string_equals(ctx);
     ctx.functions
         .insert("hulk_rt_string_equals".to_string(), str_eq);
+
+    let internal_error = declare_internal_error(ctx);
+    ctx.functions.insert("hulk_rt_internal_error".to_string(), internal_error);
 
     // ─── Vector builtin methods ───────────────────────────────────────────
 

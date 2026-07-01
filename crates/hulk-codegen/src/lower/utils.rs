@@ -1,10 +1,10 @@
 //! Shared helper functions and constants used by multiple lowering submodules.
 
-use hulk_ast::TypeRef;
+use inkwell::FloatPredicate;
+use inkwell::values::BasicValueEnum;
+use hulk_ast::{TypeRef, SourceSpan};
 use hulk_rt::{TAG_BOOLEAN, TAG_BOX, TAG_NUMBER};
 use hulk_semantic::{Type, TypeRegistry};
-use inkwell::values::BasicValueEnum;
-use inkwell::FloatPredicate;
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
@@ -469,22 +469,77 @@ pub fn ensure_boxed<'ctx>(
 
 /// Converts a boxed primitive pointer back to a raw value.
 /// If `ty` is not Number or Boolean, returns the pointer unchanged.
+/// 
+/// # Errors
+/// Returns `CodegenError::Internal` for LLVM builder failures.
 pub fn ensure_unboxed<'ctx>(
     ctx: &mut LowerCtx<'_, 'ctx>,
     boxed_ptr: inkwell::values::BasicValueEnum<'ctx>,
     ty: &Type,
+    span: Option<SourceSpan>
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
     // If the static type is already a pointer type, no unboxing needed.
-    if !matches!(ty, Type::Number | Type::Boolean) {
+    if !matches!(ty, Type::Number | Type::Boolean) ||
+        // If boxed_ptr is not a ptr, return without unboxing.
+        !boxed_ptr.is_pointer_value()
+    {
         return Ok(boxed_ptr);
     }
 
     let ptr = boxed_ptr.into_pointer_value();
+
+    let current_block = ctx
+        .codegen
+        .builder
+        .get_insert_block()
+        .ok_or_else(|| CodegenError::internal("no active insertion block while unboxing", span))?;
+    let parent_fn = current_block
+        .get_parent()
+        .ok_or_else(|| CodegenError::internal("unboxing outside of a function", span))?;
+
+    let null_bb = ctx.codegen.context.append_basic_block(parent_fn, "unbox_null");
+    let cont_bb = ctx.codegen.context.append_basic_block(parent_fn, "unbox_cont");
+    let merge_bb = ctx.codegen.context.append_basic_block(parent_fn, "unbox_merge");
+
+    let result_ty: inkwell::types::BasicTypeEnum<'ctx> = match ty {
+        Type::Number => ctx.codegen.context.f64_type().into(),
+        Type::Boolean => ctx.codegen.context.bool_type().into(),
+        _ => unreachable!(),
+    };
+    let result_alloca = ctx
+        .codegen
+        .builder
+        .build_alloca(result_ty, "unbox_result")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    let is_null = ctx
+        .codegen
+        .builder
+        .build_is_null(ptr, "is_null")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.codegen
+        .builder
+        .build_conditional_branch(is_null, null_bb, cont_bb)
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    // Null means the runtime handed an uninitialized vector slot or another invalid object reference.
+    ctx.codegen.builder.position_at_end(null_bb);
+    let fail_fn = runtime_decls::ensure_decl(ctx.codegen, "hulk_rt_internal_error")?;
+    ctx.codegen
+        .builder
+        .build_call(fail_fn, &[], "internal_error")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    ctx.codegen
+        .builder
+        .build_unreachable()
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
     let i8_type = ctx.codegen.context.i8_type();
     let i64_type = ctx.codegen.context.i64_type();
     let ptr_type = ctx.codegen.context.ptr_type(Default::default());
 
-    // Compute payload address
+    // Compute payload address only on the non-null path.
+    ctx.codegen.builder.position_at_end(cont_bb);
     let payload_ptr_i8 = unsafe {
         ctx.codegen
             .builder
@@ -514,7 +569,10 @@ pub fn ensure_unboxed<'ctx>(
                     "unbox_num",
                 )
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            Ok(val)
+            ctx.codegen
+                .builder
+                .build_store(result_alloca, val)
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         }
         Type::Boolean => {
             let val = ctx
@@ -531,10 +589,25 @@ pub fn ensure_unboxed<'ctx>(
                     "bool_trunc",
                 )
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            Ok(truncated.into())
+            ctx.codegen
+                .builder
+                .build_store(result_alloca, truncated)
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         }
         _ => unreachable!(),
     }
+
+    ctx.codegen
+        .builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+    ctx.codegen.builder.position_at_end(merge_bb);
+    let result = ctx.codegen
+        .builder
+        .build_load(result_ty, result_alloca, "unbox_result_load")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    Ok(result)
 }
 
 // Returns `true` if the type is a protocol or an Iterable, which are both represented as fat pointers.

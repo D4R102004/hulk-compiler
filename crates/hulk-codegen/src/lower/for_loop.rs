@@ -176,12 +176,12 @@ pub fn lower_for<'ctx>(
         iterable_expr.span,
     )?;
 
-    // WHY: Only Vector boxes its elements as HulkBox* (via hulk_rt_vector_current).
-    // Range and all user-defined generator types return the element value directly
-    // (f64 for Number, ptr for object types) — ensure_unboxed would panic on those.
+    // Only Vector boxes its elements as HulkBox* (via hulk_rt_vector_current).
     let unboxed_current = if matches!(&iter_ty, Type::Vector(_)) {
         ensure_unboxed(ctx, current_val, &elem_ty)?
-    } else {
+    }
+    // Range and all user-defined generator types return the element value directly
+    else {
         current_val
     };
 

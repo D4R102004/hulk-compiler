@@ -826,6 +826,13 @@ pub extern "C" fn hulk_rt_downcast_fail() -> ! {
     std::process::abort();
 }
 
+/// Called when the generated program hits an internal runtime inconsistency; prints an error message and aborts.
+#[no_mangle]
+pub extern "C" fn hulk_rt_internal_error() -> ! {
+    eprintln!("runtime error: internal error");
+    std::process::abort();
+}
+
 /// Called when a non-exhaustive match is encountered; prints an error message and aborts the program.
 #[no_mangle]
 pub extern "C" fn hulk_rt_match_fail() -> ! {

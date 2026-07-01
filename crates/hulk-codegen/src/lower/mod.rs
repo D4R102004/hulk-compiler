@@ -278,6 +278,11 @@ mod tests {
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
     use hulk_semantic::analyze;
+    use hulk_ast::{
+        AssignExpr, AssignTarget, BinaryExpr, BinaryOp, BlockExpr, ElifBranch, Expr, ExprKind,
+        IfExpr, IndexExpr, LetBinding, LetExpr, Literal, SourceSpan, UnaryExpr, UnaryOp, WhileExpr, ForExpr,
+        MatchExpr, MatchCase, Pattern, VectorExpr, VectorComprehension, TypeRef,
+    };
     use hulk_semantic::{seeded_registry, Type};
     use inkwell::context::Context;
 
@@ -596,6 +601,27 @@ mod tests {
                 var: var.to_string(),
                 iterable: Box::new(iterable),
             })),
+            anno: ty,
+            span: dummy_span(),
+        }
+    }
+
+    /// Helper: create a typed vector literal.
+    fn vector_lit(items: Vec<Expr<Type>>, ty: Type) -> Expr<Type> {
+        Expr {
+            kind: ExprKind::Vector(VectorExpr::Literal(items)),
+            anno: ty,
+            span: dummy_span(),
+        }
+    }
+
+    /// Helper: create a typed indexing expression.
+    fn index_expr(object: Expr<Type>, index: Expr<Type>, ty: Type) -> Expr<Type> {
+        Expr {
+            kind: ExprKind::Index(IndexExpr {
+                object: Box::new(object),
+                index: Box::new(index),
+            }),
             anno: ty,
             span: dummy_span(),
         }
@@ -1243,6 +1269,20 @@ mod tests {
         assert_ir_contains(&ir, "for_cond:");
         assert_ir_contains(&ir, "call i1 @hulk_rt_vector_next(ptr");
         assert_ir_contains(&ir, "call ptr @hulk_rt_vector_current(ptr");
+        assert_ir_contains(&ir, "call void @hulk_rt_internal_error()");
+    }
+
+    #[test]
+    fn test_vector_index_primitive_null_check() {
+        // let xs = [1,2,3] in xs[0]
+        let xs = vector_lit(vec![num(1.0), num(2.0), num(3.0)], Type::Vector(Box::new(Type::Number)));
+        let body = index_expr(var("xs", Type::Vector(Box::new(Type::Number))), num(0.0), Type::Number);
+        let expr = let_expr(vec![("xs".to_string(), xs)], body, Type::Number);
+        let ir = lower_expr_to_ir(expr);
+        assert_ir_contains(&ir, "call ptr @hulk_rt_vector_get(ptr");
+        assert_ir_contains(&ir, "br i1");
+        assert_ir_contains(&ir, "unbox_null:");
+        assert_ir_contains(&ir, "call void @hulk_rt_internal_error()");
     }
 
     #[test]
