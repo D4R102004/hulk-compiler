@@ -157,6 +157,11 @@ pub fn lower_method_call_val<'ctx>(
         if name == "Range" {
             return lower_builtin_range_call(ctx, obj_val, method_name, &[], span);
         }
+        // WHY: Python, Java, C# for loops use vtable dispatch on any type that
+        // implements the iterator protocol — no hardcoded allow-list.  User-defined
+        // generator types expose next()/current() as ordinary class methods and
+        // must be dispatched via vtable exactly like any other method call.
+        return lower_named_method_from_val(ctx, obj_val, name, method_name, span);
     }
     if is_protocol_type(obj_type, ctx.registry) {
         return lower_protocol_call(ctx, obj_val, obj_type, method_name, &[], span);
@@ -168,6 +173,111 @@ pub fn lower_method_call_val<'ctx>(
         ),
         Some(span),
     ))
+}
+
+/// Dispatch a zero-argument method call on an already-evaluated user-defined
+/// class value via vtable (or direct call when the type is monomorphic).
+///
+/// This is the `lower_method_call_val` counterpart of `lower_class_method_call`:
+/// the receiver has already been lowered into `obj_val`, so we skip `lower_expr`.
+fn lower_named_method_from_val<'ctx>(
+    ctx: &mut LowerCtx<'_, 'ctx>,
+    obj_val: BasicValueEnum<'ctx>,
+    type_name: &str,
+    method_name: &str,
+    span: SourceSpan,
+) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+    let obj_ptr = obj_val.into_pointer_value();
+    let call_args: Vec<BasicMetadataValueEnum> = vec![obj_ptr.into()];
+
+    // Devirtualize when the type has no subtypes.
+    if !has_subtypes(type_name, ctx.registry) {
+        let owner =
+            crate::layout::owning_type_for_method(type_name, method_name, ctx.registry)
+                .unwrap_or_else(|| type_name.to_string());
+        let qualified_name = format!("{}::{}", owner, method_name);
+        if let Some(fn_val) = ctx.codegen.functions.get(&qualified_name) {
+            let call_site = ctx
+                .codegen
+                .builder
+                .build_call(*fn_val, &call_args, "direct_method_call")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            return Ok(call_site.try_as_basic_value().unwrap_basic());
+        }
+    }
+
+    // Vtable dispatch.
+    let layout = ctx.codegen.type_layouts.get(type_name).ok_or_else(|| {
+        CodegenError::unsupported(format!("no layout for type '{}'", type_name), Some(span))
+    })?;
+    let struct_ty = layout.struct_ty; // Copy — released before builder borrow
+    let slot_idx = *layout.method_slots.get(method_name).ok_or_else(|| {
+        CodegenError::unsupported(
+            format!("method '{}' not in vtable for type '{}'", method_name, type_name),
+            Some(span),
+        )
+    })?;
+
+    let i32_type = ctx.codegen.context.i32_type();
+    let ptr_type = ctx.codegen.context.ptr_type(Default::default());
+    let vtable_ptr_ptr = unsafe {
+        ctx.codegen
+            .builder
+            .build_gep(
+                struct_ty,
+                obj_ptr,
+                &[
+                    i32_type.const_int(0, false),
+                    i32_type.const_int(field_indices::VTABLE as u64, false),
+                ],
+                "vtable_ptr_ptr",
+            )
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+    };
+    let vtable_ptr = ctx
+        .codegen
+        .builder
+        .build_load(ptr_type, vtable_ptr_ptr, "vtable_ptr")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+        .into_pointer_value();
+
+    let slot_val = i32_type.const_int(slot_idx as u64, false);
+    let fn_ptr_ptr = unsafe {
+        ctx.codegen
+            .builder
+            .build_gep(ptr_type, vtable_ptr, &[slot_val], "fn_ptr_ptr")
+            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+    };
+    let fn_ptr = ctx
+        .codegen
+        .builder
+        .build_load(ptr_type, fn_ptr_ptr, "fn_ptr")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
+        .into_pointer_value();
+
+    let fn_owner =
+        crate::layout::owning_type_for_method(type_name, method_name, ctx.registry)
+            .unwrap_or_else(|| type_name.to_string());
+    let qualified_name = format!("{}::{}", fn_owner, method_name);
+    let fn_decl = ctx
+        .codegen
+        .functions
+        .get(&qualified_name)
+        .cloned()
+        .ok_or_else(|| {
+            CodegenError::unsupported(
+                format!("method '{}' not declared", qualified_name),
+                Some(span),
+            )
+        })?;
+    let fn_type = fn_decl.get_type();
+
+    let call_site = ctx
+        .codegen
+        .builder
+        .build_indirect_call(fn_type, fn_ptr, &call_args, "method_call")
+        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    Ok(call_site.try_as_basic_value().unwrap_basic())
 }
 
 pub fn lower_method_call<'ctx>(
