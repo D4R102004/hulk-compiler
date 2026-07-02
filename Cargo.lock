@@ -190,6 +190,7 @@ dependencies = [
  "hulk-lexer",
  "hulk-parser",
  "hulk-semantic",
+ "hulk-transpile",
 ]
 
 [[package]]
@@ -209,15 +210,6 @@ dependencies = [
 [[package]]
 name = "hulk-lexer"
 version = "0.1.0"
-
-[[package]]
-name = "hulk-macro"
-version = "0.1.0"
-dependencies = [
- "hulk-ast",
- "hulk-lexer",
- "hulk-parser",
-]
 
 [[package]]
 name = "hulk-parser"
@@ -242,6 +234,15 @@ dependencies = [
  "hulk-lexer",
  "hulk-parser",
  "indexmap",
+]
+
+[[package]]
+name = "hulk-transpile"
+version = "0.1.0"
+dependencies = [
+ "hulk-ast",
+ "hulk-lexer",
+ "hulk-parser",
 ]
 
 [[package]]

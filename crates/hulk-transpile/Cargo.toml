@@ -1,5 +1,5 @@
 [package]
-name    = "hulk-macro"
+name    = "hulk-transpile"
 version.workspace = true
 edition.workspace = true
 

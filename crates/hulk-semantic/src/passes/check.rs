@@ -336,7 +336,7 @@ impl<'a> Checker<'a> {
             }
 
             ExprKind::MacroCall(mc) => {
-                // Should never be reached if hulk-macro ran before the semantic pass.
+                // Should never be reached if hulk-transpile ran before the semantic pass.
                 self.errors.push(SemanticError::error(
                     SemanticErrorKind::MacroReferenceFound {
                         macro_expr: mc.name.clone(),

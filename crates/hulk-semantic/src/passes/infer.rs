@@ -116,7 +116,7 @@ impl<'a> InferState<'a> {
                 Declaration::new(DeclarationKind::Protocol(p.clone()), span)
             }
             DeclarationKind::Macro(m) => {
-                // Should never be reached if hulk-macro ran before the semantic pass.
+                // Should never be reached if hulk-transpile ran before the semantic pass.
                 self.errors.push(SemanticError::error(
                     SemanticErrorKind::MacroReferenceFound {
                         macro_expr: m.name.clone(),
@@ -495,7 +495,7 @@ impl<'a> InferState<'a> {
             ExprKind::Index(index) => self.infer_index(index, env),
             ExprKind::Match(match_expr) => self.infer_match(match_expr, env),
             ExprKind::MacroCall(mc) => {
-                // Should never be reached if hulk-macro ran before the semantic pass.
+                // Should never be reached if hulk-transpile ran before the semantic pass.
                 self.errors.push(SemanticError::error(
                     SemanticErrorKind::MacroReferenceFound {
                         macro_expr: mc.name.clone(),

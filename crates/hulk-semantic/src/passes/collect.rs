@@ -60,7 +60,7 @@ pub fn run(
             },
             DeclarationKind::Protocol(p) => collect_protocol(p, decl.span, registry, errors),
             DeclarationKind::Macro(m) => {
-                // MacroDecl nodes must be eliminated by hulk-macro before this
+                // MacroDecl nodes must be eliminated by hulk-transpile before this
                 // pass runs. If one reaches here, the pipeline is wired incorrectly.
                 errors.push(SemanticError::error(
                     SemanticErrorKind::MacroReferenceFound { macro_expr: m.name.clone() },

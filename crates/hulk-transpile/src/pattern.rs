@@ -1,4 +1,4 @@
-// hulk-macro/src/pattern.rs
+// hulk-transpile/src/pattern.rs
 //
 // Structural pattern matching for macro arguments (§A.14.5).
 //
