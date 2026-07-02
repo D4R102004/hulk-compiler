@@ -215,6 +215,8 @@ name = "hulk-macro"
 version = "0.1.0"
 dependencies = [
  "hulk-ast",
+ "hulk-lexer",
+ "hulk-parser",
 ]
 
 [[package]]

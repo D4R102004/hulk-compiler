@@ -18,7 +18,7 @@ use hulk_ast::{
     IfExpr, IndexExpr, LambdaExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr,
     NewExpr, Pattern, Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeParent,
     TypeRef, TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, VectorGenerator, 
-    WhileExpr,
+    WhileExpr, MacroArg, MacroDecl, MacroCallExpr,
 };
 
 use crate::environment::Environment;
@@ -115,6 +115,25 @@ impl<'a> InferState<'a> {
                 // Protocols have no bodies, so they remain untyped.
                 Declaration::new(DeclarationKind::Protocol(p.clone()), span)
             }
+            DeclarationKind::Macro(m) => {
+                // Should never be reached if hulk-macro ran before the semantic pass.
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::MacroReferenceFound {
+                        macro_expr: m.name.clone(),
+                    },
+                    span,
+                ));
+                // Infer the macro body in a fresh environment (no local variables).
+                let mut env = Environment::new();
+                let typed_body = self.infer_expr(&m.body, &mut env);
+                let typed_macro = MacroDecl::new(
+                    m.name.clone(),
+                    m.params.clone(),
+                    m.return_type.clone(),
+                    typed_body,
+                );
+                Declaration::new(DeclarationKind::Macro(typed_macro), span)
+        }
         }
     }
 
@@ -475,6 +494,37 @@ impl<'a> InferState<'a> {
             ExprKind::Vector(vector) => self.infer_vector(vector, env),
             ExprKind::Index(index) => self.infer_index(index, env),
             ExprKind::Match(match_expr) => self.infer_match(match_expr, env),
+            ExprKind::MacroCall(mc) => {
+                // Should never be reached if hulk-macro ran before the semantic pass.
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::MacroReferenceFound {
+                        macro_expr: mc.name.clone(),
+                    },
+                    expr.span,
+                ));
+
+                // Infer any expression arguments; symbolic and placeholder args stay unchanged.
+                let typed_args: Vec<MacroArg<Type>> = mc
+                    .args
+                    .iter()
+                    .map(|arg| match arg {
+                        MacroArg::Expr(e) => MacroArg::Expr(self.infer_expr(e, env)),
+                        MacroArg::Symbolic(s) => MacroArg::Symbolic(s.clone()),
+                        MacroArg::Placeholder(p) => MacroArg::Placeholder(p.clone()),
+                    })
+                    .collect();
+
+                // Infer the trailing body block if present.
+                let typed_body = mc.body.as_ref().map(|b| self.infer_expr(b, env));
+
+                let mc_typed = MacroCallExpr {
+                    name: mc.name.clone(),
+                    args: typed_args,
+                    body: typed_body.map(Box::new),
+                };
+
+                typed_expr(ExprKind::MacroCall(mc_typed), Type::Error, expr.span)
+            }
         }
     }
 
@@ -563,6 +613,10 @@ impl<'a> InferState<'a> {
             let ty = binding.ty.clone();
             typed_expr(ExprKind::Variable(name.to_string()), ty, span)
         } else {
+            // Special case: `base` inside an overriding method -> resolve to BaseRef
+            if name == "base" && self.current_method_name.is_some() {
+                return self.infer_base_ref(span, env);
+            }
             // Check if it is a function in the registry.
             if let Some(sig) = self.registry.lookup_function(name) {
                 if sig.is_constant {
@@ -1223,9 +1277,11 @@ impl<'a> InferState<'a> {
     /// type is `Type::Function`, it is called with the provided arguments.
     /// Reports arity and type mismatches.
     fn infer_call(&mut self, call: &CallExpr, env: &mut Environment) -> TypedExpr {
-        // ─── Special case: base() call ──────────────────────────────────────
+        // ─── Infer the callee expression ─────────────────────────────────────
+        let typed_callee = self.infer_expr(&call.callee, env);
 
-        if let ExprKind::BaseRef = &call.callee.kind {
+        // ─── Special case: base() call ──────────────────────────────────────
+        if let ExprKind::BaseRef = &typed_callee.kind {
             if let (Some(owner), Some(method_name)) =
                 (&self.current_type_owner, &self.current_method_name)
             {
@@ -1233,12 +1289,6 @@ impl<'a> InferState<'a> {
                     if let Some(parent) = &info.parent {
                         if let Some(parent_info) = self.registry.lookup_type(&parent.name) {
                             if let Some(parent_sig) = parent_info.methods.get(method_name) {
-                                let typed_callee = typed_expr(
-                                    ExprKind::BaseRef,
-                                    parent_sig.return_type.clone(),
-                                    call.callee.span,
-                                );
-
                                 let params: Vec<(String, Type)> = parent_sig.params.clone();
                                 let return_type = parent_sig.return_type.clone();
 
@@ -1263,7 +1313,25 @@ impl<'a> InferState<'a> {
                         }
                     }
                 }
+                // If we reach here, the base call is invalid (not an override).
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::BaseOutsideOverridingMethod,
+                    call.callee.span,
+                ));
+                let mut typed_args = Vec::new();
+                for arg in &call.args {
+                    typed_args.push(self.infer_expr(arg, env));
+                }
+                return typed_expr(
+                    ExprKind::Call(CallExpr {
+                        callee: Box::new(typed_callee),
+                        args: typed_args,
+                    }),
+                    Type::Error,
+                    call.callee.span,
+                );
             }
+            // Fallback (should not happen)
             self.errors.push(SemanticError::error(
                 SemanticErrorKind::BaseOutsideOverridingMethod,
                 call.callee.span,
@@ -1274,7 +1342,7 @@ impl<'a> InferState<'a> {
             }
             return typed_expr(
                 ExprKind::Call(CallExpr {
-                    callee: Box::new(typed_expr(ExprKind::BaseRef, Type::Error, call.callee.span)),
+                    callee: Box::new(typed_callee),
                     args: typed_args,
                 }),
                 Type::Error,
@@ -1282,12 +1350,7 @@ impl<'a> InferState<'a> {
             );
         }
 
-        // ─── Infer the callee expression ─────────────────────────────────────
-
-        let typed_callee = self.infer_expr(&call.callee, env);
-
         // ─── Generic callable: callee has Function type ─────────────────────
-
         if let Type::Function {
             params,
             return_type,
@@ -1312,7 +1375,6 @@ impl<'a> InferState<'a> {
         }
 
         // ─── Fallback: not callable ─────────────────────────────────────────
-
         self.errors.push(SemanticError::error(
             SemanticErrorKind::CallOnNonFunction {
                 ty: typed_callee.anno.clone(),

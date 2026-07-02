@@ -74,6 +74,16 @@ impl<'a> Checker<'a> {
             DeclarationKind::Type(t) => self.check_type(t),
             // Protocols have no bodies or initializers – nothing to check.
             DeclarationKind::Protocol(_) => {}
+            DeclarationKind::Macro(m) => {
+                // Macro declarations should have been expanded earlier.
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::MacroReferenceFound {
+                        macro_expr: m.name.clone(),
+                    },
+                    decl.span,
+                ));
+                // Do not check the body – it is invalid at this stage.
+            }
         }
     }
 
@@ -323,6 +333,17 @@ impl<'a> Checker<'a> {
                 for case in &match_expr.cases {
                     self.check_expr(&case.body);
                 }
+            }
+
+            ExprKind::MacroCall(mc) => {
+                // Should never be reached if hulk-macro ran before the semantic pass.
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::MacroReferenceFound {
+                        macro_expr: mc.name.clone(),
+                    },
+                    expr.span,
+                ));
+                // Do not recurse into arguments or body – they are invalid at this stage.
             }
         }
     }

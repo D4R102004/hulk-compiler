@@ -265,6 +265,12 @@ fn collect_used_pairs(program: &Program<Type>, registry: &TypeRegistry) -> HashS
                     walk_expr(&case.body, Some(&expr.anno), registry, pairs, visitor);
                 }
             }
+            ExprKind::MacroCall(mc) => {
+                panic!(
+                    "internal error: macro call `{}` reached code generation unexpanded",
+                    mc.name
+                );
+            }
         }
     }
 
@@ -329,6 +335,13 @@ fn collect_used_pairs(program: &Program<Type>, registry: &TypeRegistry) -> HashS
             }
 
             DeclarationKind::Protocol(_) => {}
+
+            DeclarationKind::Macro(m) => {
+                panic!(
+                    "internal error: macro declaration `{}` reached code generation unexpanded",
+                    m.name
+                );
+            }
         }
     }
 

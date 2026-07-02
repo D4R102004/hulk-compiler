@@ -83,7 +83,7 @@ pub struct MacroPatternBind {
 ///    corresponding case body.
 pub fn try_match(
     pattern: &MacroPattern,
-    expr: &Expr,
+    _expr: &Expr,
 ) -> Option<HashMap<String, Expr>> {
     // Placeholder: no patterns match yet. The real implementation will be added
     // after the basic macro system (Phase 1) is stable.
@@ -107,7 +107,7 @@ pub fn try_match(
 ///
 /// This function will be implemented in when implementing structural pattern matching.
 ///  It is called from `substitute.rs` when expanding a macro‑local `match` expression.
-pub fn pattern_from_ast(pat_ast: &Expr) -> Result<MacroPattern, MacroError> {
+pub fn pattern_from_ast(_pat_ast: &Expr) -> Result<MacroPattern, MacroError> {
     // TODO: implement AST → pattern conversion
     // Mapping examples:
     //   `(x:Number + 0)` → BinaryExpr{op:Add, left:Bind(Some("x"), Number, Wildcard), right:Bind(None, None, Literal(0))}
