@@ -20,7 +20,8 @@ use hulk_ast::{
     DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl, IfExpr, IndexExpr, LambdaExpr,
     LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr, Param, Pattern,
     Program, ProtocolDecl, ProtocolMethod, SourceSpan, TypeDecl, TypeMember, TypeMemberKind,
-    TypeParent, TypeRef, TypeTestExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
+    TypeParent, TypeRef, TypeTestExpr, UnaryOp, VectorComprehension, VectorExpr, VectorGenerator, 
+    WhileExpr,
 };
 use hulk_lexer::{Span, Token, TokenKind};
 
@@ -812,24 +813,57 @@ impl Ll1Parser {
     }
 
     fn finish_block_expression(&mut self, span: SourceSpan) -> Result<Expr, ParseError> {
-        let mut expressions = Vec::new();
-
-        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
-            if self.match_kind(&TokenKind::Semicolon) {
-                continue;
-            }
-
-            expressions.push(self.parse_expression()?);
-
-            if self.match_kind(&TokenKind::Semicolon) {
-                continue;
-            }
-
-            if !self.check(&TokenKind::RBrace) {
-                self.consume(&TokenKind::Semicolon, "`;` between block expressions")?;
-            }
+        // ── Empty block `{}` ──────────────────────────────────────────────
+        if self.check(&TokenKind::RBrace) {
+            self.advance();
+            return Ok(Expr::new(
+                ExprKind::Block(BlockExpr::new(Vec::new())),
+                span,
+            ));
         }
 
+        // ── Parse the first expression (mandatory) ──────────────────────
+        let first = self.parse_expression()?;
+
+        // ── Disambiguate: `{ expr, ... }` → vector literal ─────────────
+        if self.check(&TokenKind::Comma) {
+            let mut items = vec![first];
+            // Parse comma‑separated expressions, allowing a trailing comma.
+            while self.match_kind(&TokenKind::Comma) {
+                if self.check(&TokenKind::RBrace) {
+                    break; // trailing comma is allowed
+                }
+                items.push(self.parse_expression()?);
+            }
+            self.consume(&TokenKind::RBrace, "`}` after vector literal")?;
+            return Ok(Expr::new(
+                ExprKind::Vector(VectorExpr::Literal(items)),
+                span,
+            ));
+        }
+
+        // ── Otherwise: normal `;`‑separated block ──────────────────────
+        let mut expressions = vec![first];
+
+        // If there is a semicolon after the first expression, parse the rest.
+        if self.match_kind(&TokenKind::Semicolon) {
+            while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+                // Skip redundant semicolons (allow empty statements).
+                if self.match_kind(&TokenKind::Semicolon) {
+                    continue;
+                }
+                expressions.push(self.parse_expression()?);
+                // After an expression, we expect either a semicolon or the closing brace.
+                if self.match_kind(&TokenKind::Semicolon) {
+                    continue;
+                }
+                if !self.check(&TokenKind::RBrace) {
+                    self.consume(&TokenKind::Semicolon, "`;` between block expressions")?;
+                }
+            }
+        }
+        // If there was no semicolon after the first expression, the block
+        // contains only that single expression. In either case, consume the `}`.
         self.consume(&TokenKind::RBrace, "`}` after expression block")?;
         Ok(Expr::new(
             ExprKind::Block(BlockExpr::new(expressions)),
@@ -952,7 +986,43 @@ impl Ll1Parser {
     }
 
     fn finish_new_expression(&mut self, span: SourceSpan) -> Result<Expr, ParseError> {
-        let type_name = self.parse_type_ref()?;
+        // Parse the bare element/type name
+        let mut type_name = self.parse_named_type_ref()?;
+
+        // Look for a `new`-only vector-allocation suffix: zero or more empty
+        // `[]` pairs (each adds one level of Vector<_> nesting), terminated by
+        // exactly one `[<size-expr>]`.
+        let mut size_expr: Option<Expr> = None;
+        while self.check(&TokenKind::LBracket) {
+            self.advance(); // consume '['
+
+            if self.match_kind(&TokenKind::RBracket) {
+                // `[]` — one more layer of nesting, keep scanning.
+                type_name = TypeRef::with_args("Vector", vec![type_name]);
+                continue;
+            }
+
+            // `[<expr>` — this is the sized bracket; it must be the last one.
+            let sz = self.parse_expression()?;
+            self.consume(&TokenKind::RBracket, "`]` after vector size")?;
+            size_expr = Some(sz);
+            break;
+        }
+
+        if let Some(size) = size_expr {
+            // Vector allocation: `new ElemType[size]` (+ optional generator).
+            let generator = if self.check(&TokenKind::LBrace) {
+                Some(self.parse_new_vector_generator()?)
+            } else {
+                None
+            };
+            return Ok(Expr::new(
+                ExprKind::New(NewExpr::new_vector(type_name, size, generator)),
+                span,
+            ));
+        }
+
+        // No `[...]` suffix at all -> plain-object-construction path.
         let args = if self.match_kind(&TokenKind::LParen) {
             self.parse_argument_list_after_lparen()?
         } else {
@@ -963,6 +1033,16 @@ impl Ll1Parser {
             ExprKind::New(NewExpr::new(type_name, args)),
             span,
         ))
+    }
+
+    /// Parses the `{ ident -> expr }` generator attached to a sized `new`.
+    fn parse_new_vector_generator(&mut self) -> Result<VectorGenerator, ParseError> {
+        self.consume(&TokenKind::LBrace, "`{` before vector generator")?;
+        let var = self.parse_name()?;
+        self.consume(&TokenKind::Arrow, "`->` in vector generator")?;
+        let body = self.parse_expression()?;
+        self.consume(&TokenKind::RBrace, "`}` after vector generator")?;
+        Ok(VectorGenerator::new(var, body))
     }
 
     fn finish_match_expression(&mut self, span: SourceSpan) -> Result<Expr, ParseError> {

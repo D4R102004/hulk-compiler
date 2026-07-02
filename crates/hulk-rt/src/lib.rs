@@ -486,11 +486,12 @@ pub extern "C" fn hulk_rt_vector_new(len: i64) -> *mut HulkVector {
 /// # Safety
 /// `vec` must be a valid, aligned pointer to a live `HulkVector`.
 #[no_mangle]
-pub unsafe extern "C" fn hulk_rt_vector_size(vec: *mut HulkVector) -> i64 {
+pub unsafe extern "C" fn hulk_rt_vector_size(vec: *mut HulkVector) -> f64 {
     if vec.is_null() {
-        return 0;
+        0.0
+    } else {
+        (*vec).len as f64
     }
-    (*vec).len
 }
 
 /// Retrieves the element at the given index from a HulkVector.

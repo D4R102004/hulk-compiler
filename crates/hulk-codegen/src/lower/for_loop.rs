@@ -178,7 +178,7 @@ pub fn lower_for<'ctx>(
 
     // Only Vector boxes its elements as HulkBox* (via hulk_rt_vector_current).
     let unboxed_current = if matches!(&iter_ty, Type::Vector(_)) {
-        ensure_unboxed(ctx, current_val, &elem_ty)?
+        ensure_unboxed(ctx, current_val, &elem_ty, Some(iterable_expr.span))?
     }
     // Range and all user-defined generator types return the element value directly
     else {

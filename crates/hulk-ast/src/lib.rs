@@ -620,16 +620,50 @@ impl<A> MemberExpr<A> {
     }
 }
 
-/// Object construction: `new Type(args)`.
+
+/// Object construction (`new Type(args)`) or fixed-size vector allocation
+/// (`new Type[size]` / `new Type[][size]` / `new Type[size]{ i -> expr }`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NewExpr<A = ()> {
     pub type_name: TypeRef,
     pub args: Vec<Expr<A>>,
+    /// Present only for vector-allocation form: the requested length.
+    pub size: Option<Box<Expr<A>>>,
+    /// Present only when a `{ i -> expr }` generator follows a sized `new`.
+    pub generator: Option<VectorGenerator<A>>,
 }
 
 impl<A> NewExpr<A> {
+    /// Plain object construction: `new Type(args)`.
     pub fn new(type_name: TypeRef, args: Vec<Expr<A>>) -> Self {
-        Self { type_name, args }
+        Self { type_name, args, size: None, generator: None }
+    }
+
+    /// Vector allocation: `new ElemType[size]` with an optional generator.
+    pub fn new_vector(
+        elem_type: TypeRef,
+        size: Expr<A>,
+        generator: Option<VectorGenerator<A>>,
+    ) -> Self {
+        Self {
+            type_name: elem_type,
+            args: Vec::new(),
+            size: Some(Box::new(size)),
+            generator,
+        }
+    }
+}
+
+/// The `{ i -> expr }` initializer attached to a sized `new T[n]`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VectorGenerator<A = ()> {
+    pub var: String,
+    pub body: Box<Expr<A>>,
+}
+
+impl<A> VectorGenerator<A> {
+    pub fn new(var: impl Into<String>, body: Expr<A>) -> Self {
+        Self { var: var.into(), body: Box::new(body) }
     }
 }
 

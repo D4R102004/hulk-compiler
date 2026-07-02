@@ -83,6 +83,12 @@ PostfixTail -> '(' ArgList? ')' PostfixTail
              | epsilon
 ```
 
+`AssignmentTail`'s left-hand `Or` is reinterpreted as an `AssignTarget`
+(variable, member, or index) once `:=` is seen; indexing assignment targets
+are produced by the same `'[' Expr ']'` postfix used for reads, so
+`matrix[i][j] := v` and `matrix[i] := new Number[3]` fall out of the existing
+`Postfix`/`AssignmentTail` productions with no extra grammar.
+
 ## Primary expressions
 
 ```ebnf
@@ -141,6 +147,86 @@ This allows `[x^2 | x in range(1, 10)]` to be parsed as a comprehension, while
 `[(x | y) | x in values]` remains valid because the OR expression is explicitly
 parenthesized inside the head.
 
+## `New` expressions and sized vector allocation
+
+`new` is overloaded between plain object construction (`new Type(args)`) and
+fixed-size vector allocation (`new Type[size]`, optionally with a generator
+initializer). Both share the same `'new' NamedTypeRef` prefix, so they are
+left-factored into one production, distinguished by whether a `[` follows the
+type name:
+
+```ebnf
+New              -> 'new' NamedTypeRef NewTail
+NewTail          -> NewVectorSuffix Generator?
+                  | ConstructorArgs?
+NewVectorSuffix  -> ('[' ']')* '[' Expr ']'
+Generator        -> '{' id '->' Expr '}'
+ConstructorArgs  -> '(' ArgList? ')'
+```
+
+`NewVectorSuffix` only commits to the vector-allocation branch once it sees a
+`[` immediately after the type name; every empty `'[' ']'` pair wraps the
+element type in one more level of `Vector<_>` (mirroring `TypeSuffix -> '[]'`
+above), and the final, mandatory `'[' Expr ']'` supplies the runtime length
+and terminates the suffix — a sized bracket can't be followed by another
+dimension. If no `[` follows the type name at all, parsing falls through to
+the pre-existing `ConstructorArgs?` branch unchanged, so `new Foo`,
+`new Foo()`, and `new Foo(a, b)` are unaffected.
+
+Examples:
+
+```hulk
+new Number[5]                  // NewVectorSuffix = '[5]', no Generator
+new Number[5]{ i -> i * 2 }     // NewVectorSuffix = '[5]', Generator binds i
+new Number[][3]                 // NewVectorSuffix = '[]' '[3]' -> Vector<Number>, len 3
+new Point(1, 2)                  // ConstructorArgs branch, unchanged
+```
+
+Because `NewVectorSuffix`'s trailing `'[' Expr ']'` and `Postfix`'s indexing
+production `'[' Expr ']'` are lexically identical, no new tokens are needed —
+`NewTail` is simply consulted only in the `New` production, right after a bare
+type name, where indexing postfixes cannot otherwise appear.
+
+## Block / curly vector literal ambiguity resolution
+
+Besides the square-bracket `Vector` production above, HULK also accepts a
+curly-brace vector literal `{ e1, e2, ... }`, which is written with the same
+opening token as a `Block`. Both productions parse an opening `'{'` and then
+the first sub-expression before anything distinguishes them, so — exactly
+like the `Vector`/`|` ambiguity above — the grammar is factored on a common
+prefix and disambiguated by a single token of lookahead *after* that first
+expression: `;` or `'}'` continues as a `Block`, while `,` commits to a vector
+literal.
+
+```ebnf
+Block           -> '{' BlockBody
+BlockBody       -> '}'
+                 | Expr BlockBodyTail
+BlockBodyTail   -> ',' VectorItemsTail '}'          // curly vector literal
+                 | BlockStmtTail                     // ordinary block
+BlockStmtTail   -> ';' BlockStmtTail
+                 | Expr BlockStmtTail
+                 | '}'
+```
+
+`VectorItemsTail` is the same non-terminal used by the square-bracket
+`Vector` production, so `{10, 20, 30}` and `[10, 20, 30]` build the identical
+`VectorExpr::Literal` AST node — the curly form is purely a surface-syntax
+alternative, not a new semantic construct.
+
+Examples:
+
+```hulk
+{10, 20, 30}          // curly vector literal (Vector::Literal), same AST as [10, 20, 30]
+{ a := 1; a + 1 }      // ordinary block: first expr followed by ';'
+{}                     // empty block (unchanged); use [] for an empty vector literal
+```
+
+This disambiguation is safe because a bare `,` cannot otherwise appear
+directly inside a `{}` block: the only other places `,` is meaningful
+(argument lists, parameter lists, `let` binding lists, `match` case lists)
+are parsed by their own dedicated non-terminals, not by `Block`.
+
 ## Implementation map
 
 | Grammar non-terminal | Rust method |
@@ -166,3 +252,7 @@ parenthesized inside the head.
 | `Primary` | `parse_primary` |
 | `Lambda` | `parse_lambda_expression` |
 | `TypeRef` | `parse_type_ref` |
+| `Block` / `BlockBody` / curly `Vector` literal | `finish_block_expression` |
+| `Vector` (square-bracket literal / comprehension) | `finish_vector_expression` |
+| `New` / `NewTail` / `NewVectorSuffix` | `finish_new_expression` |
+| `Generator` | `parse_new_vector_generator` |

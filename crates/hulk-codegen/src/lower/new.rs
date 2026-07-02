@@ -21,6 +21,15 @@ pub fn lower_new<'ctx>(
     new_expr: &NewExpr<Type>,
     span: Option<SourceSpan>,
 ) -> Result<inkwell::values::BasicValueEnum<'ctx>, CodegenError> {
+    // If this is a vector allocation, delegate to the vector lowering function.
+    if new_expr.size.is_some() {
+        return crate::lower::vector::lower_new_vector(
+            ctx,
+            new_expr,
+            span.unwrap_or(SourceSpan::new(0, 0)),
+        );
+    }
+
     let type_name = &new_expr.type_name.name;
 
     // --- 0. Collect all needed data before borrowing ctx mutably ------------

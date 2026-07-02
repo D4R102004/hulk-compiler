@@ -17,7 +17,8 @@ use hulk_ast::{
     Declaration, DeclarationKind, DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr, FunctionDecl,
     IfExpr, IndexExpr, LambdaExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr,
     NewExpr, Pattern, Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeParent,
-    TypeRef, TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, WhileExpr,
+    TypeRef, TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, VectorGenerator, 
+    WhileExpr,
 };
 
 use crate::environment::Environment;
@@ -1441,6 +1442,11 @@ impl<'a> InferState<'a> {
         span: SourceSpan,
         env: &mut Environment,
     ) -> TypedExpr {
+        // Special case: new vector with size.
+        if let Some(size) = &new_expr.size {
+            return self.infer_new_vector(new_expr, size, span, env);
+        }
+
         let type_name = new_expr.type_name.name.clone();
 
         // Look up the type in the registry; clone needed data before mutating self.
@@ -1492,6 +1498,61 @@ impl<'a> InferState<'a> {
         let result_type = Type::Named(type_name);
         typed_expr(
             ExprKind::New(NewExpr::new(new_expr.type_name.clone(), typed_args)),
+            result_type,
+            span,
+        )
+    }
+
+    
+    /// Infers `new ElemType[size]` / `new ElemType[size]{ i -> expr }`.
+    /// 
+    /// The size expression must be a `Number`. The declared element type is resolved
+    /// from the `TypeRef`. If there's a generator, its body is type-checked against 
+    /// the declared element type. The result type is `Vector<ElemType>`.
+    fn infer_new_vector(
+        &mut self,
+        new_expr: &NewExpr,
+        size: &Expr,
+        span: SourceSpan,
+        env: &mut Environment,
+    ) -> TypedExpr {
+            
+        // Infer the size expression normally — its type should be Number and will be checked later.
+        let typed_size = self.infer_expr(size, env);
+        self.constrain_if_variable(&typed_size, Type::Number);
+
+        // 2. Resolve the declared element type from the TypeRef built by the parser
+        //    (reuses the exact same logic as `Number[]` annotations).
+        let declared_elem_ty = self.resolve_type_ref(&new_expr.type_name);
+
+        // 3. If there's a generator, type-check its body against the declared
+        //    element type and use the typed generator in the result.
+        let typed_generator = if let Some(gen) = &new_expr.generator {
+            env.push_scope();
+            env.declare(&gen.var, Type::Number, size.span); // index variable
+            let typed_body = self.infer_expr(&gen.body, env);
+            if !typed_body.anno.conforms_to(&declared_elem_ty, self.registry) {
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::NotConforming {
+                        found: typed_body.anno.clone(),
+                        expected: declared_elem_ty.clone(),
+                    },
+                    gen.body.span,
+                ));
+            }
+            env.pop_scope();
+            Some(VectorGenerator::new(&gen.var, typed_body))
+        } else {
+            None
+        };
+
+        let result_type = Type::Vector(Box::new(declared_elem_ty));
+        typed_expr(
+            ExprKind::New(NewExpr::new_vector(
+                new_expr.type_name.clone(),
+                typed_size,
+                typed_generator,
+            )),
             result_type,
             span,
         )
