@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use hulk_ast::{
-    DeclarationKind, Expr, ExprKind, MacroArg, 
+    DeclarationKind, Expr, ExprKind, MacroArg, MacroCallExpr,
     MacroParam, MacroParamKind, Program, TypeMemberKind,
 };
 
@@ -109,6 +109,25 @@ fn expand_expr(
                     }
                 }
             }
+        }
+        // Treat plain calls to macro names as macro calls
+        ExprKind::Call(ref call) => {
+            if let ExprKind::Variable(name) = &call.callee.kind {
+                if registry.contains_key(name) {
+                    // Convert arguments to MacroArg::Expr
+                    let macro_args: Vec<MacroArg> = call
+                        .args
+                        .iter()
+                        .map(|arg| MacroArg::Expr(arg.clone()))
+                        .collect();
+                    let mc = MacroCallExpr::new(name.clone(), macro_args, None);
+                    let macro_expr = Expr::new(ExprKind::MacroCall(mc), expr.span);
+                    // Expand the newly constructed macro call (depth+1)
+                    return expand_expr(macro_expr, registry, errors, depth + 1);
+                }
+            }
+            // Not a macro call -> recursively expand children and keep as Call
+            rebuild_expr_children(expr, registry, errors, depth)
         }
         // For all other expression kinds, recursively expand children.
         _ => rebuild_expr_children(expr, registry, errors, depth),
