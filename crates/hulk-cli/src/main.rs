@@ -61,7 +61,7 @@ fn main() {
     });
 
     // Parse the token stream into an AST.
-    let program = Parser::new(tokens).parse_program().unwrap_or_else(|err| {
+    let mut program = Parser::new(tokens).parse_program().unwrap_or_else(|err| {
         // WHY: grader contract requires (line,col) TYPE: message format
         let msg = match &err.kind {
             ParseErrorKind::UnexpectedToken { expected, found } => {
