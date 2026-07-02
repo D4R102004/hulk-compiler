@@ -1557,7 +1557,7 @@ impl<'a> InferState<'a> {
             }
         }
 
-        let result_type = Type::Named(type_name);
+        let result_type = Type::Named(type_name.clone());
         typed_expr(
             ExprKind::New(NewExpr::new(new_expr.type_name.clone(), typed_args)),
             result_type,
@@ -1661,7 +1661,7 @@ impl<'a> InferState<'a> {
             && self.registry.lookup_protocol(&target_name).is_none()
         {
             self.errors.push(SemanticError::error(
-                SemanticErrorKind::UndefinedType(target_name),
+                SemanticErrorKind::UndefinedType(target_name.clone()),
                 span,
             ));
         }
@@ -1720,7 +1720,7 @@ impl<'a> InferState<'a> {
             && self.registry.lookup_protocol(&target_name).is_none()
         {
             self.errors.push(SemanticError::error(
-                SemanticErrorKind::UndefinedType(target_name),
+                SemanticErrorKind::UndefinedType(target_name.clone()),
                 span,
             ));
         }
