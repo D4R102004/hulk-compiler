@@ -20,7 +20,7 @@ use crate::types::Type;
 pub enum Severity {
     /// A hard error that prevents compilation.
     Error,
-    /// A non‑blocking warning that does not stop compilation.
+    /// A non-blocking warning that does not stop compilation.
     Warning,
 }
 
@@ -72,7 +72,7 @@ impl SemanticError {
 /// - Name resolution and redefinition (Pass 0/2)
 /// - Inheritance and protocol conformance (Pass 1)
 /// - Type inference and checking (Pass 2/3)
-/// - Optional quality‑of‑life warnings (Step 10)
+/// - Optional quality-of-life warnings (Step 10)
 #[derive(Debug, Clone, PartialEq)]
 pub enum SemanticErrorKind {
     // ─── Name resolution ──────────────────────────────────────────────────
@@ -193,7 +193,7 @@ pub enum SemanticErrorKind {
         /// The types of the operands.
         operand_types: Vec<Type>,
     },
-    /// A non‑boolean value was used as a condition.
+    /// A non-boolean value was used as a condition.
     NonBooleanCondition(
         /// The actual type of the condition expression.
         Type,
@@ -203,12 +203,12 @@ pub enum SemanticErrorKind {
         /// The type that is not iterable.
         Type,
     ),
-    /// Indexing was attempted on a non‑vector type.
+    /// Indexing was attempted on a non-vector type.
     IndexOnNonVector(
         /// The type being indexed.
         Type,
     ),
-    /// The left‑hand side of an assignment is not assignable.
+    /// The left-hand side of an assignment is not assignable.
     InvalidAssignTarget,
     /// `self` was used as an assignment target.
     SelfIsNotAssignable,
@@ -238,8 +238,14 @@ pub enum SemanticErrorKind {
         /// The set of candidate types that were equally possible.
         candidates: Vec<Type>,
     },
+    /// The semantic pass should never receive macro nodes after expansion
+    MacroReferenceFound
+    {
+        /// Name of the macro expression in which the error originated
+        macro_expr: String,
+    },
 
-    // ─── Non‑blocking warnings (quality‑of‑life) ──────────────────────
+    // ─── Non-blocking warnings (quality-of-life) ──────────────────────
     /// A downcast (`as`) can never succeed because the types are unrelated.
     UnreachableDowncast {
         /// The source type of the downcast.
@@ -249,6 +255,14 @@ pub enum SemanticErrorKind {
     },
     /// A `match` expression does not cover all possible cases.
     NonExhaustiveMatch,
+
+    // ─── Internal errors ──────────────────────────────────────────────────────
+    /// Generic internal compiler error message.
+    /// Used as a fallback when a more specific kind is not available.
+    Message {
+        /// Message to display
+        error_message: String,
+    },
 }
 
 // -----------------------------------------------------------------------------
@@ -374,13 +388,13 @@ impl fmt::Display for SemanticErrorKind {
                 )
             }
             Self::NonBooleanCondition(ty) => {
-                write!(f, "non‑boolean condition of type `{}`", ty)
+                write!(f, "non-boolean condition of type `{}`", ty)
             }
             Self::NotIterable(ty) => {
                 write!(f, "type `{}` is not iterable", ty)
             }
             Self::IndexOnNonVector(ty) => {
-                write!(f, "indexing applied to non‑vector type `{}`", ty)
+                write!(f, "indexing applied to non-vector type `{}`", ty)
             }
             Self::InvalidAssignTarget => {
                 write!(f, "invalid assignment target")
@@ -396,6 +410,9 @@ impl fmt::Display for SemanticErrorKind {
             }
             Self::AssignToMethod { method } => {
                 write!(f, "cannot assign to method `{}`", method)
+            }
+            Self::MacroReferenceFound { macro_expr } => {
+                write!(f, "macro incorrectly expanded: `{}`", macro_expr)
             }
 
             // Inference
@@ -416,7 +433,7 @@ impl fmt::Display for SemanticErrorKind {
                 )
             }
 
-            // Non‑blocking warnings
+            // Non-blocking warnings
             Self::UnreachableDowncast { from, to } => {
                 write!(
                     f,
@@ -425,7 +442,12 @@ impl fmt::Display for SemanticErrorKind {
                 )
             }
             Self::NonExhaustiveMatch => {
-                write!(f, "non‑exhaustive match: no catch‑all pattern")
+                write!(f, "non-exhaustive match: no catch-all pattern")
+            }
+
+            // Internal
+            Self::Message {error_message} => {
+                write!(f, "{}", error_message)
             }
         }
     }
@@ -569,7 +591,7 @@ mod tests {
             ),
             (
                 SemanticErrorKind::NonBooleanCondition(Type::Number),
-                "non‑boolean condition of type `Number`",
+                "non-boolean condition of type `Number`",
             ),
             (
                 SemanticErrorKind::NotIterable(Type::Number),
@@ -577,7 +599,7 @@ mod tests {
             ),
             (
                 SemanticErrorKind::IndexOnNonVector(Type::Number),
-                "indexing applied to non‑vector type `Number`",
+                "indexing applied to non-vector type `Number`",
             ),
             (
                 SemanticErrorKind::InvalidAssignTarget,
@@ -613,7 +635,7 @@ mod tests {
             ),
             (
                 SemanticErrorKind::NonExhaustiveMatch,
-                "non‑exhaustive match: no catch‑all pattern",
+                "non-exhaustive match: no catch-all pattern",
             ),
         ];
 
@@ -638,7 +660,7 @@ mod tests {
 
         let warning = SemanticError::warning(SemanticErrorKind::NonExhaustiveMatch, span);
         assert!(warning.to_string().starts_with(
-            "semantic warning at line 1, col 1: non‑exhaustive match: no catch‑all pattern"
+            "semantic warning at line 1, col 1: non-exhaustive match: no catch-all pattern"
         ));
     }
 }

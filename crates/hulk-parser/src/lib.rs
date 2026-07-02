@@ -1773,11 +1773,233 @@ mod tests {
 
     #[test]
     fn parses_def_as_global_macro_like_function() {
+        // Same as before, but now tests MacroDecl.
         let program = parse_source("def twice(x: Number): Number => x * 2; print(twice(21));");
-
         match &program.declarations[0].kind {
-            DeclarationKind::Function(function) => assert_eq!(function.name, "twice"),
-            other => panic!("expected function declaration, got {other:?}"),
+            DeclarationKind::Macro(macro_decl) => {
+                assert_eq!(macro_decl.name, "twice");
+                assert_eq!(macro_decl.params.len(), 1);
+                assert_eq!(macro_decl.params[0].name, "x");
+                assert_eq!(
+                    macro_decl.params[0].type_annotation.as_ref().map(ToString::to_string),
+                    Some("Number".to_string())
+                );
+                assert_eq!(
+                    macro_decl.return_type.as_ref().map(ToString::to_string),
+                    Some("Number".to_string())
+                );
+                match &macro_decl.body.kind {
+                    ExprKind::Binary(bin) => {
+                        assert_eq!(bin.op, BinaryOp::Multiply);
+                        assert!(matches!(&bin.left.kind, ExprKind::Variable(name) if name == "x"));
+                        assert!(matches!(&bin.right.kind, ExprKind::Literal(Literal::Number(2.0))));
+                    }
+                    _ => panic!("macro body is not a binary multiplication"),
+                }
+            }
+            other => panic!("expected macro declaration, got {:?}", other),
+        }
+        // Entry expression is print(twice(21))
+        match &program.entry.kind {
+            ExprKind::Call(call) => {
+                assert!(matches!(&call.callee.kind, ExprKind::Variable(name) if name == "print"));
+                assert_eq!(call.args.len(), 1);
+                match &call.args[0].kind {
+                    ExprKind::Call(inner) => {
+                        assert!(matches!(&inner.callee.kind, ExprKind::Variable(name) if name == "twice"));
+                        assert_eq!(inner.args.len(), 1);
+                        assert!(matches!(&inner.args[0].kind, ExprKind::Literal(Literal::Number(21.0))));
+                    }
+                    _ => panic!("argument is not a call"),
+                }
+            }
+            _ => panic!("entry expression is not a call"),
+        }
+    }
+
+    #[test]
+    fn parses_macro_declaration_with_body_param() {
+        // Include a dummy entry expression to satisfy the program grammar.
+        let src = "def repeat(n: Number, *expr: Object): Object => expr; print(0);";
+        let program = parse_source(src);
+        match &program.declarations[0].kind {
+            DeclarationKind::Macro(m) => {
+                assert_eq!(m.name, "repeat");
+                assert_eq!(m.params.len(), 2);
+                // first param: regular
+                assert_eq!(m.params[0].kind, MacroParamKind::Regular);
+                assert_eq!(m.params[0].name, "n");
+                // second param: body expr
+                assert_eq!(m.params[1].kind, MacroParamKind::BodyExpr);
+                assert_eq!(m.params[1].name, "expr");
+                assert_eq!(
+                    m.params[1].type_annotation.as_ref().map(ToString::to_string),
+                    Some("Object".to_string())
+                );
+                assert_eq!(
+                    m.return_type.as_ref().map(ToString::to_string),
+                    Some("Object".to_string())
+                );
+                match &m.body.kind {
+                    ExprKind::Variable(name) if name == "expr" => {}
+                    _ => panic!("macro body should be variable `expr`"),
+                }
+            }
+            _ => panic!("expected macro declaration"),
+        }
+    }
+
+    #[test]
+    fn parses_macro_declaration_with_symbolic_and_placeholder() {
+        let src = "def swap(@a: Object, @b: Object): Object => { let temp: Object = a in { a := b; b := temp; } }; print(0);";
+        let program = parse_source(src);
+        match &program.declarations[0].kind {
+            DeclarationKind::Macro(m) => {
+                assert_eq!(m.name, "swap");
+                assert_eq!(m.params.len(), 2);
+                // both symbolic
+                for param in &m.params {
+                    assert_eq!(param.kind, MacroParamKind::Symbolic);
+                    assert!(param.name == "a" || param.name == "b");
+                }
+                // body is a block with a let expression
+                match &m.body.kind {
+                    ExprKind::Block(block) => {
+                        assert_eq!(block.expressions.len(), 1);
+                        match &block.expressions[0].kind {
+                            ExprKind::Let(let_expr) => {
+                                // Check that the let has one binding: temp: Object = a
+                                assert_eq!(let_expr.bindings.len(), 1);
+                                assert_eq!(let_expr.bindings[0].name, "temp");
+                                // The type annotation should be Object
+                                assert_eq!(
+                                    let_expr.bindings[0].type_annotation.as_ref().map(ToString::to_string),
+                                    Some("Object".to_string())
+                                );
+                                // The initializer is a variable "a"
+                                assert!(matches!(&let_expr.bindings[0].initializer.kind, ExprKind::Variable(name) if name == "a"));
+                                // The body is a block with two assignments
+                                match &let_expr.body.kind {
+                                    ExprKind::Block(inner) => {
+                                        assert_eq!(inner.expressions.len(), 2);
+                                    }
+                                    _ => panic!("let body is not a block"),
+                                }
+                            }
+                            _ => panic!("macro body's first expression is not a let"),
+                        }
+                    }
+                    _ => panic!("macro body is not a block"),
+                }
+            }
+            _ => panic!("expected macro declaration"),
+        }
+    }
+
+   #[test]
+    fn parses_macro_call_with_trailing_block() {
+        let src = "{ repeat(3) { print(\"hi\"); }; print(0); }";
+        let program = parse_source(src);
+        match &program.entry.kind {
+            ExprKind::Block(block) => {
+                assert!(!block.expressions.is_empty());
+                match &block.expressions[0].kind {
+                    ExprKind::MacroCall(mc) => {
+                        assert_eq!(mc.name, "repeat");
+                        assert_eq!(mc.args.len(), 1);
+                        match &mc.args[0] {
+                            MacroArg::Expr(e) => {
+                                assert!(matches!(&e.kind, ExprKind::Literal(Literal::Number(3.0))));
+                            }
+                            _ => panic!("first argument is not an expression"),
+                        }
+                        assert!(mc.body.is_some());
+                        let body = mc.body.as_ref().unwrap();
+                        match &body.kind {
+                            ExprKind::Block(inner_block) => {
+                                assert_eq!(inner_block.expressions.len(), 1);
+                                match &inner_block.expressions[0].kind {
+                                    ExprKind::Call(call) => {
+                                        assert!(matches!(&call.callee.kind, ExprKind::Variable(name) if name == "print"));
+                                        assert_eq!(call.args.len(), 1);
+                                        assert!(matches!(&call.args[0].kind, ExprKind::Literal(Literal::String(s)) if s == "hi"));
+                                    }
+                                    _ => panic!("block body is not a call"),
+                                }
+                            }
+                            _ => panic!("macro body is not a block"),
+                        }
+                    }
+                    _ => panic!("first expression is not a macro call"),
+                }
+            }
+            _ => panic!("entry is not a block"),
+        }
+    }
+
+    #[test]
+    fn parses_macro_call_with_symbolic_args() {
+        let src = "{ swap(@x, @y); print(0); }";
+        let program = parse_source(src);
+        match &program.entry.kind {
+            ExprKind::Block(block) => {
+                assert!(!block.expressions.is_empty());
+                match &block.expressions[0].kind {
+                    ExprKind::MacroCall(mc) => {
+                        assert_eq!(mc.name, "swap");
+                        assert_eq!(mc.args.len(), 2);
+                        match &mc.args[0] {
+                            MacroArg::Symbolic(name) => assert_eq!(name, "x"),
+                            _ => panic!("first arg is not symbolic"),
+                        }
+                        match &mc.args[1] {
+                            MacroArg::Symbolic(name) => assert_eq!(name, "y"),
+                            _ => panic!("second arg is not symbolic"),
+                        }
+                        assert!(mc.body.is_none());
+                    }
+                    _ => panic!("first expression is not a macro call"),
+                }
+            }
+            _ => panic!("entry is not a block"),
+        }
+    }
+
+    #[test]
+    fn parses_macro_with_block_body_without_arrow() {
+        // Macros can have a block body without `=>`
+        let src = "def greet(name: String): String { \"Hello, \" @ name; } print(greet(\"World\"));";
+        let program = parse_source(src);
+        match &program.declarations[0].kind {
+            DeclarationKind::Macro(m) => {
+                assert_eq!(m.name, "greet");
+                match &m.body.kind {
+                    ExprKind::Block(block) => {
+                        assert_eq!(block.expressions.len(), 1);
+                    }
+                    _ => panic!("macro body should be a block"),
+                }
+            }
+            _ => panic!("expected macro declaration"),
+        }
+    }
+
+    #[test]
+    fn parses_macro_with_arrow_and_block_body() {
+        // Syntax: def name(params): Type => { ... }
+        let src = "def greet(name: String): String => { \"Hello, \" @ name; }; print(greet(\"World\"));";
+        let program = parse_source(src);
+        match &program.declarations[0].kind {
+            DeclarationKind::Macro(m) => {
+                assert_eq!(m.name, "greet");
+                match &m.body.kind {
+                    ExprKind::Block(block) => {
+                        assert_eq!(block.expressions.len(), 1);
+                    }
+                    _ => panic!("macro body should be a block"),
+                }
+            }
+            _ => panic!("expected macro declaration"),
         }
     }
 
