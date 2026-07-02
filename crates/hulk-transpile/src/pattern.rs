@@ -7,51 +7,11 @@
 // On success, it returns a mapping from capture variable names to the
 // matched sub‑expressions. The expansion engine in `substitute.rs` uses this
 // to implement compile‑time `match` inside macro bodies.
-//
-// NOTE: This file is a placeholder. The matching logic is not yet implemented;
-// `try_match` currently returns `None` for every pattern. Once implemented,
-// it will be called from `substitute.rs` when encountering an `ExprKind::Match`
-// whose scrutinee is a concrete AST node (i.e., inside an expanding macro).
 
 use std::collections::HashMap;
-use hulk_ast::{BinaryOp, Expr, Literal, TypeRef, UnaryOp};
-use crate::error::MacroError;
-
-/// A pattern that can be matched against an expression AST at compile time.
-#[derive(Debug, Clone)]
-pub enum MacroPattern {
-    /// Matches any expression (wildcard).
-    Wildcard,
-    /// Matches a specific literal value (integer, string, boolean, etc.).
-    Literal(Literal),
-    /// Matches a binary expression with a specific operator, and binds
-    /// the left and right operands (which themselves may contain patterns).
-    BinaryExpr {
-        op: BinaryOp,
-        left: Box<MacroPatternBind>,
-        right: Box<MacroPatternBind>,
-    },
-    /// Matches a unary expression with a specific operator.
-    UnaryExpr {
-        op: UnaryOp,
-        operand: Box<MacroPatternBind>,
-    },
-    // Future: constructor patterns, list patterns, etc.
-}
-
-/// A binding site in a macro pattern. It may include a variable name to
-/// capture the matched subtree, an optional type constraint (not yet used
-/// by matching, but available for consistency checks), and a sub‑pattern.
-#[derive(Debug, Clone)]
-pub struct MacroPatternBind {
-    /// If `Some`, the matched sub‑expression will be bound to this name
-    /// in the substitution map (allowing it to be used in the case body).
-    pub name: Option<String>,
-    /// Optional type annotation (for documentation / future type checking).
-    pub ty: Option<TypeRef>,
-    /// The shape this binding must match.
-    pub pattern: MacroPattern,
-}
+use hulk_ast::{
+    Expr, ExprKind, MacroPattern, MacroPatternBind,
+};
 
 /// Attempts to match a `pattern` against the concrete AST node `expr`.
 ///
@@ -60,56 +20,392 @@ pub struct MacroPatternBind {
 ///   capture variable name to the `Expr` subtree that was matched.
 /// - `None` if the pattern does not match.
 ///
-/// # How it will work:
+/// # Matching rules
 /// - `MacroPattern::Wildcard` always matches, producing no bindings.
 /// - `MacroPattern::Literal(lit)` matches only if `expr` is a literal with
 ///   the same value.
+/// - `MacroPattern::Bind` recursively matches its inner pattern; if successful
+///   and the bind has a `name`, the matched expression is inserted into the map.
 /// - `MacroPattern::BinaryExpr` matches an `ExprKind::Binary` node with the
-///   given operator, then recursively matches the left and right sides. The
-///   bindings from both sides are merged (duplicate variable names are not
-///   allowed in a single pattern, and will cause a match failure).
+///   given operator, then recursively matches the left and right operands
+///   (using `MacroPatternBind` to capture them if named).
 /// - `MacroPattern::UnaryExpr` matches an `ExprKind::Unary` node similarly.
-/// - `MacroPatternBind` captures the matched subtree under `name` if present.
 ///
-/// # Integration
-/// In `substitute.rs`, when expanding a macro and encountering a
-/// `MacroMatchExpr` (an expression of the form `match(scrutinee) { cases }`),
-/// the engine will:
-/// 1. Ensure `scrutinee` has already been substituted to a concrete `Expr`.
-/// 2. For each case, convert the pattern AST into a `MacroPattern` (using a
-///    helper from this module).
-/// 3. Call `try_match(&pattern, &scrutinee_expr)`.
-/// 4. If it returns bindings, merge them into the `SubstMap` and expand the
-///    corresponding case body.
-pub fn try_match(
-    pattern: &MacroPattern,
-    _expr: &Expr,
-) -> Option<HashMap<String, Expr>> {
-    // Placeholder: no patterns match yet. The real implementation will be added
-    // after the basic macro system (Phase 1) is stable.
+/// # Duplicate bindings
+/// If the same variable name appears more than once in a single pattern,
+/// the match fails (returns `None`). This prevents ambiguous captures.
+pub fn try_match(pattern: &MacroPattern, expr: &Expr) -> Option<HashMap<String, Expr>> {
     match pattern {
-        MacroPattern::Wildcard => Some(HashMap::new()), // always matches, no bindings
-        MacroPattern::Literal(_) => None,               // TODO
-        MacroPattern::BinaryExpr { .. } => None,        // TODO
-        MacroPattern::UnaryExpr { .. } => None,         // TODO
+        MacroPattern::Wildcard => Some(HashMap::new()),
+
+        MacroPattern::Literal(lit) => {
+            if let ExprKind::Literal(ref e_lit) = expr.kind {
+                if e_lit == lit {
+                    return Some(HashMap::new());
+                }
+            }
+            None
+        }
+
+        MacroPattern::Bind { name, ty: _, pattern: inner } => {
+            let mut map = try_match(inner, expr)?;
+            if let Some(ref n) = name {
+                // Duplicate binding → fail the match.
+                if map.contains_key(n) {
+                    return None;
+                }
+                map.insert(n.clone(), expr.clone());
+            }
+            Some(map)
+        }
+
+        MacroPattern::BinaryExpr { op, left, right } => {
+            if let ExprKind::Binary(ref bin) = expr.kind {
+                if bin.op == *op {
+                    let left_map = match_bind(left, &bin.left)?;
+                    let right_map = match_bind(right, &bin.right)?;
+                    return merge_maps(left_map, right_map);
+                }
+            }
+            None
+        }
+
+        MacroPattern::UnaryExpr { op, operand } => {
+            if let ExprKind::Unary(ref unary) = expr.kind {
+                if unary.op == *op {
+                    return match_bind(operand, &unary.expr);
+                }
+            }
+            None
+        }
     }
 }
 
-/// Converts a parsed match‑case pattern (produced by the parser for macro bodies)
-/// into a `MacroPattern` for compile‑time matching.
+/// Matches a `MacroPatternBind` against an expression.
 ///
-/// # Parameters
-/// - `pat_ast`: the pattern AST node as returned by the parser (e.g., a `PatternExpr`).
-///
-/// # Returns
-/// - `Ok(MacroPattern)` on successful conversion.
-/// - `Err(MacroError)` if the pattern is malformed or contains unsupported constructs.
-///
-/// This function will be implemented in when implementing structural pattern matching.
-///  It is called from `substitute.rs` when expanding a macro‑local `match` expression.
-pub fn pattern_from_ast(_pat_ast: &Expr) -> Result<MacroPattern, MacroError> {
-    // TODO: implement AST → pattern conversion
-    // Mapping examples:
-    //   `(x:Number + 0)` → BinaryExpr{op:Add, left:Bind(Some("x"), Number, Wildcard), right:Bind(None, None, Literal(0))}
-    todo!("Convert parsed pattern to MacroPattern")
+/// This first recursively matches the inner pattern. If that succeeds and the
+/// bind has a `name`, the whole expression is inserted into the bindings map
+/// under that name. The optional type annotation (`ty`) is ignored during matching.
+fn match_bind(
+    bind: &MacroPatternBind,
+    expr: &Expr,
+) -> Option<HashMap<String, Expr>> {
+    let mut map = try_match(&bind.pattern, expr)?;
+    if let Some(ref name) = bind.name {
+        if map.contains_key(name) {
+            return None;
+        }
+        map.insert(name.clone(), expr.clone());
+    }
+    Some(map)
+}
+
+/// Merges two binding maps. Returns `None` if they share any key.
+fn merge_maps(
+    mut left: HashMap<String, Expr>,
+    right: HashMap<String, Expr>,
+) -> Option<HashMap<String, Expr>> {
+    for (k, v) in right {
+        if left.contains_key(&k) {
+            return None;
+        }
+        left.insert(k, v);
+    }
+    Some(left)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hulk_ast::{
+        BinaryOp, Expr, Literal, MacroPattern, MacroPatternBind, SourceSpan, UnaryOp,
+    };
+
+    fn s() -> SourceSpan {
+        SourceSpan::new(1, 1)
+    }
+
+    fn num(n: f64) -> Expr {
+        Expr::number(n, s())
+    }
+
+    fn bool_lit(b: bool) -> Expr {
+        Expr::boolean(b, s())
+    }
+
+    fn string_lit(st: &str) -> Expr {
+        Expr::string(st, s())
+    }
+
+    fn _var(name: &str) -> Expr {
+        Expr::variable(name, s())
+    }
+
+    fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
+        Expr::binary(op, left, right, s())
+    }
+
+    fn un(op: UnaryOp, expr: Expr) -> Expr {
+        Expr::unary(op, expr, s())
+    }
+
+    // Helper to create a Bind pattern with a name and inner pattern.
+    fn bind(name: &str, pattern: MacroPattern) -> MacroPattern {
+        MacroPattern::Bind {
+            name: Some(name.to_string()),
+            ty: None,
+            pattern: Box::new(pattern),
+        }
+    }
+
+    // Helper to create a Bind pattern with type annotation.
+    fn bind_ty(name: &str, ty: &str, pattern: MacroPattern) -> MacroPattern {
+        MacroPattern::Bind {
+            name: Some(name.to_string()),
+            ty: Some(hulk_ast::TypeRef::named(ty)),
+            pattern: Box::new(pattern),
+        }
+    }
+
+    #[test]
+    fn wildcard_matches_anything() {
+        let pattern = MacroPattern::Wildcard;
+        let expr = num(42.0);
+        let result = try_match(&pattern, &expr);
+        assert_eq!(result, Some(HashMap::new()));
+    }
+
+    #[test]
+    fn literal_number_matches_exact() {
+        let pattern = MacroPattern::Literal(Literal::Number(42.0));
+        assert!(try_match(&pattern, &num(42.0)).is_some());
+        assert!(try_match(&pattern, &num(43.0)).is_none());
+        assert!(try_match(&pattern, &bool_lit(true)).is_none());
+    }
+
+    #[test]
+    fn literal_string_matches_exact() {
+        let pattern = MacroPattern::Literal(Literal::String("hello".to_string()));
+        assert!(try_match(&pattern, &string_lit("hello")).is_some());
+        assert!(try_match(&pattern, &string_lit("world")).is_none());
+    }
+
+    #[test]
+    fn literal_bool_matches_exact() {
+        let pattern = MacroPattern::Literal(Literal::Boolean(true));
+        assert!(try_match(&pattern, &bool_lit(true)).is_some());
+        assert!(try_match(&pattern, &bool_lit(false)).is_none());
+    }
+
+    #[test]
+    fn bind_captures_expression() {
+        let pattern = bind("x", MacroPattern::Wildcard);
+        let expr = num(42.0);
+        let result = try_match(&pattern, &expr);
+        let mut expected = HashMap::new();
+        expected.insert("x".to_string(), expr.clone());
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn bind_with_type_ignores_type_during_matching() {
+        let pattern = bind_ty("x", "Number", MacroPattern::Wildcard);
+        let expr = string_lit("hello");
+        let result = try_match(&pattern, &expr);
+        let mut expected = HashMap::new();
+        expected.insert("x".to_string(), expr.clone());
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn bind_on_compound_pattern_captures_whole() {
+        let pattern = MacroPattern::Bind {
+            name: Some("whole".to_string()),
+            ty: None,
+            pattern: Box::new(MacroPattern::BinaryExpr {
+                op: BinaryOp::Add,
+                left: Box::new(MacroPatternBind {
+                    name: Some("left".to_string()),
+                    ty: None,
+                    pattern: MacroPattern::Wildcard,
+                }),
+                right: Box::new(MacroPatternBind {
+                    name: Some("right".to_string()),
+                    ty: None,
+                    pattern: MacroPattern::Wildcard,
+                }),
+            }),
+        };
+        let expr = bin(BinaryOp::Add, num(1.0), num(2.0));
+        let result = try_match(&pattern, &expr);
+        let mut expected = HashMap::new();
+        expected.insert("whole".to_string(), expr.clone());
+        expected.insert("left".to_string(), num(1.0));
+        expected.insert("right".to_string(), num(2.0));
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn binary_expr_matches_operator_and_binds_operands() {
+        let pattern = MacroPattern::BinaryExpr {
+            op: BinaryOp::Add,
+            left: Box::new(MacroPatternBind {
+                name: Some("a".to_string()),
+                ty: None,
+                pattern: MacroPattern::Wildcard,
+            }),
+            right: Box::new(MacroPatternBind {
+                name: Some("b".to_string()),
+                ty: None,
+                pattern: MacroPattern::Wildcard,
+            }),
+        };
+        let expr = bin(BinaryOp::Add, num(1.0), num(2.0));
+        let result = try_match(&pattern, &expr);
+        let mut expected = HashMap::new();
+        expected.insert("a".to_string(), num(1.0));
+        expected.insert("b".to_string(), num(2.0));
+        assert_eq!(result, Some(expected));
+
+        // Wrong operator
+        let expr2 = bin(BinaryOp::Subtract, num(1.0), num(2.0));
+        assert!(try_match(&pattern, &expr2).is_none());
+    }
+
+    #[test]
+    fn binary_expr_with_nested_patterns() {
+        let pattern = MacroPattern::BinaryExpr {
+            op: BinaryOp::Multiply,
+            left: Box::new(MacroPatternBind {
+                name: None,
+                ty: None,
+                pattern: MacroPattern::BinaryExpr {
+                    op: BinaryOp::Add,
+                    left: Box::new(MacroPatternBind {
+                        name: Some("x".to_string()),
+                        ty: None,
+                        pattern: MacroPattern::Wildcard,
+                    }),
+                    right: Box::new(MacroPatternBind {
+                        name: Some("y".to_string()),
+                        ty: None,
+                        pattern: MacroPattern::Wildcard,
+                    }),
+                },
+            }),
+            right: Box::new(MacroPatternBind {
+                name: Some("z".to_string()),
+                ty: None,
+                pattern: MacroPattern::Wildcard,
+            }),
+        };
+        let expr = bin(
+            BinaryOp::Multiply,
+            bin(BinaryOp::Add, num(1.0), num(2.0)),
+            num(3.0),
+        );
+        let result = try_match(&pattern, &expr);
+        let mut expected = HashMap::new();
+        expected.insert("x".to_string(), num(1.0));
+        expected.insert("y".to_string(), num(2.0));
+        expected.insert("z".to_string(), num(3.0));
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn unary_expr_matches_operator_and_binds_operand() {
+        let pattern = MacroPattern::UnaryExpr {
+            op: UnaryOp::Negate,
+            operand: Box::new(MacroPatternBind {
+                name: Some("x".to_string()),
+                ty: None,
+                pattern: MacroPattern::Wildcard,
+            }),
+        };
+        let expr = un(UnaryOp::Negate, num(42.0));
+        let result = try_match(&pattern, &expr);
+        let mut expected = HashMap::new();
+        expected.insert("x".to_string(), num(42.0));
+        assert_eq!(result, Some(expected));
+
+        // Wrong operator
+        let expr2 = un(UnaryOp::Not, bool_lit(true));
+        assert!(try_match(&pattern, &expr2).is_none());
+    }
+
+    #[test]
+    fn duplicate_bindings_are_rejected() {
+        // Pattern: (x + x) – binding `x` twice
+        let pattern = MacroPattern::BinaryExpr {
+            op: BinaryOp::Add,
+            left: Box::new(MacroPatternBind {
+                name: Some("x".to_string()),
+                ty: None,
+                pattern: MacroPattern::Wildcard,
+            }),
+            right: Box::new(MacroPatternBind {
+                name: Some("x".to_string()),
+                ty: None,
+                pattern: MacroPattern::Wildcard,
+            }),
+        };
+        let expr = bin(BinaryOp::Add, num(1.0), num(2.0));
+        assert!(try_match(&pattern, &expr).is_none());
+    }
+
+    #[test]
+    fn duplicate_bindings_across_nested_patterns() {
+        // Pattern: (x + (x * 2)) – x appears twice
+        let pattern = MacroPattern::BinaryExpr {
+            op: BinaryOp::Add,
+            left: Box::new(MacroPatternBind {
+                name: Some("x".to_string()),
+                ty: None,
+                pattern: MacroPattern::Wildcard,
+            }),
+            right: Box::new(MacroPatternBind {
+                name: None,
+                ty: None,
+                pattern: MacroPattern::BinaryExpr {
+                    op: BinaryOp::Multiply,
+                    left: Box::new(MacroPatternBind {
+                        name: Some("x".to_string()),
+                        ty: None,
+                        pattern: MacroPattern::Wildcard,
+                    }),
+                    right: Box::new(MacroPatternBind {
+                        name: Some("y".to_string()),
+                        ty: None,
+                        pattern: MacroPattern::Wildcard,
+                    }),
+                },
+            }),
+        };
+        let expr = bin(
+            BinaryOp::Add,
+            num(1.0),
+            bin(BinaryOp::Multiply, num(2.0), num(3.0)),
+        );
+        assert!(try_match(&pattern, &expr).is_none());
+    }
+
+    #[test]
+    fn wildcard_does_not_bind() {
+        let pattern = MacroPattern::BinaryExpr {
+            op: BinaryOp::Add,
+            left: Box::new(MacroPatternBind {
+                name: None,
+                ty: None,
+                pattern: MacroPattern::Wildcard,
+            }),
+            right: Box::new(MacroPatternBind {
+                name: None,
+                ty: None,
+                pattern: MacroPattern::Wildcard,
+            }),
+        };
+        let expr = bin(BinaryOp::Add, num(1.0), num(2.0));
+        let result = try_match(&pattern, &expr);
+        assert_eq!(result, Some(HashMap::new()));
+    }
 }

@@ -43,6 +43,8 @@ pub enum MacroErrorKind {
     MissingBodyBlock(String),
     /// A regular call was given a `@sym` or `$ph` arg without a matching param.
     MacroArgInNonMacroCall { name: String },
+    /// No case matched in the structure.
+    NonExhaustiveMacroMatch,
 }
 
 impl fmt::Display for MacroErrorKind {
@@ -57,6 +59,8 @@ impl fmt::Display for MacroErrorKind {
             Self::MissingBodyBlock(n) => write!(f, "macro `{}` requires a trailing `{{ }}` block", n),
             Self::MacroArgInNonMacroCall { name } =>
                 write!(f, "`@{}` or placeholder argument used in a non-macro call", name),
+            Self::NonExhaustiveMacroMatch  => 
+                write!(f, "non-exhaustive macro match"),
         }
     }
 }

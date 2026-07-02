@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use hulk_ast::{
     DeclarationKind, Expr, ExprKind, MacroArg, MacroCallExpr,
-    MacroParam, MacroParamKind, Program, TypeMemberKind,
+    MacroParam, MacroParamKind, Program, TypeMemberKind, MacroMatchExpr,
 };
 
 use crate::collect::MacroRegistry;
@@ -128,6 +128,39 @@ fn expand_expr(
             }
             // Not a macro call -> recursively expand children and keep as Call
             rebuild_expr_children(expr, registry, errors, depth)
+        }
+        ExprKind::MacroMatch(mm) => {
+            // Fully expand the scrutinee first.
+            let scrutinee = expand_expr(*mm.scrutinee, registry, errors, depth);
+
+            // For each case, try to match the pattern against the scrutinee.
+            for case in &mm.cases {
+                if let Some(bindings) = crate::pattern::try_match(&case.pattern, &scrutinee) {
+                    // Build a substitution map from the bindings.
+                    let mut subst = SubstMap::new();
+                    for (name, expr) in bindings {
+                        subst.insert_expr(name, expr);
+                    }
+                    // Expand the case body with the bindings substituted.
+                    let body = substitute(&case.body, &subst);
+                    // Expand the body recursively (it may contain further macro calls).
+                    return expand_expr(body, registry, errors, depth + 1);
+                }
+            }
+
+            // No case matched – this is a runtime error in the macro expansion.
+            // In HULK, a non‑exhaustive macro match is an error.
+            errors.push(MacroError::new(
+                MacroErrorKind::NonExhaustiveMacroMatch,
+                expr.span,
+            ));
+
+            let cases = mm.cases.clone();
+            let new_mm = MacroMatchExpr {
+                scrutinee: Box::new(scrutinee),
+                cases,
+            };
+            Expr::new(ExprKind::MacroMatch(new_mm), expr.span)
         }
         // For all other expression kinds, recursively expand children.
         _ => rebuild_expr_children(expr, registry, errors, depth),

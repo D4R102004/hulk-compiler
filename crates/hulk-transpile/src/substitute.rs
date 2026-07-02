@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use hulk_ast::{
     AssignExpr, AssignTarget, BlockExpr, DowncastExpr, ElifBranch, Expr, ExprKind, ForExpr,
     IndexExpr, LetBinding, LetExpr, MacroArg, MatchCase, MemberExpr, NewExpr, TypeTestExpr, 
-    UnaryExpr, VectorComprehension, VectorExpr, WhileExpr,
+    UnaryExpr, VectorComprehension, VectorExpr, WhileExpr, MacroCase, MacroMatchExpr,
 };
 
 /// Substitution map for a single macro expansion.
@@ -299,6 +299,23 @@ pub fn substitute(expr: &Expr, subst: &SubstMap) -> Expr {
             )),
             expr.span,
         ),
+        ExprKind::MacroMatch(mm) => {
+            let new_scrutinee = substitute(&mm.scrutinee, subst);
+            let new_cases = mm.cases
+                .iter()
+                .map(|case| MacroCase {
+                    pattern: case.pattern.clone(), // patterns are not substituted
+                    body: substitute(&case.body, subst),
+                })
+                .collect();
+            Expr::new(
+                ExprKind::MacroMatch(MacroMatchExpr {
+                    scrutinee: Box::new(new_scrutinee),
+                    cases: new_cases,
+                }),
+                expr.span,
+            )
+        }
         // Leaf nodes are returned unchanged.
         _ => expr.clone(),
     }
