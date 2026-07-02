@@ -3,7 +3,7 @@
 mod collect;
 mod error;
 mod expand;
-pub mod pattern; // Phase 2: structural pattern matching
+pub mod pattern; // TODO: structural pattern matching
 mod substitute;
 
 pub use error::{MacroError, MacroErrorKind};
