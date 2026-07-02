@@ -21,7 +21,8 @@ use hulk_ast::{
     LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr, NewExpr, Param, Pattern,
     Program, ProtocolDecl, ProtocolMethod, SourceSpan, TypeDecl, TypeMember, TypeMemberKind,
     TypeParent, TypeRef, TypeTestExpr, UnaryOp, VectorComprehension, VectorExpr, VectorGenerator, 
-    WhileExpr, MacroArg, MacroCallExpr, MacroDecl, MacroParam, MacroParamKind,
+    WhileExpr, MacroArg, MacroCallExpr, MacroDecl, MacroParam, MacroParamKind, MacroCase, MacroMatchExpr,
+    MacroPattern, MacroPatternBind,
 };
 use hulk_lexer::{Span, Token, TokenKind};
 
@@ -102,6 +103,9 @@ pub enum ParseErrorKind {
 pub struct Ll1Parser {
     tokens: Vec<Token>,
     current: usize,
+    /// Whether a macro definition body is currently being paarsed.
+    /// This affects how `match` expressions are parsed.
+    in_macro_body: bool,
 }
 
 impl Ll1Parser {
@@ -119,7 +123,7 @@ impl Ll1Parser {
             });
         }
 
-        Self { tokens, current: 0 }
+        Self { tokens, current: 0, in_macro_body: false }
     }
 
     /// Parses a full HULK program: zero or more declarations followed by the
@@ -221,6 +225,10 @@ impl Ll1Parser {
             None
         };
 
+        // ── Enter macro body context ──
+        let old_in_macro = self.in_macro_body;
+        self.in_macro_body = true;
+
         let body = if self.match_kind(&TokenKind::FatArrow) || self.match_kind(&TokenKind::Arrow) {
             let expr = self.parse_expression()?;
             self.match_kind(&TokenKind::Semicolon);
@@ -235,6 +243,9 @@ impl Ll1Parser {
                 self.peek_span(),
             ));
         };
+
+        // ── Restore context ──
+        self.in_macro_body = old_in_macro;
 
         Ok(MacroDecl::new(name, params, return_type, body))
     }
@@ -907,8 +918,8 @@ impl Ll1Parser {
             TokenKind::False => Ok(Expr::boolean(false, span)),
             TokenKind::Ident(name) => Ok(Expr::variable(name, span)),
             TokenKind::SelfKw => Ok(Expr::new(ExprKind::SelfRef, span)),
-            // WHY: `base` is a symbol (§A.7.4), not a keyword — it can be shadowed by a
-            // variable (like `let base: Printer = ...`). Emit Variable("base") here;
+            // `base` is a symbol, not a keyword — it can be shadowed by a variable 
+            // (like `let base: Printer = ...`). Emit Variable("base") here;
             // parse_postfix promotes it to BaseRef only when immediately followed by `(`
             // (the method-delegation call site).
             TokenKind::Base => Ok(Expr::variable("base".to_string(), span)),
@@ -924,7 +935,13 @@ impl Ll1Parser {
             TokenKind::While => self.finish_while_expression(span),
             TokenKind::For => self.finish_for_expression(span),
             TokenKind::New => self.finish_new_expression(span),
-            TokenKind::Match => self.finish_match_expression(span),
+            TokenKind::Match => {
+                if self.in_macro_body {
+                    self.parse_macro_match_expr(span)
+                } else {
+                    self.finish_match_expression(span)
+                }
+            }
             TokenKind::Function => self.parse_anon_function_after_keyword(span),
             other => Err(ParseError::new(
                 ParseErrorKind::ExpectedExpression {
@@ -1258,6 +1275,379 @@ impl Ll1Parser {
                     token_kind_name(&other)
                 )),
                 token_span(token.span),
+            )),
+        }
+    }
+
+    /// Parses a compile‑time `match` expression inside a macro body.
+    /// Syntax: `match ( <expr> ) { case ( <pattern> ) => <expr> ; ... [default => <expr> ;] }`
+    fn parse_macro_match_expr(&mut self, span: SourceSpan) -> Result<Expr, ParseError> {
+        self.consume(&TokenKind::LParen, "`(` after `match`")?;
+        let scrutinee = self.parse_expression()?;
+        self.consume(&TokenKind::RParen, "`)` after scrutinee")?;
+
+        self.consume(&TokenKind::LBrace, "`{` before macro match cases")?;
+
+        let mut cases = Vec::new();
+        let mut has_default = false;
+
+        while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
+            // Contextual `default` arm: an identifier named "default" at arm level.
+            if let TokenKind::Ident(ref name) = &self.peek().kind {
+                if name == "default" && !has_default {
+                    self.advance(); // consume `default`
+                    has_default = true;
+                    self.consume(&TokenKind::FatArrow, "`=>` after `default`")?;
+                    let body = self.parse_expression()?;
+                    self.match_kind(&TokenKind::Semicolon);
+                    cases.push(MacroCase {
+                        pattern: MacroPattern::Wildcard,
+                        body,
+                    });
+                    continue;
+                }
+            }
+
+            // Regular case arm: `case ( <pattern> ) => <expr> ;`
+            self.consume(&TokenKind::Case, "`case` in macro match")?;
+            self.consume(&TokenKind::LParen, "`(` before macro pattern")?;
+            let pattern = self.parse_macro_pattern_or()?; // Parses a compile‑time pattern with precedence.
+            self.consume(&TokenKind::RParen, "`)` after macro pattern")?;
+            self.consume(&TokenKind::FatArrow, "`=>` after macro pattern")?;
+            let body = self.parse_expression()?;
+            self.match_kind(&TokenKind::Semicolon);
+
+            cases.push(MacroCase { pattern, body });
+        }
+
+        self.consume(&TokenKind::RBrace, "`}` after macro match cases")?;
+
+        let macro_match = MacroMatchExpr {
+            scrutinee: Box::new(scrutinee),
+            cases,
+        };
+        Ok(Expr::new(ExprKind::MacroMatch(macro_match), span))
+    }
+
+    // ─── Precedence levels ──────────────────────────────────────────────
+
+    /// Parses `|` (logical or) with left associativity.
+    fn parse_macro_pattern_or(&mut self) -> Result<MacroPattern, ParseError> {
+        let mut left = self.parse_macro_pattern_and()?;
+        while self.match_kind(&TokenKind::Or) {
+            let right = self.parse_macro_pattern_and()?;
+            left = MacroPattern::BinaryExpr {
+                op: BinaryOp::Or,
+                left: Box::new(MacroPatternBind {
+                    name: None,
+                    ty: None,
+                    pattern: left,
+                }),
+                right: Box::new(MacroPatternBind {
+                    name: None,
+                    ty: None,
+                    pattern: right,
+                }),
+            };
+        }
+        Ok(left)
+    }
+
+    /// Parses `&` (logical and) with left associativity.
+    fn parse_macro_pattern_and(&mut self) -> Result<MacroPattern, ParseError> {
+        let mut left = self.parse_macro_pattern_equality()?;
+        while self.match_kind(&TokenKind::And) {
+            let right = self.parse_macro_pattern_equality()?;
+            left = MacroPattern::BinaryExpr {
+                op: BinaryOp::And,
+                left: Box::new(MacroPatternBind {
+                    name: None,
+                    ty: None,
+                    pattern: left,
+                }),
+                right: Box::new(MacroPatternBind {
+                    name: None,
+                    ty: None,
+                    pattern: right,
+                }),
+            };
+        }
+        Ok(left)
+    }
+
+    /// Parses `==` and `!=` with left associativity.
+    fn parse_macro_pattern_equality(&mut self) -> Result<MacroPattern, ParseError> {
+        let mut left = self.parse_macro_pattern_comparison()?;
+        loop {
+            let op = if self.match_kind(&TokenKind::EqEq) {
+                Some(BinaryOp::Equal)
+            } else if self.match_kind(&TokenKind::Neq) {
+                Some(BinaryOp::NotEqual)
+            } else {
+                None
+            };
+            if let Some(op) = op {
+                let right = self.parse_macro_pattern_comparison()?;
+                left = MacroPattern::BinaryExpr {
+                    op,
+                    left: Box::new(MacroPatternBind {
+                        name: None,
+                        ty: None,
+                        pattern: left,
+                    }),
+                    right: Box::new(MacroPatternBind {
+                        name: None,
+                        ty: None,
+                        pattern: right,
+                    }),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(left)
+    }
+
+    /// Parses `<`, `<=`, `>`, `>=` with left associativity.
+    fn parse_macro_pattern_comparison(&mut self) -> Result<MacroPattern, ParseError> {
+        let mut left = self.parse_macro_pattern_concat()?;
+        loop {
+            let op = if self.match_kind(&TokenKind::Lt) {
+                Some(BinaryOp::Less)
+            } else if self.match_kind(&TokenKind::Leq) {
+                Some(BinaryOp::LessEqual)
+            } else if self.match_kind(&TokenKind::Gt) {
+                Some(BinaryOp::Greater)
+            } else if self.match_kind(&TokenKind::Geq) {
+                Some(BinaryOp::GreaterEqual)
+            } else {
+                None
+            };
+            if let Some(op) = op {
+                let right = self.parse_macro_pattern_concat()?;
+                left = MacroPattern::BinaryExpr {
+                    op,
+                    left: Box::new(MacroPatternBind {
+                        name: None,
+                        ty: None,
+                        pattern: left,
+                    }),
+                    right: Box::new(MacroPatternBind {
+                        name: None,
+                        ty: None,
+                        pattern: right,
+                    }),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(left)
+    }
+
+    /// Parses `@` and `@@` (string concatenation) with left associativity.
+    fn parse_macro_pattern_concat(&mut self) -> Result<MacroPattern, ParseError> {
+        let mut left = self.parse_macro_pattern_term()?;
+        loop {
+            let op = if self.match_kind(&TokenKind::At) {
+                Some(BinaryOp::Concat)
+            } else if self.match_kind(&TokenKind::AtAt) {
+                Some(BinaryOp::ConcatSpace)
+            } else {
+                None
+            };
+            if let Some(op) = op {
+                let right = self.parse_macro_pattern_term()?;
+                left = MacroPattern::BinaryExpr {
+                    op,
+                    left: Box::new(MacroPatternBind {
+                        name: None,
+                        ty: None,
+                        pattern: left,
+                    }),
+                    right: Box::new(MacroPatternBind {
+                        name: None,
+                        ty: None,
+                        pattern: right,
+                    }),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(left)
+    }
+
+    /// Parses `+` and `-` with left associativity.
+    fn parse_macro_pattern_term(&mut self) -> Result<MacroPattern, ParseError> {
+        let mut left = self.parse_macro_pattern_factor()?;
+        loop {
+            let op = if self.match_kind(&TokenKind::Plus) {
+                Some(BinaryOp::Add)
+            } else if self.match_kind(&TokenKind::Minus) {
+                Some(BinaryOp::Subtract)
+            } else {
+                None
+            };
+            if let Some(op) = op {
+                let right = self.parse_macro_pattern_factor()?;
+                left = MacroPattern::BinaryExpr {
+                    op,
+                    left: Box::new(MacroPatternBind {
+                        name: None,
+                        ty: None,
+                        pattern: left,
+                    }),
+                    right: Box::new(MacroPatternBind {
+                        name: None,
+                        ty: None,
+                        pattern: right,
+                    }),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(left)
+    }
+
+    /// Parses `*`, `/`, and `%` with left associativity.
+    fn parse_macro_pattern_factor(&mut self) -> Result<MacroPattern, ParseError> {
+        let mut left = self.parse_macro_pattern_unary()?;
+        loop {
+            let op = if self.match_kind(&TokenKind::Star) {
+                Some(BinaryOp::Multiply)
+            } else if self.match_kind(&TokenKind::Slash) {
+                Some(BinaryOp::Divide)
+            } else if self.match_kind(&TokenKind::Percent) {
+                Some(BinaryOp::Modulo)
+            } else {
+                None
+            };
+            if let Some(op) = op {
+                let right = self.parse_macro_pattern_unary()?;
+                left = MacroPattern::BinaryExpr {
+                    op,
+                    left: Box::new(MacroPatternBind {
+                        name: None,
+                        ty: None,
+                        pattern: left,
+                    }),
+                    right: Box::new(MacroPatternBind {
+                        name: None,
+                        ty: None,
+                        pattern: right,
+                    }),
+                };
+            } else {
+                break;
+            }
+        }
+        Ok(left)
+    }
+
+    /// Parses unary `-` and `!` with right associativity.
+    fn parse_macro_pattern_unary(&mut self) -> Result<MacroPattern, ParseError> {
+        if self.match_kind(&TokenKind::Minus) {
+            let operand = self.parse_macro_pattern_unary()?;
+            return Ok(MacroPattern::UnaryExpr {
+                op: UnaryOp::Negate,
+                operand: Box::new(MacroPatternBind {
+                    name: None,
+                    ty: None,
+                    pattern: operand,
+                }),
+            });
+        }
+        if self.match_kind(&TokenKind::Not) {
+            let operand = self.parse_macro_pattern_unary()?;
+            return Ok(MacroPattern::UnaryExpr {
+                op: UnaryOp::Not,
+                operand: Box::new(MacroPatternBind {
+                    name: None,
+                    ty: None,
+                    pattern: operand,
+                }),
+            });
+        }
+        self.parse_macro_pattern_power()
+    }
+
+    /// Parses `^` (power) with right associativity.
+    fn parse_macro_pattern_power(&mut self) -> Result<MacroPattern, ParseError> {
+        let left = self.parse_macro_pattern_primary()?;
+        if self.match_kind(&TokenKind::Caret) {
+            let right = self.parse_macro_pattern_unary()?;
+            Ok(MacroPattern::BinaryExpr {
+                op: BinaryOp::Power,
+                left: Box::new(MacroPatternBind {
+                    name: None,
+                    ty: None,
+                    pattern: left,
+                }),
+                right: Box::new(MacroPatternBind {
+                    name: None,
+                    ty: None,
+                    pattern: right,
+                }),
+            })
+        } else {
+            Ok(left)
+        }
+    }
+
+    /// Primary pattern: literal, identifier (with optional type), or parenthesised.
+    fn parse_macro_pattern_primary(&mut self) -> Result<MacroPattern, ParseError> {
+        let token = self.advance();
+        let span = token_span(token.span);
+
+        match token.kind {
+            TokenKind::Number(value) => Ok(MacroPattern::Literal(Literal::Number(value))),
+            TokenKind::StringLit(value) => Ok(MacroPattern::Literal(Literal::String(value))),
+            TokenKind::True => Ok(MacroPattern::Literal(Literal::Boolean(true))),
+            TokenKind::False => Ok(MacroPattern::Literal(Literal::Boolean(false))),
+            TokenKind::Underscore => Ok(MacroPattern::Wildcard),
+            
+            TokenKind::Ident(name) => {
+                // Check for a colon after the identifier
+                if self.match_kind(&TokenKind::Colon) {
+                    // Distinguish between type annotation and compound binding.
+                    if self.check(&TokenKind::LParen) {
+                        // `name: (pattern)` – bind the compound pattern
+                        let inner = self.parse_macro_pattern_or()?;
+                        Ok(MacroPattern::Bind {
+                            name: Some(name),
+                            ty: None,
+                            pattern: Box::new(inner),
+                        })
+                    } else {
+                        // `name: Type` – type-annotated wildcard binding
+                        let ty = self.parse_type_ref()?;
+                        Ok(MacroPattern::Bind {
+                            name: Some(name),
+                            ty: Some(ty),
+                            pattern: Box::new(MacroPattern::Wildcard),
+                        })
+                    }
+                } else {
+                    // Simple variable binding (no type annotation)
+                    Ok(MacroPattern::Bind {
+                        name: Some(name),
+                        ty: None,
+                        pattern: Box::new(MacroPattern::Wildcard),
+                    })
+                }
+            }
+
+            TokenKind::LParen => {
+                let inner = self.parse_macro_pattern_or()?;
+                self.consume(&TokenKind::RParen, "`)` after parenthesised pattern")?;
+                Ok(inner)
+            }
+
+            other => Err(ParseError::new(
+                ParseErrorKind::Message(format!("unexpected token in macro pattern: {}", token_kind_name(&other))),
+                span,
             )),
         }
     }

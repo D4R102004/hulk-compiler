@@ -898,6 +898,12 @@ pub enum MacroPattern {
     Wildcard,
     /// Matches a specific literal.
     Literal(Literal),
+    /// Binds the matched sub‑expression to a name, optionally with a type constraint.
+    Bind {
+        name: Option<String>,
+        ty: Option<TypeRef>,
+        pattern: Box<MacroPattern>,
+    },
     /// Matches a binary expression with a specific operator and recursive sub‑patterns.
     BinaryExpr {
         op: BinaryOp,
