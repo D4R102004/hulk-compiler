@@ -60,6 +60,7 @@ pub enum DeclarationKind<A = ()> {
     Function(FunctionDecl<A>),
     Type(TypeDecl<A>),
     Protocol(ProtocolDecl), // protocols have no expression bodies
+    Macro(MacroDecl<A>),
 }
 
 /// Function declaration, either inline (`=> expr`) or full-form (`{ ... }`).
@@ -370,6 +371,8 @@ pub enum ExprKind<A = ()> {
     Index(IndexExpr<A>),
     /// Extra-feature friendly node for `match` expressions.
     Match(MatchExpr<A>),
+    /// Macro invocation site — replaced by the expander before semantic analysis.
+    MacroCall(MacroCallExpr<A>),
 }
 
 /// Literal values.
@@ -775,6 +778,113 @@ pub enum Pattern {
     Type(TypeRef, Option<String>),
 }
 
+
+// =============================================================================
+// Macro declarations
+// =============================================================================
+
+/// Discriminates the four kinds of macro parameter.
+///
+/// Each kind maps to a different syntactic sigil in the source:
+///
+/// | Kind          | Syntax      | Semantics                                     |
+/// |---------------|-------------|-----------------------------------------------|
+/// | Regular       | `n: T`      | Expression argument — evaluated, substituted. |
+/// | BodyExpr      | `*expr: T`  | Trailing `{ block }` after the invocation.    |
+/// | Symbolic      | `@x: T`     | An lvalue passed by name, not by value.       |
+/// | Placeholder   | `$iter: T`  | A new variable name introduced at call site.  |
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MacroParamKind {
+    Regular,
+    BodyExpr,
+    Symbolic,
+    Placeholder,
+}
+
+/// A single parameter of a macro declaration.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroParam {
+    pub kind: MacroParamKind,
+    pub name: String,
+    pub type_annotation: Option<TypeRef>,
+}
+
+impl MacroParam {
+    pub fn regular(name: impl Into<String>, type_annotation: Option<TypeRef>) -> Self {
+        Self { kind: MacroParamKind::Regular, name: name.into(), type_annotation }
+    }
+    pub fn body_expr(name: impl Into<String>, type_annotation: Option<TypeRef>) -> Self {
+        Self { kind: MacroParamKind::BodyExpr, name: name.into(), type_annotation }
+    }
+    pub fn symbolic(name: impl Into<String>, type_annotation: Option<TypeRef>) -> Self {
+        Self { kind: MacroParamKind::Symbolic, name: name.into(), type_annotation }
+    }
+    pub fn placeholder(name: impl Into<String>, type_annotation: Option<TypeRef>) -> Self {
+        Self { kind: MacroParamKind::Placeholder, name: name.into(), type_annotation }
+    }
+}
+
+/// Top-level macro declaration: `def name(params...) { body }`.
+///
+/// Template that will be textually expanded at every call site.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroDecl<A = ()> {
+    pub name: String,
+    pub params: Vec<MacroParam>,
+    pub return_type: Option<TypeRef>,
+    pub body: Expr<A>,
+}
+
+impl<A> MacroDecl<A> {
+    pub fn new(
+        name: impl Into<String>,
+        params: Vec<MacroParam>,
+        return_type: Option<TypeRef>,
+        body: Expr<A>,
+    ) -> Self {
+        Self { name: name.into(), params, return_type, body }
+    }
+}
+
+// =============================================================================
+// Macro call sites
+// =============================================================================
+
+/// Argument at a macro call site.
+///
+/// | Variant     | Syntax   | Meaning                                              |
+/// |-------------|----------|------------------------------------------------------|
+/// | Expr        | `expr`   | Normal expression, bound to a Regular param.         |
+/// | Symbolic    | `@x`     | Variable name passed to a Symbolic (`@`) param.      |
+/// | Placeholder | `name`   | Identifier bound to a Placeholder (`$`) param.       |
+#[derive(Debug, Clone, PartialEq)]
+pub enum MacroArg<A = ()> {
+    /// A regular expression argument.
+    Expr(Expr<A>),
+    /// A symbolic argument: `@varname` — passes the variable by name.
+    Symbolic(String),
+    /// A placeholder binding name: names the `$param` variable for this call.
+    Placeholder(String),
+}
+
+/// A macro invocation: `name(args...) { body_block }`.
+///
+/// `body` is `Some` when the macro has a `*expr` (BodyExpr) parameter and
+/// the caller supplies a trailing `{ ... }` block. It is `None` if the macro
+/// has no such parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroCallExpr<A = ()> {
+    pub name: String,
+    pub args: Vec<MacroArg<A>>,
+    pub body: Option<Box<Expr<A>>>,
+}
+
+impl<A> MacroCallExpr<A> {
+    pub fn new(name: impl Into<String>, args: Vec<MacroArg<A>>, body: Option<Expr<A>>) -> Self {
+        Self { name: name.into(), args, body: body.map(Box::new) }
+    }
+}
+
 /// Generic AST visitor.
 ///
 /// This trait is intentionally small. Specific compiler passes can implement
@@ -870,6 +980,16 @@ where
             walk_expr(&match_expr.value, visit);
             for case in &match_expr.cases {
                 walk_expr(&case.body, visit);
+            }
+        }
+        ExprKind::MacroCall(mc) => {
+            for arg in &mc.args {
+                if let MacroArg::Expr(e) = arg {
+                    walk_expr(e, visit);
+                }
+            }
+            if let Some(body) = &mc.body {
+                walk_expr(body, visit);
             }
         }
     }
