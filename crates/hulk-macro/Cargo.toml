@@ -1,0 +1,7 @@
+[package]
+name    = "hulk-macro"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hulk-ast = { path = "../hulk-ast" }

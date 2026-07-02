@@ -4,7 +4,7 @@
 //! This is the first phase of the compiler pipeline:
 //!
 //! ```text
-//! source code → Lexer → Vec<Token> → Parser
+//! source code -> Lexer -> Vec<Token> -> Parser
 //! ```
 
 /// Every distinct kind of token the HULK lexer can produce.

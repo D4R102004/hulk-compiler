@@ -993,7 +993,7 @@ impl Ll1Parser {
         // ── Parse the first expression (mandatory) ──────────────────────
         let first = self.parse_expression()?;
 
-        // ── Disambiguate: `{ expr, ... }` → vector literal ─────────────
+        // ── Disambiguate: `{ expr, ... }` -> vector literal ─────────────
         if self.check(&TokenKind::Comma) {
             let mut items = vec![first];
             // Parse comma‑separated expressions, allowing a trailing comma.
