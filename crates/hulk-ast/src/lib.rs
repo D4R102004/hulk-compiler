@@ -373,6 +373,8 @@ pub enum ExprKind<A = ()> {
     Match(MatchExpr<A>),
     /// Macro invocation site — replaced by the expander before semantic analysis.
     MacroCall(MacroCallExpr<A>),
+    /// Compile‑time pattern matching, used only inside macro definitions.
+    MacroMatch(MacroMatchExpr<A>),
 }
 
 /// Literal values.
@@ -885,6 +887,65 @@ impl<A> MacroCallExpr<A> {
     }
 }
 
+// =============================================================================
+// Macro pattern matching
+// =============================================================================
+
+/// A pattern that matches the shape of an AST node during macro expansion.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MacroPattern {
+    /// Matches any expression (wildcard).
+    Wildcard,
+    /// Matches a specific literal.
+    Literal(Literal),
+    /// Matches a binary expression with a specific operator and recursive sub‑patterns.
+    BinaryExpr {
+        op: BinaryOp,
+        left: Box<MacroPatternBind>,
+        right: Box<MacroPatternBind>,
+    },
+    /// Matches a unary expression with a specific operator and a recursive sub‑pattern.
+    UnaryExpr {
+        op: UnaryOp,
+        operand: Box<MacroPatternBind>,
+    },
+    // Future extensions: Call, Member, Let, etc.
+    // Relatively hard for the initial implementation, but could be easily extended later.
+    // The main difficulty would be in addapting the parser grammar without conflicts.
+}
+
+/// A binding site in a macro pattern: captures the matched sub‑expression
+/// under an optional name, optionally with a type constraint.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroPatternBind {
+    /// If `Some`, the matched sub‑expression is stored in the substitution map
+    /// under this name, so it can be used in the case body.
+    pub name: Option<String>,
+    /// Optional type annotation (used for consistency checking during expansion).
+    pub ty: Option<TypeRef>,
+    /// The shape this binding must match.
+    pub pattern: MacroPattern,
+}
+
+/// A single case in a `macro match` expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroCase<A = ()> {
+    pub pattern: MacroPattern,
+    pub body: Expr<A>,
+}
+
+/// A compile‑time `match` expression used inside macro bodies.
+/// The scrutinee is a concrete AST node (already expanded), and the cases
+/// are tested in order; the first matching case provides the substitution map
+/// for expanding its body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacroMatchExpr<A = ()> {
+    /// The expression to match against (must be a fully‑expanded AST node).
+    pub scrutinee: Box<Expr<A>>,
+    /// List of cases evaluated in order.
+    pub cases: Vec<MacroCase<A>>,
+}
+
 /// Generic AST visitor.
 ///
 /// This trait is intentionally small. Specific compiler passes can implement
@@ -990,6 +1051,13 @@ where
             }
             if let Some(body) = &mc.body {
                 walk_expr(body, visit);
+            }
+        }
+        ExprKind::MacroMatch(mm) => {
+            // Dereference the box to get &Expr<A>
+            walk_expr(&*mm.scrutinee, visit);
+            for case in &mm.cases {
+                walk_expr(&case.body, visit);
             }
         }
     }
