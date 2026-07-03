@@ -584,6 +584,9 @@ mod tests {
             .expect("declare methods");
 
         // 7. Build vtables and itables for every (type, protocol) pair the program actually uses.
+        // Emit GC field maps (before build_vtables)
+        let _ = layout::build_gc_field_maps(&mut codegen, &verified.registry);
+
         layout::build_vtables(&mut codegen, &verified.registry).expect("build vtables");
 
         itables::build_itables(&mut codegen, &verified.registry, &verified.typed_program)
