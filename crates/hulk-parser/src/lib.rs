@@ -1483,30 +1483,18 @@ impl Ll1Parser {
         let mut left = self.parse_macro_pattern_factor()?;
         loop {
             let op = if self.match_kind(&TokenKind::Plus) {
-                Some(BinaryOp::Add)
+                BinaryOp::Add
             } else if self.match_kind(&TokenKind::Minus) {
-                Some(BinaryOp::Subtract)
-            } else {
-                None
-            };
-            if let Some(op) = op {
-                let right = self.parse_macro_pattern_factor()?;
-                left = MacroPattern::BinaryExpr {
-                    op,
-                    left: Box::new(MacroPatternBind {
-                        name: None,
-                        ty: None,
-                        pattern: left,
-                    }),
-                    right: Box::new(MacroPatternBind {
-                        name: None,
-                        ty: None,
-                        pattern: right,
-                    }),
-                };
+                BinaryOp::Subtract
             } else {
                 break;
-            }
+            };
+            let right = self.parse_macro_pattern_factor()?;
+            left = MacroPattern::BinaryExpr {
+                op,
+                left: Box::new(MacroPatternBind { name: None, ty: None, pattern: left }),
+                right: Box::new(MacroPatternBind { name: None, ty: None, pattern: right }),
+            };
         }
         Ok(left)
     }
@@ -1622,7 +1610,7 @@ impl Ll1Parser {
                         })
                     } else {
                         // `name: Type` – type-annotated wildcard binding
-                        let ty = self.parse_type_ref()?;
+                        let ty = self.parse_named_type_ref()?;
                         Ok(MacroPattern::Bind {
                             name: Some(name),
                             ty: Some(ty),
