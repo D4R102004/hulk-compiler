@@ -534,3 +534,152 @@ mod tests {
         assert!(is_elf(&obj));
     }
 }
+
+#[cfg(test)]
+mod macro_tests {
+    use super::*;
+    use hulk_lexer::Lexer;
+    use hulk_parser::parse;
+    use hulk_transpile::expand_program;
+    use hulk_semantic::analyze;
+    use std::process::Command;
+    use tempfile::tempdir;
+
+    fn compile_and_run(src: &str) -> String {
+        let tokens = Lexer::new(src).tokenize().expect("lex failed");
+        let mut program = parse(tokens).expect("parse failed");
+        let macro_errors = expand_program(&mut program);
+        assert!(macro_errors.is_empty(), "macro expansion errors: {:?}", macro_errors);
+        let verified = analyze(&program).expect("semantic analysis failed");
+
+        let temp_dir = tempdir().expect("create temp dir");
+        let output_path = temp_dir.path().join("output");
+        let opts = CodegenOptions::with_output_path(output_path.clone());
+        compile(&verified, &opts).expect("codegen failed");
+
+        let obj_path = output_path.with_extension("o");
+        link_output(&obj_path, &output_path).expect("linking failed");
+
+        let output = Command::new(&output_path)
+            .output()
+            .expect("failed to run executable");
+        assert!(output.status.success(), "executable failed: {}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    #[test]
+    fn repeat_macro_basic() {
+        let src = r#"
+            def repeat(n: Number, *expr: Object): Object =>
+                let total = n in
+                while (total >= 0) {
+                    total := total - 1;
+                    expr;
+                };
+            repeat(3) { print("hi"); }
+        "#;
+        let output = compile_and_run(src);
+        assert_eq!(output, "hi\nhi\nhi\nhi");
+    }
+
+    #[test]
+    fn swap_macro_symbolic() {
+        let src = r#"
+            def swap(@a: Object, @b: Object) {
+                let temp: Object = a in {
+                    a := b;
+                    b := temp;
+                }
+            }
+            let x: Object = 5, y: Object = 10 in {
+                swap(@x, @y);
+                print(x);
+                print(y);
+            }
+        "#;
+        let output = compile_and_run(src);
+        assert_eq!(output, "10\n5");
+    }
+
+    #[test]
+    fn repeat_macro_with_placeholder() {
+        let src = r#"
+            def repeat($iter: Number, n: Number, *expr:Object) {
+                let iter: Number = 0, total:Number = n in {
+                    while (total >= 0) {
+                        total := total - 1;
+                        expr;
+                        iter := iter + 1
+                    };
+                }
+            }
+            repeat(current, 3) {
+                print(current);
+            }
+        "#;
+        let output = compile_and_run(src);
+        assert_eq!(output, "0\n1\n2\n3");
+    }
+
+    #[test]
+    fn simplify_macro_pattern_matching() {
+        let src = r#"
+            def simplify(expr:Number) {
+                match(expr) {
+                    case (x1:Number + x2:Number) => simplify(x1) + simplify(x2);
+                    case (x1:Number + 0) => simplify(x1);
+                    case (x1:Number - x2:Number) => simplify(x1) - simplify(x2);
+                    case (x1:Number - 0) => simplify(x1);
+                    case (x1:Number * x2:Number) => simplify(x1) * simplify(x2);
+                    case (x1:Number * 1) => simplify(x1);
+                    default => expr;
+                };
+            }
+            print(simplify((42+0)*1));
+        "#;
+        let output = compile_and_run(src);
+        assert_eq!(output, "42");
+    }
+
+    #[test]
+    fn simplify_macro_default_branch() {
+        let src = r#"
+            def simplify(expr:Number) {
+                match(expr) {
+                    case (x1:Number + 0) => simplify(x1);
+                    default => expr;
+                };
+            }
+            print(simplify(5));
+        "#;
+        let output = compile_and_run(src);
+        assert_eq!(output, "5");
+    }
+
+    #[test]
+    fn nested_macro_calls() {
+        let src = r#"
+            def repeat(n: Number, *expr: Object): Object =>
+                let total = n in
+                while (total >= 0) {
+                    total := total - 1;
+                    expr;
+                };
+            def repeat_twice(n: Number, *expr: Object): Object =>
+                repeat(n) { repeat(n) { expr; } };
+            repeat_twice(1) { print("x"); }
+        "#;
+        let output = compile_and_run(src);
+        assert_eq!(output, "x\nx\nx\nx");
+    }
+
+    #[test]
+    fn macro_returning_value() {
+        let src = r#"
+            def inc(x: Number): Number => x + 1;
+            print(inc(41));
+        "#;
+        let output = compile_and_run(src);
+        assert_eq!(output, "42");
+    }
+}

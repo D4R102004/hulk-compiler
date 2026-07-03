@@ -202,6 +202,7 @@ dependencies = [
  "hulk-parser",
  "hulk-rt",
  "hulk-semantic",
+ "hulk-transpile",
  "indexmap",
  "inkwell",
  "tempfile",
