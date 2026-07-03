@@ -419,5 +419,8 @@ fn walk_free_vars<'ctx>(
                 mc.name
             );
         }
+        ExprKind::MacroMatch(_mm) => {
+                panic!("internal error: macro match reached code generation unexpanded");
+            }
     }
 }

@@ -324,6 +324,18 @@ where
                 traverse_expr(body, errors, f);
             }
         }
+        ExprKind::MacroMatch(mm) => {
+            errors.push(SemanticError::error(
+                SemanticErrorKind::MacroReferenceFound {
+                    macro_expr: "macro match".to_string(),
+                },
+                expr.span,
+            ));
+            traverse_expr(&mm.scrutinee, errors, f);
+            for case in &mm.cases {
+                traverse_expr(&case.body, errors, f);
+            }
+        }
     }
 }
 
