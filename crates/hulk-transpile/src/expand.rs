@@ -14,6 +14,7 @@ use hulk_ast::{
 use crate::collect::MacroRegistry;
 use crate::error::{MacroError, MacroErrorKind};
 use crate::substitute::{collect_let_bindings, substitute, SubstMap};
+use crate::pattern::try_match;
 
 /// Hard-coded expansion passes limit
 const MAX_EXPANSION_PASSES: usize = 64;
@@ -129,36 +130,42 @@ fn expand_expr(
             // Not a macro call -> recursively expand children and keep as Call
             rebuild_expr_children(expr, registry, errors, depth)
         }
-        ExprKind::MacroMatch(mm) => {
-            // Fully expand the scrutinee first.
-            let scrutinee = expand_expr(*mm.scrutinee, registry, errors, depth);
+       ExprKind::MacroMatch(mm) => {
+            // Clone the scrutinee to avoid moving out of mm.
+            let scrutinee = expand_expr((*mm.scrutinee).clone(), registry, errors, depth);
 
-            // For each case, try to match the pattern against the scrutinee.
+            // Try each case in order.
             for case in &mm.cases {
-                if let Some(bindings) = crate::pattern::try_match(&case.pattern, &scrutinee) {
-                    // Build a substitution map from the bindings.
-                    let mut subst = SubstMap::new();
-                    for (name, expr) in bindings {
-                        subst.insert_expr(name, expr);
+                match try_match(&case.pattern, &scrutinee) {
+                    Ok(Some(bindings)) => {
+                        let mut subst = SubstMap::new();
+                        for (name, expr) in bindings {
+                            subst.insert_expr(name, expr);
+                        }
+                        let body = substitute(&case.body, &subst);
+                        return expand_expr(body, registry, errors, depth + 1);
                     }
-                    // Expand the case body with the bindings substituted.
-                    let body = substitute(&case.body, &subst);
-                    // Expand the body recursively (it may contain further macro calls).
-                    return expand_expr(body, registry, errors, depth + 1);
+                    Ok(None) => continue,
+                    Err(err_kind) => {
+                        errors.push(MacroError::new(err_kind, expr.span));
+                        // Return the expanded expression with the error.
+                        let new_mm = MacroMatchExpr {
+                            scrutinee: Box::new(scrutinee),
+                            cases: mm.cases.clone(),
+                        };
+                        return Expr::new(ExprKind::MacroMatch(new_mm), expr.span);
+                    }
                 }
             }
 
-            // No case matched – this is a runtime error in the macro expansion.
-            // In HULK, a non‑exhaustive macro match is an error.
+            // No case matched – report error and return the expanded expression.
             errors.push(MacroError::new(
                 MacroErrorKind::NonExhaustiveMacroMatch,
                 expr.span,
             ));
-
-            let cases = mm.cases.clone();
             let new_mm = MacroMatchExpr {
                 scrutinee: Box::new(scrutinee),
-                cases,
+                cases: mm.cases.clone(),
             };
             Expr::new(ExprKind::MacroMatch(new_mm), expr.span)
         }

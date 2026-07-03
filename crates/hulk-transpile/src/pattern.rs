@@ -12,13 +12,15 @@ use std::collections::HashMap;
 use hulk_ast::{
     Expr, ExprKind, MacroPattern, MacroPatternBind,
 };
+use crate::error::MacroErrorKind;
 
 /// Attempts to match a `pattern` against the concrete AST node `expr`.
 ///
 /// # Returns
-/// - `Some(bindings)` if the pattern matches, where `bindings` maps each
+/// - `Ok(Some(bindings))` if the pattern matches, where `bindings` maps each
 ///   capture variable name to the `Expr` subtree that was matched.
-/// - `None` if the pattern does not match.
+/// - `Ok(None)` if the pattern does not match (shape mismatch).
+/// - `Err(MacroErrorKind)` if a structural error occurs, e.g., duplicate bindings.
 ///
 /// # Matching rules
 /// - `MacroPattern::Wildcard` always matches, producing no bindings.
@@ -33,30 +35,36 @@ use hulk_ast::{
 ///
 /// # Duplicate bindings
 /// If the same variable name appears more than once in a single pattern,
-/// the match fails (returns `None`). This prevents ambiguous captures.
-pub fn try_match(pattern: &MacroPattern, expr: &Expr) -> Option<HashMap<String, Expr>> {
+/// the match fails with `MacroErrorKind::DuplicatePatternBinding`.
+pub fn try_match(
+    pattern: &MacroPattern,
+    expr: &Expr,
+) -> Result<Option<HashMap<String, Expr>>, MacroErrorKind> {
     match pattern {
-        MacroPattern::Wildcard => Some(HashMap::new()),
+        MacroPattern::Wildcard => Ok(Some(HashMap::new())),
 
         MacroPattern::Literal(lit) => {
             if let ExprKind::Literal(ref e_lit) = expr.kind {
                 if e_lit == lit {
-                    return Some(HashMap::new());
+                    return Ok(Some(HashMap::new()));
                 }
             }
-            None
+            Ok(None)
         }
 
         MacroPattern::Bind { name, ty: _, pattern: inner } => {
-            let mut map = try_match(inner, expr)?;
-            if let Some(ref n) = name {
-                // Duplicate binding → fail the match.
-                if map.contains_key(n) {
-                    return None;
+            let inner_result = try_match(inner, expr)?;
+            if let Some(mut map) = inner_result {
+                if let Some(ref n) = name {
+                    if map.contains_key(n) {
+                        return Err(MacroErrorKind::DuplicatePatternBinding { name: n.clone() });
+                    }
+                    map.insert(n.clone(), expr.clone());
                 }
-                map.insert(n.clone(), expr.clone());
+                Ok(Some(map))
+            } else {
+                Ok(None)
             }
-            Some(map)
         }
 
         MacroPattern::BinaryExpr { op, left, right } => {
@@ -64,19 +72,28 @@ pub fn try_match(pattern: &MacroPattern, expr: &Expr) -> Option<HashMap<String, 
                 if bin.op == *op {
                     let left_map = match_bind(left, &bin.left)?;
                     let right_map = match_bind(right, &bin.right)?;
-                    return merge_maps(left_map, right_map);
+                    match (left_map, right_map) {
+                        (Some(l), Some(r)) => merge_maps(l, r).map(Some),
+                        _ => Ok(None),
+                    }
+                } else {
+                    Ok(None)
                 }
+            } else {
+                Ok(None)
             }
-            None
         }
 
         MacroPattern::UnaryExpr { op, operand } => {
             if let ExprKind::Unary(ref unary) = expr.kind {
                 if unary.op == *op {
-                    return match_bind(operand, &unary.expr);
+                    match_bind(operand, &unary.expr)
+                } else {
+                    Ok(None)
                 }
+            } else {
+                Ok(None)
             }
-            None
         }
     }
 }
@@ -89,37 +106,42 @@ pub fn try_match(pattern: &MacroPattern, expr: &Expr) -> Option<HashMap<String, 
 fn match_bind(
     bind: &MacroPatternBind,
     expr: &Expr,
-) -> Option<HashMap<String, Expr>> {
-    let mut map = try_match(&bind.pattern, expr)?;
-    if let Some(ref name) = bind.name {
-        if map.contains_key(name) {
-            return None;
+) -> Result<Option<HashMap<String, Expr>>, MacroErrorKind> {
+    let inner_result = try_match(&bind.pattern, expr)?;
+    if let Some(mut map) = inner_result {
+        if let Some(ref name) = bind.name {
+            if map.contains_key(name) {
+                return Err(MacroErrorKind::DuplicatePatternBinding { name: name.clone() });
+            }
+            map.insert(name.clone(), expr.clone());
         }
-        map.insert(name.clone(), expr.clone());
+        Ok(Some(map))
+    } else {
+        Ok(None)
     }
-    Some(map)
 }
 
-/// Merges two binding maps. Returns `None` if they share any key.
+/// Merges two binding maps. Returns `Err` if they share any key.
 fn merge_maps(
-    mut left: HashMap<String, Expr>,
+    left: HashMap<String, Expr>,
     right: HashMap<String, Expr>,
-) -> Option<HashMap<String, Expr>> {
+) -> Result<HashMap<String, Expr>, MacroErrorKind> {
+    let mut merged = left;
     for (k, v) in right {
-        if left.contains_key(&k) {
-            return None;
+        if merged.contains_key(&k) {
+            return Err(MacroErrorKind::DuplicatePatternBinding { name: k });
         }
-        left.insert(k, v);
+        merged.insert(k, v);
     }
-    Some(left)
+    Ok(merged)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use hulk_ast::{
         BinaryOp, Expr, Literal, MacroPattern, MacroPatternBind, SourceSpan, UnaryOp,
     };
+    use crate::error::MacroErrorKind;
 
     fn s() -> SourceSpan {
         SourceSpan::new(1, 1)
@@ -172,29 +194,29 @@ mod tests {
         let pattern = MacroPattern::Wildcard;
         let expr = num(42.0);
         let result = try_match(&pattern, &expr);
-        assert_eq!(result, Some(HashMap::new()));
+        assert_eq!(result, Ok(Some(HashMap::new())));
     }
 
     #[test]
     fn literal_number_matches_exact() {
         let pattern = MacroPattern::Literal(Literal::Number(42.0));
-        assert!(try_match(&pattern, &num(42.0)).is_some());
-        assert!(try_match(&pattern, &num(43.0)).is_none());
-        assert!(try_match(&pattern, &bool_lit(true)).is_none());
+        assert_eq!(try_match(&pattern, &num(42.0)), Ok(Some(HashMap::new())));
+        assert_eq!(try_match(&pattern, &num(43.0)), Ok(None));
+        assert_eq!(try_match(&pattern, &bool_lit(true)), Ok(None));
     }
 
     #[test]
     fn literal_string_matches_exact() {
         let pattern = MacroPattern::Literal(Literal::String("hello".to_string()));
-        assert!(try_match(&pattern, &string_lit("hello")).is_some());
-        assert!(try_match(&pattern, &string_lit("world")).is_none());
+        assert_eq!(try_match(&pattern, &string_lit("hello")), Ok(Some(HashMap::new())));
+        assert_eq!(try_match(&pattern, &string_lit("world")), Ok(None));
     }
 
     #[test]
     fn literal_bool_matches_exact() {
         let pattern = MacroPattern::Literal(Literal::Boolean(true));
-        assert!(try_match(&pattern, &bool_lit(true)).is_some());
-        assert!(try_match(&pattern, &bool_lit(false)).is_none());
+        assert_eq!(try_match(&pattern, &bool_lit(true)), Ok(Some(HashMap::new())));
+        assert_eq!(try_match(&pattern, &bool_lit(false)), Ok(None));
     }
 
     #[test]
@@ -204,7 +226,7 @@ mod tests {
         let result = try_match(&pattern, &expr);
         let mut expected = HashMap::new();
         expected.insert("x".to_string(), expr.clone());
-        assert_eq!(result, Some(expected));
+        assert_eq!(result, Ok(Some(expected)));
     }
 
     #[test]
@@ -214,7 +236,7 @@ mod tests {
         let result = try_match(&pattern, &expr);
         let mut expected = HashMap::new();
         expected.insert("x".to_string(), expr.clone());
-        assert_eq!(result, Some(expected));
+        assert_eq!(result, Ok(Some(expected)));
     }
 
     #[test]
@@ -242,7 +264,7 @@ mod tests {
         expected.insert("whole".to_string(), expr.clone());
         expected.insert("left".to_string(), num(1.0));
         expected.insert("right".to_string(), num(2.0));
-        assert_eq!(result, Some(expected));
+        assert_eq!(result, Ok(Some(expected)));
     }
 
     #[test]
@@ -265,11 +287,11 @@ mod tests {
         let mut expected = HashMap::new();
         expected.insert("a".to_string(), num(1.0));
         expected.insert("b".to_string(), num(2.0));
-        assert_eq!(result, Some(expected));
+        assert_eq!(result, Ok(Some(expected)));
 
         // Wrong operator
         let expr2 = bin(BinaryOp::Subtract, num(1.0), num(2.0));
-        assert!(try_match(&pattern, &expr2).is_none());
+        assert_eq!(try_match(&pattern, &expr2), Ok(None));
     }
 
     #[test]
@@ -309,7 +331,7 @@ mod tests {
         expected.insert("x".to_string(), num(1.0));
         expected.insert("y".to_string(), num(2.0));
         expected.insert("z".to_string(), num(3.0));
-        assert_eq!(result, Some(expected));
+        assert_eq!(result, Ok(Some(expected)));
     }
 
     #[test]
@@ -326,11 +348,11 @@ mod tests {
         let result = try_match(&pattern, &expr);
         let mut expected = HashMap::new();
         expected.insert("x".to_string(), num(42.0));
-        assert_eq!(result, Some(expected));
+        assert_eq!(result, Ok(Some(expected)));
 
         // Wrong operator
         let expr2 = un(UnaryOp::Not, bool_lit(true));
-        assert!(try_match(&pattern, &expr2).is_none());
+        assert_eq!(try_match(&pattern, &expr2), Ok(None));
     }
 
     #[test]
@@ -350,7 +372,8 @@ mod tests {
             }),
         };
         let expr = bin(BinaryOp::Add, num(1.0), num(2.0));
-        assert!(try_match(&pattern, &expr).is_none());
+        let err = try_match(&pattern, &expr).expect_err("should be duplicate binding error");
+        assert!(matches!(err, MacroErrorKind::DuplicatePatternBinding { name } if name == "x"));
     }
 
     #[test]
@@ -386,7 +409,8 @@ mod tests {
             num(1.0),
             bin(BinaryOp::Multiply, num(2.0), num(3.0)),
         );
-        assert!(try_match(&pattern, &expr).is_none());
+        let err = try_match(&pattern, &expr).expect_err("should be duplicate binding error");
+        assert!(matches!(err, MacroErrorKind::DuplicatePatternBinding { name } if name == "x"));
     }
 
     #[test]
@@ -406,6 +430,6 @@ mod tests {
         };
         let expr = bin(BinaryOp::Add, num(1.0), num(2.0));
         let result = try_match(&pattern, &expr);
-        assert_eq!(result, Some(HashMap::new()));
+        assert_eq!(result, Ok(Some(HashMap::new())));
     }
 }

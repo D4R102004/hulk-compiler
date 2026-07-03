@@ -45,6 +45,8 @@ pub enum MacroErrorKind {
     MacroArgInNonMacroCall { name: String },
     /// No case matched in the structure.
     NonExhaustiveMacroMatch,
+    /// A pattern binding is duplicated.
+    DuplicatePatternBinding { name: String },
 }
 
 impl fmt::Display for MacroErrorKind {
@@ -61,6 +63,8 @@ impl fmt::Display for MacroErrorKind {
                 write!(f, "`@{}` or placeholder argument used in a non-macro call", name),
             Self::NonExhaustiveMacroMatch  => 
                 write!(f, "non-exhaustive macro match"),
+            Self::DuplicatePatternBinding { name } =>
+                write!(f, "pattern binding `{}` is duplicated", name),
         }
     }
 }
