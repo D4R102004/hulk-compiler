@@ -105,21 +105,10 @@ fn define_function(
         let param_value = param_values
             .get(i)
             .ok_or_else(|| CodegenError::llvm_verification(format!("missing parameter {}", i)))?;
-        // Use lower_ctx.codegen instead of ctx to avoid mutable borrow conflict.
-        let llvm_param_ty = utils::llvm_type(lower_ctx.codegen, registry, param_ty)?;
-        let alloca = lower_ctx
-            .codegen
-            .builder
-            .build_alloca(llvm_param_ty, param_name)
-            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        lower_ctx
-            .codegen
-            .builder
-            .build_store(alloca, *param_value)
-            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        lower_ctx
-            .scope_stack
-            .declare(param_name, alloca, llvm_param_ty, param_ty.clone(), false, None);
+        
+        // Handles alloca, store, shadow-push (for pointer types), and marks the binding as borrowed so
+        // pop_scope does not release the caller's reference.
+        lower_ctx.declare_var(param_name, *param_value, param_ty.clone(), true)?;
     }
 
     // Lower the function body.

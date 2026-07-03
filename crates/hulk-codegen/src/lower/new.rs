@@ -157,7 +157,7 @@ pub fn lower_new<'ctx>(
     for (i, (param_name, _)) in params.iter().enumerate() {
         let arg_val = lower_expr(ctx, &new_expr.args[i])?;
         let param_ty = params[i].1.clone(); // get the semantic type
-        ctx.declare_var(param_name, arg_val, param_ty)?;
+        ctx.declare_var(param_name, arg_val, param_ty, false)?;
     }
 
     // ─── 4. Evaluate attribute initializers in parent‑first order ────────────

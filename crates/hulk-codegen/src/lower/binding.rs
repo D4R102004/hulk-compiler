@@ -93,7 +93,7 @@ pub fn lower_let<'ctx>(
         }
 
         // 6. Declare the variable with the resolved semantic type.
-        ctx.declare_var(&binding.name, init_val, declared_ty)?;
+        ctx.declare_var(&binding.name, init_val, declared_ty, false)?;
     }
 
     let body_val = lower_expr(ctx, &let_expr.body)?;
