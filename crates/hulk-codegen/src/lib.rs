@@ -24,6 +24,7 @@ pub mod options;
 pub mod runtime_decls;
 
 use std::path::Path;
+use std::path::PathBuf;
 
 use inkwell::context::Context;
 use inkwell::values::FunctionValue;
@@ -31,6 +32,8 @@ use inkwell::values::FunctionValue;
 pub use context::CodegenCtx;
 pub use error::CodegenError;
 pub use options::{CodegenOptions, OptLevel};
+
+const CARGO_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 /// Declares `hulk_rt_noop` as an external symbol so generated IR can call
 /// it. Stands in for the `runtime_decls` module that later phases will use
@@ -166,7 +169,15 @@ pub fn link_output(
     let cwd = std::env::current_dir()
         .map_err(|e| error::CodegenError::link("cc", None, format!("cannot get cwd: {e}")))?;
 
-    // WHY: the binary may be invoked as target/release/hulk-cli (dev)
+    // Compute the workspace target directory from CARGO_MANIFEST_DIR.
+    let manifest_dir = PathBuf::from(CARGO_MANIFEST_DIR);
+    let workspace_target = manifest_dir
+        .parent()                 // crates/
+        .and_then(|p| p.parent()) // workspace root
+        .map(|root| root.join("target"))
+        .expect("locate workspace target directory");
+
+    // The binary may be invoked as target/release/hulk-cli (dev)
     // or as ./hulk copied to repo root (grader). Probe both.
     let rt_lib_dir = [
         std::env::current_exe()
@@ -174,6 +185,8 @@ pub fn link_output(
             .and_then(|exe| exe.parent().map(|p| p.to_path_buf())),
         Some(cwd.join("target").join("release")),
         Some(cwd.join("target").join("debug")),
+        Some(workspace_target.join("release")),
+        Some(workspace_target.join("debug")),
     ]
     .into_iter()
     .flatten()
@@ -543,7 +556,51 @@ mod macro_tests {
     use hulk_transpile::expand_program;
     use hulk_semantic::analyze;
     use std::process::Command;
+    use std::path::PathBuf;
     use tempfile::tempdir;
+
+    fn ensure_rt_built() {
+        // Locate the workspace target directory.
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let workspace_target = manifest_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|root| root.join("target"))
+            .expect("locate workspace target directory");
+
+        let raw_profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+
+        let dir_name: &str = match raw_profile.as_str() {
+        "dev" | "test" => "debug",
+        other => other,
+        };
+
+        let cargo_profile: &str = match raw_profile.as_str() {
+            "debug" => "dev",
+            other => other,
+        };
+
+        let rt_lib_path = workspace_target.join(dir_name).join("libhulk_rt.a");
+
+        if rt_lib_path.exists() {
+            return; // Already built.
+        }
+    
+        // Build hulk-rt with the current profile.
+        let status = std::process::Command::new("cargo")
+            .args(["build", "-p", "hulk-rt", "--profile", cargo_profile])
+            .status()
+            .unwrap_or_else(|e| panic!("Failed to invoke cargo to build hulk-rt: {e}"));
+
+        assert!(status.success(), "cargo build -p hulk-rt --profile {cargo_profile} failed");
+
+        // Verify the library now exists.
+        assert!(
+            rt_lib_path.exists(),
+            "hulk-rt built but library not found at {:?}",
+            rt_lib_path
+        );
+    }
 
     fn compile_and_run(src: &str) -> String {
         let tokens = Lexer::new(src).tokenize().expect("lex failed");
@@ -556,6 +613,8 @@ mod macro_tests {
         let output_path = temp_dir.path().join("output");
         let opts = CodegenOptions::with_output_path(output_path.clone());
         compile(&verified, &opts).expect("codegen failed");
+
+        ensure_rt_built();
 
         let obj_path = output_path.with_extension("o");
         link_output(&obj_path, &output_path).expect("linking failed");
