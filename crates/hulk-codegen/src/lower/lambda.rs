@@ -173,7 +173,7 @@ pub fn lower_lambda<'ctx>(
                 .build_store(alloca, cap_val)
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             ctx.scope_stack
-                .declare(cap_name, alloca, *cap_llvm_ty, cap_sem_ty.clone(), false);
+                .declare(cap_name, alloca, *cap_llvm_ty, cap_sem_ty.clone(), false, None);
         }
     }
 
@@ -192,7 +192,7 @@ pub fn lower_lambda<'ctx>(
             .build_store(alloca, param_val)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         ctx.scope_stack
-            .declare(&param.name, alloca, param_llvm_ty, param_ty.clone(), false);
+            .declare(&param.name, alloca, param_llvm_ty, param_ty.clone(), false, None);
     }
 
     let body_val = lower_expr(ctx, &lambda.body)?;

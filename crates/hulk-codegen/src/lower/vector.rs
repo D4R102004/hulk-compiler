@@ -188,7 +188,7 @@ fn lower_vector_comprehension<'ctx>(
         .build_store(var_ptr, current_val)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.scope_stack
-        .declare(&comp.var, var_ptr, elem_llvm_ty, elem_ty.clone(), false);
+        .declare(&comp.var, var_ptr, elem_llvm_ty, elem_ty.clone(), false, None);
 
     // Lower the head expression.
     let mut head_val = lower_expr(ctx, head_expr)?;
@@ -310,7 +310,7 @@ pub fn lower_new_vector<'ctx>(
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.codegen.builder.build_store(var_ptr, idx_as_f64)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    ctx.scope_stack.declare(&generator.var, var_ptr, ctx.codegen.context.f64_type().into(), Type::Number, false);
+    ctx.scope_stack.declare(&generator.var, var_ptr, ctx.codegen.context.f64_type().into(), Type::Number, false, None);
 
     let mut elem_val = lower_expr(ctx, &generator.body)?;
     elem_val = crate::lower::utils::ensure_boxed(ctx, elem_val, &generator.body.anno, &Type::Object)?;

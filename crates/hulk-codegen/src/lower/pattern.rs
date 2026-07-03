@@ -189,7 +189,7 @@ pub fn lower_match<'ctx>(
                 .builder
                 .build_store(ptr, val)
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            ctx.scope_stack.declare(&name, ptr, llvm_ty, sem_ty, false);
+            ctx.scope_stack.declare(&name, ptr, llvm_ty, sem_ty, false, None);
         }
 
         // Lower the case body.

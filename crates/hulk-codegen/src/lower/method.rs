@@ -151,7 +151,7 @@ fn define_methods_for_type(
         let self_sem_ty = Type::Named(type_name.clone());
         lower_ctx
             .scope_stack
-            .declare("self", self_alloca, self_ty.into(), self_sem_ty, false);
+            .declare("self", self_alloca, self_ty.into(), self_sem_ty, false, None);
 
         // Bind other parameters.
         for (i, (param_name, param_ty)) in method_sig.params.iter().enumerate() {
@@ -173,6 +173,7 @@ fn define_methods_for_type(
                 llvm_param_ty,
                 param_ty.clone(),
                 false,
+                None
             );
         }
 
