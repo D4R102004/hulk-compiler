@@ -413,5 +413,11 @@ fn walk_free_vars<'ctx>(
                 walk_free_vars(&case.body, shadowed, scope_stack, seen, captures);
             }
         }
+        ExprKind::MacroCall(mc) => {
+            panic!(
+                "internal error: macro call `{}` reached code generation (lambda free var collection) unexpanded",
+                mc.name
+            );
+        }
     }
 }

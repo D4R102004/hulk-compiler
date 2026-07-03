@@ -16,7 +16,8 @@ Program      -> Declaration* Expr ';'* EOF
 Declaration  -> FunctionDecl | MacroDecl | TypeDecl | ProtocolDecl
 
 FunctionDecl -> 'function' id FunctionTail
-MacroDecl    -> 'def' id FunctionTail
+MacroDecl    -> 'def' id '(' MacroParamList ')' (':' TypeRef)?
+                (FunctionBody | Block)
 FunctionTail -> ParamList ReturnType? FunctionBody
 ReturnType   -> ':' TypeRef
 TypeRef      -> FunctionType | IterablePrefix? NamedTypeRef TypeSuffix*
@@ -78,6 +79,7 @@ PowerTail   -> '^' Unary | epsilon
 
 Postfix     -> Primary PostfixTail
 PostfixTail -> '(' ArgList? ')' PostfixTail
+             | '(' MacroArgList ')' ('{' Block '}')? PostfixTail
              | '.' id PostfixTail
              | '[' Expr ']' PostfixTail
              | epsilon
@@ -226,6 +228,16 @@ This disambiguation is safe because a bare `,` cannot otherwise appear
 directly inside a `{}` block: the only other places `,` is meaningful
 (argument lists, parameter lists, `let` binding lists, `match` case lists)
 are parsed by their own dedicated non-terminals, not by `Block`.
+
+## Macros
+
+```ebnf
+MacroParamList -> MacroParam (',' MacroParam)* ','? | ε
+MacroParam     -> ('*' | '@' | '$')? id (':' TypeRef)?
+
+MacroArgList -> MacroArg (',' MacroArg)* | ε
+MacroArg     -> '@' id | Expr
+```
 
 ## Implementation map
 

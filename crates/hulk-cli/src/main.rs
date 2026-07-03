@@ -8,10 +8,11 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::Parser as clapParser;
-use hulk_codegen::{compile, link_output, CodegenOptions};
 use hulk_lexer::{LexError, Lexer};
 use hulk_parser::{ParseErrorKind, Parser};
+use hulk_transpile::expand_program;
 use hulk_semantic::analyze;
+use hulk_codegen::{compile, link_output, CodegenOptions};
 
 /// The HULK compiler.
 #[derive(clapParser)]
@@ -60,7 +61,7 @@ fn main() {
     });
 
     // Parse the token stream into an AST.
-    let program = Parser::new(tokens).parse_program().unwrap_or_else(|err| {
+    let mut program = Parser::new(tokens).parse_program().unwrap_or_else(|err| {
         // WHY: grader contract requires (line,col) TYPE: message format
         let msg = match &err.kind {
             ParseErrorKind::UnexpectedToken { expected, found } => {
@@ -78,6 +79,18 @@ fn main() {
         eprintln!("({},{}) SYNTACTIC: {}", err.span.line, err.span.col, msg);
         process::exit(2);
     });
+
+    // ── Macro expansion ──────────────────────────────────────────────────────────
+    let macro_errors = expand_program(&mut program);
+    if !macro_errors.is_empty() {
+        for err in &macro_errors {
+            eprintln!(
+                "({},{}) MACRO: {}",
+                err.span.line, err.span.col, err.kind
+            );
+        }
+        process::exit(2); // Macro errors are parse-phase failures.
+    }
 
     match analyze(&program) {
         Err(errors) => {

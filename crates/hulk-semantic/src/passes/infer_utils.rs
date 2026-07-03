@@ -549,6 +549,11 @@ fn compute_node_type(expr: &TypedExpr, registry: &TypeRegistry) -> Type {
 
         // ─── Assignment ─────────────────────────────────────────────────────
         ExprKind::Assign(assign) => assign.value.anno.clone(),
+
+        // ─── Macro call ──────────────────────────────────────────────────────────
+        // Macro calls should be eliminated by the expander before semantic analysis.
+        // If one reaches this point, it's a pipeline error; we return Error.
+        ExprKind::MacroCall(_) => Type::Error,
     }
 }
 

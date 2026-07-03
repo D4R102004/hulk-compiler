@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use hulk_ast::{DeclarationKind, Expr, ExprKind, Literal, Program, TypeMemberKind};
+use hulk_ast::{DeclarationKind, Expr, ExprKind, Literal, Program, TypeMemberKind, MacroArg};
 
 use crate::error::{SemanticError, SemanticErrorKind};
 use crate::passes::utils::topological_order;
@@ -22,7 +22,7 @@ use crate::types::Type;
 pub fn run(program: &Program, registry: &mut TypeRegistry, errors: &mut Vec<SemanticError>) {
     // Step 1: Collect constraints from all `new` expressions.
     let mut constraints: HashMap<(String, usize), Vec<Type>> = HashMap::new();
-    collect_new_constraints(program, registry, &mut constraints);
+    collect_new_constraints(program, errors, registry, &mut constraints);
 
     // Step 2: Get topological order (parents first) and reverse it.
     let order = topological_order(registry);
@@ -41,10 +41,12 @@ pub fn run(program: &Program, registry: &mut TypeRegistry, errors: &mut Vec<Sema
 /// (handled later) produce useful constraints; other expressions are ignored.
 fn collect_new_constraints(
     program: &Program,
+    errors: &mut Vec<SemanticError>,
     registry: &TypeRegistry,
+    
     constraints: &mut HashMap<(String, usize), Vec<Type>>,
 ) {
-    traverse_exprs(program, |expr| {
+    traverse_exprs(program, errors, |expr| {
         if let ExprKind::New(new_expr) = &expr.kind {
             let type_name = new_expr.type_name.name.clone();
             // Only if the type exists in the registry.
@@ -185,127 +187,157 @@ fn resolve_argument_type(expr: &Expr, current_type: &str, registry: &TypeRegistr
 }
 
 /// Walks all expressions in the program and calls `f` on each one.
-fn traverse_exprs<F>(program: &Program, mut f: F)
+fn traverse_exprs<F>(program: &Program, errors: &mut Vec<SemanticError>, mut f: F)
 where
     F: FnMut(&Expr),
 {
     for decl in &program.declarations {
         match &decl.kind {
-            DeclarationKind::Function(func) => traverse_expr(&func.body, &mut f),
+            DeclarationKind::Function(func) => traverse_expr(&func.body, errors,  &mut f),
             DeclarationKind::Type(ty) => {
                 for member in &ty.members {
                     match &member.kind {
-                        TypeMemberKind::Attribute(attr) => traverse_expr(&attr.initializer, &mut f),
-                        TypeMemberKind::Method(method) => traverse_expr(&method.body, &mut f),
+                        TypeMemberKind::Attribute(attr) => traverse_expr(&attr.initializer, errors, &mut f),
+                        TypeMemberKind::Method(method) => traverse_expr(&method.body, errors, &mut f),
                     }
                 }
                 if let Some(parent) = &ty.parent {
                     for arg in &parent.args {
-                        traverse_expr(arg, &mut f);
+                        traverse_expr(arg, errors, &mut f);
                     }
                 }
             }
             DeclarationKind::Protocol(_) => {}
+            DeclarationKind::Macro(m) => {
+                // Macro declarations must be expanded before semantic analysis.
+                errors.push(SemanticError::error(
+                    SemanticErrorKind::MacroReferenceFound {
+                        macro_expr: m.name.clone(),
+                    },
+                    decl.span,
+                ));
+                // Still traverse the body to find nested macro calls.
+                traverse_expr(&m.body, errors, &mut f);
+            }
         }
     }
-    traverse_expr(&program.entry, &mut f);
+    traverse_expr(&program.entry, errors, &mut f);
 }
 
 /// Recursive helper for `traverse_exprs`.
-fn traverse_expr<F>(expr: &Expr, f: &mut F)
+fn traverse_expr<F>(expr: &Expr, errors: &mut Vec<SemanticError>, f: &mut F)
 where
     F: FnMut(&Expr),
 {
     f(expr);
     match &expr.kind {
         ExprKind::Literal(_) | ExprKind::Variable(_) | ExprKind::SelfRef | ExprKind::BaseRef => {}
-        ExprKind::Unary(unary) => traverse_expr(&unary.expr, f),
+        ExprKind::Unary(unary) => traverse_expr(&unary.expr, errors, f),
         ExprKind::Binary(binary) => {
-            traverse_expr(&binary.left, f);
-            traverse_expr(&binary.right, f);
+            traverse_expr(&binary.left, errors, f);
+            traverse_expr(&binary.right, errors, f);
         }
         ExprKind::Let(let_expr) => {
             for binding in &let_expr.bindings {
-                traverse_expr(&binding.initializer, f);
+                traverse_expr(&binding.initializer, errors, f);
             }
-            traverse_expr(&let_expr.body, f);
+            traverse_expr(&let_expr.body, errors, f);
         }
         ExprKind::Assign(assign) => {
-            traverse_assign_target(&assign.target, f);
-            traverse_expr(&assign.value, f);
+            traverse_assign_target(&assign.target, errors, f);
+            traverse_expr(&assign.value, errors, f);
         }
         ExprKind::Block(block) => {
             for e in &block.expressions {
-                traverse_expr(e, f);
+                traverse_expr(e, errors, f);
             }
         }
         ExprKind::If(if_expr) => {
-            traverse_expr(&if_expr.condition, f);
-            traverse_expr(&if_expr.then_branch, f);
+            traverse_expr(&if_expr.condition, errors, f);
+            traverse_expr(&if_expr.then_branch, errors, f);
             for elif in &if_expr.elif_branches {
-                traverse_expr(&elif.condition, f);
-                traverse_expr(&elif.body, f);
+                traverse_expr(&elif.condition, errors, f);
+                traverse_expr(&elif.body, errors, f);
             }
-            traverse_expr(&if_expr.else_branch, f);
+            traverse_expr(&if_expr.else_branch, errors, f);
         }
         ExprKind::While(while_expr) => {
-            traverse_expr(&while_expr.condition, f);
-            traverse_expr(&while_expr.body, f);
+            traverse_expr(&while_expr.condition, errors, f);
+            traverse_expr(&while_expr.body, errors, f);
         }
         ExprKind::For(for_expr) => {
-            traverse_expr(&for_expr.iterable, f);
-            traverse_expr(&for_expr.body, f);
+            traverse_expr(&for_expr.iterable, errors, f);
+            traverse_expr(&for_expr.body, errors, f);
         }
         ExprKind::Call(call) => {
-            traverse_expr(&call.callee, f);
+            traverse_expr(&call.callee, errors, f);
             for arg in &call.args {
-                traverse_expr(arg, f);
+                traverse_expr(arg, errors, f);
             }
         }
-        ExprKind::Lambda(lambda) => traverse_expr(&lambda.body, f),
-        ExprKind::Member(member) => traverse_expr(&member.object, f),
+        ExprKind::Lambda(lambda) => traverse_expr(&lambda.body, errors, f),
+        ExprKind::Member(member) => traverse_expr(&member.object, errors, f),
         ExprKind::New(new_expr) => {
             for arg in &new_expr.args {
-                traverse_expr(arg, f);
+                traverse_expr(arg, errors, f);
             }
         }
-        ExprKind::TypeTest(type_test) => traverse_expr(&type_test.expr, f),
-        ExprKind::Downcast(downcast) => traverse_expr(&downcast.expr, f),
+        ExprKind::TypeTest(type_test) => traverse_expr(&type_test.expr, errors, f),
+        ExprKind::Downcast(downcast) => traverse_expr(&downcast.expr, errors, f),
         ExprKind::Vector(vector) => match vector {
             hulk_ast::VectorExpr::Literal(items) => {
                 for item in items {
-                    traverse_expr(item, f);
+                    traverse_expr(item, errors, f);
                 }
             }
             hulk_ast::VectorExpr::Comprehension(comp) => {
-                traverse_expr(&comp.expr, f);
-                traverse_expr(&comp.iterable, f);
+                traverse_expr(&comp.expr, errors, f);
+                traverse_expr(&comp.iterable, errors, f);
             }
         },
         ExprKind::Index(index) => {
-            traverse_expr(&index.object, f);
-            traverse_expr(&index.index, f);
+            traverse_expr(&index.object, errors, f);
+            traverse_expr(&index.index, errors, f);
         }
         ExprKind::Match(match_expr) => {
-            traverse_expr(&match_expr.value, f);
+            traverse_expr(&match_expr.value, errors, f);
             for case in &match_expr.cases {
-                traverse_expr(&case.body, f);
+                traverse_expr(&case.body, errors, f);
+            }
+        }
+        ExprKind::MacroCall(mc) => {
+            // Macro calls must be expanded before semantic analysis.
+            errors.push(SemanticError::error(
+                SemanticErrorKind::MacroReferenceFound {
+                    macro_expr: mc.name.clone(),
+                },
+                expr.span,
+            ));
+            // Traverse any expression arguments and the optional body.
+            for arg in &mc.args {
+                if let MacroArg::Expr(e) = arg {
+                    traverse_expr(e, errors, f);
+                }
+                // Symbolic and placeholder arguments have no expressions to traverse.
+            }
+            if let Some(body) = &mc.body {
+                traverse_expr(body, errors, f);
             }
         }
     }
 }
 
 /// Helper to traverse assignment targets.
-fn traverse_assign_target<F>(target: &hulk_ast::AssignTarget, f: &mut F)
+fn traverse_assign_target<F>(target: &hulk_ast::AssignTarget, errors: &mut Vec<SemanticError>, f: &mut F)
 where
     F: FnMut(&Expr),
 {
     match target {
         hulk_ast::AssignTarget::Variable(_) => {}
-        hulk_ast::AssignTarget::Member { object, .. } => traverse_expr(object, f),
+        hulk_ast::AssignTarget::Member { object, .. } => traverse_expr(object, errors, f),
         hulk_ast::AssignTarget::Index { object, index } => {
-            traverse_expr(object, f);
-            traverse_expr(index, f);
+            traverse_expr(object, errors, f);
+            traverse_expr(index, errors, f);
         }
     }
 }

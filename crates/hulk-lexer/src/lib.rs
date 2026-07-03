@@ -4,7 +4,7 @@
 //! This is the first phase of the compiler pipeline:
 //!
 //! ```text
-//! source code → Lexer → Vec<Token> → Parser
+//! source code -> Lexer -> Vec<Token> -> Parser
 //! ```
 
 /// Every distinct kind of token the HULK lexer can produce.
@@ -91,8 +91,13 @@ pub enum TokenKind {
     As,
     Protocol,
     Extends,
+
+    // ── Macros ─────────────────────────────────────────────────
     /// `def` keyword for macro definitions
     Def,
+    /// `$` sigil for macro variable placeholder parameters.
+    Dollar,
+
 
     // ── Extra feature: pattern matching ───────────────────────────────
     Match,
@@ -379,6 +384,7 @@ impl Lexer {
                         TokenKind::At
                     }
                 }
+                '$' => TokenKind::Dollar,
 
                 // ── String literals ───────────────────────────────────────
                 '"' => self.lex_string(span)?,
