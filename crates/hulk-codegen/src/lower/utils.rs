@@ -21,18 +21,19 @@ pub mod field_indices {
     pub const REF_COUNT: u32 = 0;
     pub const GC_MARK: u32 = 1;
     pub const TYPE_TAG: u32 = 2;
-    pub const NEXT: u32 = 3;
-    pub const VTABLE: u32 = 4;
+    pub const PREV: u32 = 3;
+    pub const NEXT: u32 = 4;
+    pub const VTABLE: u32 = 5;
 }
 
 /// Total number of header fields in the LLVM struct type.
-pub const HEADER_FIELD_COUNT: usize = 5;
-// Header (32) + Original_tag (1) + Padding (7) + Payload (8)
-const BOX_SIZE: u64 = 48;
+pub const HEADER_FIELD_COUNT: usize = 6;
 // The size of the header portion of a boxed object, in bytes.
-const BOX_HEADER_SIZE: u64 = 32;
+const BOX_HEADER_SIZE: u64 = (8 * (HEADER_FIELD_COUNT - 1)) as u64;
+// Header (40) + Original_tag (1) + Padding (7) + Payload (8)
+const BOX_SIZE: u64 = BOX_HEADER_SIZE + 1 + 7 + 8;
 // The offset of the payload portion of a boxed object, in bytes.
-const PAYLOAD_OFFSET: u64 = BOX_HEADER_SIZE + 8; // 40
+const PAYLOAD_OFFSET: u64 = BOX_HEADER_SIZE + 8; // 48
 
 // ====================================================================================
 // Shared helper functions

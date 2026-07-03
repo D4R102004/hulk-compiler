@@ -224,6 +224,7 @@ fn build_struct_type<'ctx>(
         i64_type.into(), // ref_count
         i1_type.into(),  // gc_mark
         i8_type.into(),  // type_tag
+        ptr_type.into(), // prev
         ptr_type.into(), // next
         ptr_type.into(), // vtable
     ];

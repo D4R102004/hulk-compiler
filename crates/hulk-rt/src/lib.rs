@@ -24,11 +24,68 @@ pub const TAG_OBJECT: u8 = 8; // used for object instances
 // ─── Object header ─────────────────────────────────────────────────────
 #[repr(C)]
 pub struct ObjHeader {
-    pub ref_count: i64,
-    pub gc_mark: u8,  // bool in C, stored as u8
-    pub type_tag: u8, // 0 = String, 1 = Vector, 2 = Box
-    pub next: *mut ObjHeader,
-    pub vtable: *const (),
+    pub ref_count: i64,           // offset  0 — reference count
+    pub gc_mark:   u8,            // offset  8 — mark bit for GC sweep
+    pub type_tag:  u8,            // offset  9 — TAG_STRING / TAG_VECTOR / …
+    //  [6 bytes padding to align next to 8]
+    pub prev: *mut ObjHeader,     // offset 16 — intrusive alloc-list prev
+    pub next: *mut ObjHeader,     // offset 24 — intrusive alloc-list next
+    pub vtable: *const (),        // offset 32 — pointer to vtable array
+}                                 // sizeof    = 40 bytes*const (),
+
+// ─── Global allocation state ───────────────────────────────────────────
+
+/// Head of the doubly-linked intrusive allocation list.
+/// Every live heap object is a node in this list.
+static mut ALLOC_LIST_HEAD: *mut ObjHeader = std::ptr::null_mut();
+
+/// Total bytes currently tracked in the allocation list.
+static mut ALLOC_BYTES: usize = 0;
+
+/// GC trigger threshold, read once at first allocation from the environment
+/// variable `HULK_GC_THRESHOLD` (bytes). Defaults to 8 MiB.
+static GC_THRESHOLD: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+
+fn gc_threshold() -> usize {
+    *GC_THRESHOLD.get_or_init(|| {
+        std::env::var("HULK_GC_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(8 * 1024 * 1024) // 8 MiB default
+    })
+}
+
+// ─── Doubly-linked list helpers (runtime-internal) ────────────────────
+
+/// Inserts `obj` at the head of the allocation list.
+/// Called from hulk_rt_alloc after each successful allocation.
+unsafe fn list_insert_head(obj: *mut ObjHeader) {
+    (*obj).prev = std::ptr::null_mut();
+    (*obj).next = ALLOC_LIST_HEAD;
+    if !ALLOC_LIST_HEAD.is_null() {
+        (*ALLOC_LIST_HEAD).prev = obj;
+    }
+    ALLOC_LIST_HEAD = obj;
+}
+
+/// Removes `obj` from the allocation list in O(1).
+/// Called from hulk_rt_release when ref_count reaches zero and from the
+/// GC sweep when an unmarked object is collected.
+unsafe fn list_unlink(obj: *mut ObjHeader) {
+    let prev = (*obj).prev;
+    let next = (*obj).next;
+    if !prev.is_null() {
+        (*prev).next = next;
+    } else {
+        // obj was the head
+        ALLOC_LIST_HEAD = next;
+    }
+    if !next.is_null() {
+        (*next).prev = prev;
+    }
+    // Clear links to prevent dangling-pointer confusion during debugging.
+    (*obj).next = std::ptr::null_mut();
+    (*obj).prev = std::ptr::null_mut();
 }
 
 // ─── HulkString ────────────────────────────────────────────────────────
@@ -99,6 +156,7 @@ unsafe fn hulk_rt_string_from_bytes(data: &[u8]) -> *mut HulkString {
                 ref_count: 1,
                 gc_mark: 0,
                 type_tag: TAG_STRING,
+                prev: ptr::null_mut(),
                 next: ptr::null_mut(),
                 vtable: ptr::null(),
             },
@@ -468,6 +526,7 @@ pub extern "C" fn hulk_rt_vector_new(len: i64) -> *mut HulkVector {
                     ref_count: 1,
                     gc_mark: 0,
                     type_tag: TAG_VECTOR,
+                    prev: ptr::null_mut(),
                     next: ptr::null_mut(),
                     vtable: ptr::null(),
                 },
@@ -608,6 +667,7 @@ pub extern "C" fn hulk_rt_dynamic_vector_new() -> *mut HulkDynamicVector {
             ref_count: 1,
             gc_mark: 0,
             type_tag: TAG_DYN_VEC,
+            prev: ptr::null_mut(),
             next: ptr::null_mut(),
             vtable: ptr::null(),
         },
@@ -684,6 +744,7 @@ pub extern "C" fn hulk_rt_range_new(min: f64, max: f64) -> *mut HulkRange {
                     ref_count: 1,
                     gc_mark: 0,
                     type_tag: TAG_RANGE,
+                    prev: ptr::null_mut(),
                     next: ptr::null_mut(),
                     vtable: ptr::null(),
                 },
