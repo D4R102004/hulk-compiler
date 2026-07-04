@@ -127,6 +127,12 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
                         .builder
                         .build_call(release, &[obj_ptr.into()], "scope_exit_release")
                         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+                    // Null the slot to prevent accidental reuse
+                    let null_val = llvm_ty.const_zero();
+                    self.codegen
+                        .builder
+                        .build_store(*ptr, null_val)
+                        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
                 }
             }
         }

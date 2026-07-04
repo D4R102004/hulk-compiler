@@ -21,6 +21,7 @@ pub const TAG_BOOLEAN: u8 = 5; // used inside HulkBox
 pub const TAG_DYN_VEC: u8 = 6; // used for dynamic vectors (comprehensions)
 pub const TAG_LITERAL_STRING: u8 = 7; // used for string literals (immutable, immortal)
 pub const TAG_OBJECT: u8 = 8; // used for object instances
+pub const TAG_FREED: u8 = 0xFF; // sentinel: this header was already released
 
 /// Total number of header fields in the LLVM struct type.
 pub const HEADER_FIELD_COUNT: usize = 6;
@@ -37,7 +38,7 @@ pub struct ObjHeader {
     pub prev: *mut ObjHeader,     // offset 16 — intrusive alloc-list prev
     pub next: *mut ObjHeader,     // offset 24 — intrusive alloc-list next
     pub vtable: *const (),        // offset 32 — pointer to vtable array
-}                                 // sizeof    = 40 bytes*const (),
+}                                 // sizeof    = 40 bytes,
 
 // ─── Global allocation state ───────────────────────────────────────────
 
@@ -720,6 +721,8 @@ pub extern "C" fn hulk_rt_retain(ptr: *mut std::ffi::c_void) {
 
 /// Decrements the reference count of an object pointed to by `ptr`.
 /// If the reference count reaches zero, the object is deallocated.
+/// 
+/// Nullification of `ptr`` after release is strongly recommended.
 #[no_mangle]
 pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
     if ptr.is_null() || is_immortal_ptr(ptr) {
@@ -727,6 +730,12 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
     }
     unsafe {
         let header = ptr as *mut ObjHeader;
+        if (*header).type_tag == TAG_FREED {
+            #[cfg(debug_assertions)]
+            panic!("hulk_rt_release: use-after-free / double-release on {:p}", ptr);
+            #[cfg(not(debug_assertions))]
+            return; // fail safe in release builds: no-op instead of corruption
+        }
         if (*header).ref_count == -1 {
             return; // immortal sentinel
         }
@@ -740,7 +749,11 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
         list_unlink(header);
         ALLOC_BYTES = ALLOC_BYTES.saturating_sub(size_of_object(header));
 
-        match (*header).type_tag {
+        let tag = (*header).type_tag;
+        (*header).type_tag = TAG_FREED;
+        (*header).ref_count = i64::MIN; // implausible for any live object
+
+        match tag {
             TAG_STRING => {
                 let s = ptr as *mut HulkString;
                 let len = (*s).len as usize;
@@ -1069,6 +1082,11 @@ pub unsafe extern "C" fn hulk_rt_dynamic_vector_to_vector(
         }
         for (i, &val) in vec_ref.data.iter().enumerate() {
             hulk_rt_vector_set(fixed, i as i64, val);
+            if !val.is_null() {
+                // Give up the ownership stake `hulk_rt_dynamic_vector_append` acquired;
+                // `fixed` now holds the sole retained reference from this conversion.
+                hulk_rt_release(val);
+            }
         }
         // Clean up: drop the Vec's buffer and deallocate the struct.
         ptr::drop_in_place(&mut (*dyn_vec).data);
@@ -1327,11 +1345,15 @@ mod tests {
     #[test]
     #[serial(global)]
     fn retain_release_does_not_crash() {
-        let ptr = hulk_rt_alloc(64);
+        // Allocate exactly the size of a real built-in type and tag it
+        // accordingly, so hulk_rt_release's type-tag-driven dealloc uses the
+        // same Layout that was used to allocate it.
+        let size = std::mem::size_of::<HulkBox>() as i64;
+        let ptr = hulk_rt_alloc(size);
         assert!(!ptr.is_null());
-        hulk_rt_retain(ptr);
-        hulk_rt_release(ptr);
-        hulk_rt_release(ptr); // should deallocate
+        unsafe { (*(ptr as *mut ObjHeader)).type_tag = TAG_BOX; }
+        hulk_rt_retain(ptr);   // ref_count: 0 -> 1
+        hulk_rt_release(ptr);  // ref_count: 1 -> 0
     }
 
     // ─── String tests ────────────────────────────────────────────────────────────────
@@ -1555,8 +1577,12 @@ mod tests {
     #[serial(global)]
     fn print_returns_its_argument() {
         let s = hulk_rt_number_to_string(99.0);
-        let result = hulk_rt_print(s);
+        let mut result: *mut std::ffi::c_void = ptr::null_mut();
+        let output = capture_stdout(|| {
+            result = hulk_rt_print(s);
+        });
         assert_eq!(result, s);
+        assert_eq!(output, "99\n");
         hulk_rt_release(s);
     }
 
@@ -1628,8 +1654,7 @@ mod gc_tests {
             let next = (*cur).next;
             // Unlink before freeing to avoid stale pointers in the list.
             list_unlink(cur);
-            let layout = Layout::from_size_align(size_of_object(cur).max(40), 8).unwrap();
-            dealloc(cur as *mut u8, layout);
+            gc_free_object(cur);
             cur = next;
         }
         ALLOC_LIST_HEAD = ptr::null_mut();

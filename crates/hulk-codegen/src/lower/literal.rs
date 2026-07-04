@@ -10,6 +10,8 @@
 //! String literals are immutable and are never modified at runtime; they are
 //! emitted once per unique string in the module.
 
+use std::u64;
+
 use inkwell::module::Linkage;
 
 use hulk_ast::Literal;
@@ -65,9 +67,9 @@ pub fn lower_literal<'ctx>(
             data_global.set_unnamed_addr(true);
 
             // ─── HulkString header global ────────────────────────────────────
-            // MUST be byte-for-byte compatible with `hulk_rt::HulkString`
-            // (ObjHeader{ref_count:i64, gc_mark:u8, type_tag:u8, next:ptr,
-            // vtable:ptr} followed by len:i64, data:ptr — 48 bytes total).
+            // Must be byte-for-byte compatible with `hulk_rt::HulkString`
+            // (ObjHeader{ref_count:i64, gc_mark:u8, type_tag:u8, prev:ptr, next:ptr,
+            // vtable:ptr} = 40 bytes, followed by len:i64, data:ptr — 56 bytes total).
 
             let i64_type = ctx.codegen.context.i64_type();
             let i8_type = ctx.codegen.context.i8_type();
@@ -86,7 +88,7 @@ pub fn lower_literal<'ctx>(
             );
             let header_const = ctx.codegen.context.const_struct(
                 &[
-                    i64_type.const_int(0, false).into(), // ref_count
+                    i64_type.const_int(u64::MAX, false).into(), // ref_count
                     i8_type.const_int(0, false).into(),  // gc_mark
                     i8_type.const_int(TAG_LITERAL_STRING as u64, false).into(), // type_tag
                     ptr_type.const_null().into(),        // prev
