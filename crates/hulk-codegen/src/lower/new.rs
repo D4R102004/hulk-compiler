@@ -88,7 +88,7 @@ pub fn lower_new<'ctx>(
     let i64_type = ctx.codegen.context.i64_type();
     let i1_type = ctx.codegen.context.bool_type();
     let i8_type = ctx.codegen.context.i8_type(); // for type_tag
-    let ptr_type = ctx.codegen.context.ptr_type(Default::default());
+    // let ptr_type = ctx.codegen.context.ptr_type(Default::default());
 
     // Helper: GEP into the struct at field index `field_idx` (0‑based).
     let gep_field = |field_idx: u32| -> Result<inkwell::values::PointerValue, _> {
@@ -127,13 +127,6 @@ pub fn lower_new<'ctx>(
     ctx.codegen
         .builder
         .build_store(tag_ptr, i8_type.const_int(TAG_OBJECT as u64, false))
-        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-
-    // next = null
-    let next_ptr = gep_field(field_indices::NEXT)?;
-    ctx.codegen
-        .builder
-        .build_store(next_ptr, ptr_type.const_null())
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // vtable = global

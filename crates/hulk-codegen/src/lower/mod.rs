@@ -565,7 +565,11 @@ mod tests {
         let context = Context::create();
         let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
 
-        // 4. Create main function (entry point).
+        // 4. Declare runtime functions needed for the lowered code.
+        runtime_decls::declare_all(&mut codegen);
+        declare_test_builtins(&mut codegen);
+
+        // 5. Create main function (entry point).
         let i32_type = context.i32_type();
         let main_fn = codegen
             .module
@@ -573,17 +577,17 @@ mod tests {
         let entry_bb = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry_bb);
 
-        // 5. Build layouts for user‑defined types.
+        // 6. Build layouts for user‑defined types.
         layout::build_layouts(&verified.typed_program, &verified.registry, &mut codegen)
             .expect("build layouts");
 
-        // 6. Declare free functions and methods.
+        // 7. Declare free functions and methods.
         lower::decl::declare_functions(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("declare functions");
         lower::method::declare_methods(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("declare methods");
 
-        // 7. Build vtables and itables for every (type, protocol) pair the program actually uses.
+        // 8. Build vtables and itables for every (type, protocol) pair the program actually uses.
         // Emit GC field maps (before build_vtables)
         let _ = layout::build_gc_field_maps(&mut codegen, &verified.registry);
 
@@ -595,18 +599,14 @@ mod tests {
         lower::decl::define_functions(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("define functions");
 
-        // 8. Define free functions and methods.
+        // 9. Define free functions and methods.
         lower::decl::define_functions(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("define functions");
         lower::method::define_methods(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("define methods");
 
-        // 9. Reset builder to main entry.
+        // 10. Reset builder to main entry.
         codegen.builder.position_at_end(entry_bb);
-
-        // 10. Declare runtime functions needed for the lowered code.
-        runtime_decls::declare_all(&mut codegen);
-        declare_test_builtins(&mut codegen);
 
         // 11. Lower the entry expression.
         let mut lower_ctx =

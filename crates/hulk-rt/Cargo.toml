@@ -9,4 +9,5 @@ name = "hulk_rt"
 crate-type = ["staticlib", "rlib"]
 
 [dev-dependencies]
+serial_test = "3"
 libc = "0.2"

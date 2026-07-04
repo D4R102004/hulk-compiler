@@ -9,7 +9,7 @@
 use std::alloc::{alloc, alloc_zeroed, dealloc, Layout};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use  std::mem::size_of;
+use std::mem::size_of;
 
 // ─── Type tags ─────────────────────────────────────────────────────────
 pub const TAG_STRING: u8 = 0;
@@ -43,7 +43,7 @@ pub struct ObjHeader {
 
 /// Head of the doubly-linked intrusive allocation list.
 /// Every live heap object is a node in this list.
-static mut ALLOC_LIST_HEAD: *mut ObjHeader = std::ptr::null_mut();
+static mut ALLOC_LIST_HEAD: *mut ObjHeader = ptr::null_mut();
 
 /// Total bytes currently tracked in the allocation list.
 static mut ALLOC_BYTES: usize = 0;
@@ -66,7 +66,7 @@ fn gc_threshold() -> usize {
 /// Inserts `obj` at the head of the allocation list.
 /// Called from hulk_rt_alloc after each successful allocation.
 unsafe fn list_insert_head(obj: *mut ObjHeader) {
-    (*obj).prev = std::ptr::null_mut();
+    (*obj).prev = ptr::null_mut();
     (*obj).next = ALLOC_LIST_HEAD;
     if !ALLOC_LIST_HEAD.is_null() {
         (*ALLOC_LIST_HEAD).prev = obj;
@@ -90,8 +90,8 @@ unsafe fn list_unlink(obj: *mut ObjHeader) {
         (*next).prev = prev;
     }
     // Clear links to prevent dangling-pointer confusion during debugging.
-    (*obj).next = std::ptr::null_mut();
-    (*obj).prev = std::ptr::null_mut();
+    (*obj).next = ptr::null_mut();
+    (*obj).prev = ptr::null_mut();
 }
 
 // ─── GC shadow stack ──────────────────────────────────────────────────
@@ -104,7 +104,7 @@ const SHADOW_STACK_CAPACITY: usize = 65_536;
 /// alloca slot. The GC mark phase dereferences each entry to find the
 /// current object pointer stored in that slot.
 static mut SHADOW_STACK: [*mut *mut std::ffi::c_void; SHADOW_STACK_CAPACITY] =
-    [std::ptr::null_mut(); SHADOW_STACK_CAPACITY];
+    [ptr::null_mut(); SHADOW_STACK_CAPACITY];
 
 /// Index of the next free slot (= current stack depth).
 static mut SHADOW_TOP: usize = 0;
@@ -140,7 +140,7 @@ pub extern "C" fn hulk_rt_shadow_pop() {
         );
         SHADOW_TOP -= 1;
         // Clear the slot so stale pointers do not interfere with debugging.
-        SHADOW_STACK[SHADOW_TOP] = std::ptr::null_mut();
+        SHADOW_STACK[SHADOW_TOP] = ptr::null_mut();
     }
 }
 
@@ -280,15 +280,8 @@ unsafe fn gc_sweep() {
 /// Used to update ALLOC_BYTES on deallocation.
 unsafe fn size_of_object(obj: *mut ObjHeader) -> usize {
     match (*obj).type_tag {
-        TAG_STRING => {
-            let s = obj as *mut HulkString;
-            size_of::<HulkString>() + (*s).len as usize
-        }
-        TAG_VECTOR => {
-            let v = obj as *mut HulkVector;
-            size_of::<HulkVector>()
-                + (*v).len as usize * size_of::<*mut std::ffi::c_void>()
-        }
+        TAG_STRING => size_of::<HulkString>(),
+        TAG_VECTOR => size_of::<HulkVector>(),
         TAG_BOX => size_of::<HulkBox>(),
         TAG_RANGE => size_of::<HulkRange>(),
         TAG_DYN_VEC => size_of::<HulkDynamicVector>(),
@@ -321,7 +314,8 @@ unsafe fn gc_free_object(obj: *mut ObjHeader) {
         TAG_VECTOR => {
             let vec = obj as *mut HulkVector;
             let len = (*vec).len as usize;
-            if !(*vec).data.is_null() {
+            if !(*vec).data.is_null() && len > 0 {
+                unsafe { ALLOC_BYTES = ALLOC_BYTES.saturating_sub(len * std::mem::size_of::<*mut std::ffi::c_void>()); }
                 dealloc(
                     (*vec).data as *mut u8,
                     Layout::array::<*mut std::ffi::c_void>(len).unwrap(),
@@ -336,8 +330,12 @@ unsafe fn gc_free_object(obj: *mut ObjHeader) {
             dealloc(obj as *mut u8, Layout::new::<HulkRange>());
         }
         TAG_DYN_VEC => {
-            // Reconstruct the Box to run Vec's drop, which frees its buffer.
-            drop(Box::from_raw(obj as *mut HulkDynamicVector));
+            let dyn_vec = obj as *mut HulkDynamicVector;
+            // Drop the Vec's buffer (the sweep will handle the elements separately).
+            ptr::drop_in_place(&mut (*dyn_vec).data);
+            // Deallocate the struct (already unlinked by gc_sweep).
+            let layout = Layout::new::<HulkDynamicVector>();
+            dealloc(dyn_vec as *mut u8, layout);
         }
         TAG_OBJECT => {
             let vtable = (*obj).vtable as *const *const i64;
@@ -408,7 +406,8 @@ pub struct HulkRange {
 unsafe fn hulk_rt_string_from_bytes(data: &[u8]) -> *mut HulkString {
     let len = data.len() as i64;
     let string_layout = Layout::new::<HulkString>();
-    let string_ptr = alloc(string_layout) as *mut HulkString;
+    // Allocate the HulkString struct via hulk_rt_alloc so it is tracked by the GC.
+    let string_ptr = hulk_rt_alloc(string_layout.size() as i64) as *mut HulkString;
     if string_ptr.is_null() {
         return ptr::null_mut();
     }
@@ -416,26 +415,22 @@ unsafe fn hulk_rt_string_from_bytes(data: &[u8]) -> *mut HulkString {
     let data_layout = Layout::array::<u8>(len as usize).unwrap();
     let data_ptr = alloc(data_layout);
     if data_ptr.is_null() {
+        // Unlink the struct from the allocation list before deallocating.
+        list_unlink(string_ptr as *mut ObjHeader);
         dealloc(string_ptr as *mut u8, string_layout);
         return ptr::null_mut();
     }
     ptr::copy(data.as_ptr(), data_ptr, len as usize);
 
-    ptr::write(
-        string_ptr,
-        HulkString {
-            header: ObjHeader {
-                ref_count: 1,
-                gc_mark: 0,
-                type_tag: TAG_STRING,
-                prev: ptr::null_mut(),
-                next: ptr::null_mut(),
-                vtable: ptr::null(),
-            },
-            len,
-            data: data_ptr,
-        },
-    );
+    // Set header fields individually; do NOT overwrite prev/next.
+    (*string_ptr).header.ref_count = 1;
+    (*string_ptr).header.gc_mark = 0;
+    (*string_ptr).header.type_tag = TAG_STRING;
+    (*string_ptr).header.vtable = ptr::null();
+    // prev and next are already set by list_insert_head; leave them untouched.
+    (*string_ptr).len = len;
+    (*string_ptr).data = data_ptr;
+
     string_ptr
 }
 
@@ -666,7 +661,7 @@ pub extern "C" fn hulk_rt_print(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_
 #[no_mangle]
 pub extern "C" fn hulk_rt_alloc(size: i64) -> *mut std::ffi::c_void {
     if size <= 0 {
-        return std::ptr::null_mut();
+        return ptr::null_mut();
     }
     let byte_count = size as usize;
 
@@ -683,11 +678,11 @@ pub extern "C" fn hulk_rt_alloc(size: i64) -> *mut std::ffi::c_void {
     // ── 2. Allocate zeroed memory ─────────────────────────────────────
     let layout = match Layout::from_size_align(byte_count, 8) {
         Ok(l) => l,
-        Err(_) => return std::ptr::null_mut(),
+        Err(_) => return ptr::null_mut(),
     };
     let raw = unsafe { alloc_zeroed(layout) };
     if raw.is_null() {
-        return std::ptr::null_mut();
+        return ptr::null_mut();
     }
 
     // ── 3. Link into the allocation list and update byte counter ──────
@@ -767,6 +762,7 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
                     }
                 }
                 let data_layout = Layout::array::<*mut std::ffi::c_void>(len).unwrap();
+                ALLOC_BYTES = ALLOC_BYTES.saturating_sub(len * std::mem::size_of::<*mut std::ffi::c_void>());
                 dealloc(data as *mut u8, data_layout);
                 dealloc(vec as *mut u8, Layout::new::<HulkVector>());
             }
@@ -777,14 +773,18 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
                 dealloc(ptr as *mut u8, Layout::new::<HulkRange>());
             }
             TAG_DYN_VEC => {
-                // Release elements before dropping -> the Vec owns the slice.
                 let dyn_vec = ptr as *mut HulkDynamicVector;
+                // Release each element (the sweep does not cascade).
                 for &elem in &(*dyn_vec).data {
                     if !elem.is_null() {
                         hulk_rt_release(elem);
                     }
                 }
-                drop(Box::from_raw(dyn_vec));
+                // Drop the Vec's internal buffer.
+                ptr::drop_in_place(&mut (*dyn_vec).data);
+                // Deallocate the struct (already unlinked above).
+                let layout = Layout::new::<HulkDynamicVector>();
+                dealloc(dyn_vec as *mut u8, layout);
             }
             TAG_OBJECT => {
                 // ── Read object size and pointer-field offsets from field map ──
@@ -841,21 +841,30 @@ pub extern "C" fn hulk_rt_vector_new(len: i64) -> *mut HulkVector {
 
     // 1. Allocate the HulkVector struct itself.
     let vec_layout = Layout::new::<HulkVector>();
-    let vec_ptr = unsafe { alloc(vec_layout) as *mut HulkVector };
+    let vec_ptr = hulk_rt_alloc(vec_layout.size() as i64) as *mut HulkVector;
     if vec_ptr.is_null() {
         return ptr::null_mut();
     }
 
     // 2. Allocate the data array (len pointers).
-    let data_layout = Layout::array::<*mut std::ffi::c_void>(len as usize)
-        .unwrap_or_else(|_| Layout::new::<*mut std::ffi::c_void>());
-    let data_ptr = unsafe { alloc(data_layout) as *mut *mut std::ffi::c_void };
-    if data_ptr.is_null() {
-        unsafe {
-            dealloc(vec_ptr as *mut u8, vec_layout);
+    let data_ptr: *mut *mut std::ffi::c_void = if len == 0 {
+        ptr::NonNull::dangling().as_ptr()  // valid non-null sentinel, never dereferenced
+    } else {
+        let data_layout = Layout::array::<*mut std::ffi::c_void>(len as usize)
+            .expect("vector data layout overflow");
+        let raw = unsafe { alloc_zeroed(data_layout) } as *mut *mut std::ffi::c_void;
+        if raw.is_null() {
+            // cleanup vec_ptr and return null
+            unsafe {
+                list_unlink(vec_ptr as *mut ObjHeader);
+                dealloc(vec_ptr as *mut u8, vec_layout);
+            }
+            return ptr::null_mut();
         }
-        return ptr::null_mut();
-    }
+        raw  // alloc_zeroed already zeroes the data, no write_bytes needed
+    };
+    let data_byte_count = (len as usize) * std::mem::size_of::<*mut std::ffi::c_void>();
+    unsafe { ALLOC_BYTES = ALLOC_BYTES.saturating_add(data_byte_count); }
 
     // 3. Zero-initialise the data array.
     unsafe {
@@ -864,22 +873,14 @@ pub extern "C" fn hulk_rt_vector_new(len: i64) -> *mut HulkVector {
 
     // 4. Fill the vector fields.
     unsafe {
-        ptr::write(
-            vec_ptr,
-            HulkVector {
-                header: ObjHeader {
-                    ref_count: 1,
-                    gc_mark: 0,
-                    type_tag: TAG_VECTOR,
-                    prev: ptr::null_mut(),
-                    next: ptr::null_mut(),
-                    vtable: ptr::null(),
-                },
-                len,
-                current_index: -1, // To call next() before current() is mandatory.
-                data: data_ptr,
-            },
-        );
+        // Set fields individually; preserve prev/next from list_insert_head.
+        (*vec_ptr).header.ref_count = 1;
+        (*vec_ptr).header.gc_mark = 0;
+        (*vec_ptr).header.type_tag = TAG_VECTOR;
+        (*vec_ptr).header.vtable = ptr::null();
+        (*vec_ptr).len = len;
+        (*vec_ptr).current_index = -1;
+        (*vec_ptr).data = data_ptr;
     }
 
     vec_ptr
@@ -1007,18 +1008,19 @@ pub unsafe extern "C" fn hulk_rt_vector_current(vec: *mut HulkVector) -> *mut st
 
 #[no_mangle]
 pub extern "C" fn hulk_rt_dynamic_vector_new() -> *mut HulkDynamicVector {
-    let vec = HulkDynamicVector {
-        header: ObjHeader {
-            ref_count: 1,
-            gc_mark: 0,
-            type_tag: TAG_DYN_VEC,
-            prev: ptr::null_mut(),
-            next: ptr::null_mut(),
-            vtable: ptr::null(),
-        },
-        data: Vec::new(),
-    };
-    Box::into_raw(Box::new(vec))
+    let layout = Layout::new::<HulkDynamicVector>();
+    let ptr = hulk_rt_alloc(layout.size() as i64) as *mut HulkDynamicVector;
+    if ptr.is_null() {
+        return ptr::null_mut();
+    }
+    unsafe {
+        (*ptr).header.ref_count = 1;
+        (*ptr).header.gc_mark = 0;
+        (*ptr).header.type_tag = TAG_DYN_VEC;
+        (*ptr).header.vtable = ptr::null();
+        (*ptr).data = Vec::new();
+    }
+    ptr
 }
 
 /// Appends a value to a dynamic vector, retaining it.
@@ -1058,15 +1060,21 @@ pub unsafe extern "C" fn hulk_rt_dynamic_vector_to_vector(
         let len = vec_ref.data.len() as i64;
         let fixed = hulk_rt_vector_new(len);
         if fixed.is_null() {
-            // Release the dynamic vector (drops the Vec and the struct)
-            drop(Box::from_raw(dyn_vec));
+            // Clean up: drop Vec buffer and deallocate struct.
+            ptr::drop_in_place(&mut (*dyn_vec).data);
+            list_unlink(dyn_vec as *mut ObjHeader);
+            let layout = Layout::new::<HulkDynamicVector>();
+            dealloc(dyn_vec as *mut u8, layout);
             return ptr::null_mut();
         }
         for (i, &val) in vec_ref.data.iter().enumerate() {
             hulk_rt_vector_set(fixed, i as i64, val);
         }
-        // Release the dynamic vector (drops the Vec and the struct)
-        drop(Box::from_raw(dyn_vec));
+        // Clean up: drop the Vec's buffer and deallocate the struct.
+        ptr::drop_in_place(&mut (*dyn_vec).data);
+        list_unlink(dyn_vec as *mut ObjHeader);
+        let layout = Layout::new::<HulkDynamicVector>();
+        dealloc(dyn_vec as *mut u8, layout);
         fixed
     }
 }
@@ -1077,27 +1085,18 @@ pub unsafe extern "C" fn hulk_rt_dynamic_vector_to_vector(
 #[no_mangle]
 pub extern "C" fn hulk_rt_range_new(min: f64, max: f64) -> *mut HulkRange {
     let layout = Layout::new::<HulkRange>();
-    let ptr = unsafe { alloc(layout) as *mut HulkRange };
+    let ptr = hulk_rt_alloc(layout.size() as i64) as *mut HulkRange;
     if ptr.is_null() {
         return ptr::null_mut();
     }
     unsafe {
-        ptr::write(
-            ptr,
-            HulkRange {
-                header: ObjHeader {
-                    ref_count: 1,
-                    gc_mark: 0,
-                    type_tag: TAG_RANGE,
-                    prev: ptr::null_mut(),
-                    next: ptr::null_mut(),
-                    vtable: ptr::null(),
-                },
-                min,
-                max,
-                current: min - 1.0,
-            },
-        );
+        (*ptr).header.ref_count = 1;
+        (*ptr).header.gc_mark = 0;
+        (*ptr).header.type_tag = TAG_RANGE;
+        (*ptr).header.vtable = ptr::null();
+        (*ptr).min = min;
+        (*ptr).max = max;
+        (*ptr).current = min - 1.0;
     }
     ptr
 }
@@ -1263,6 +1262,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::os::unix::io::FromRawFd;
+    use serial_test::serial;
 
     /// Helper: Converts a pointer to a `HulkString` into a Rust `String`.
     unsafe fn string_from_ptr(ptr: *mut std::ffi::c_void) -> String {
@@ -1298,7 +1298,7 @@ mod tests {
 
             // Ensure the output is flushed.
             let _ = std::io::stdout().flush();
-            libc::fflush(std::ptr::null_mut());
+            libc::fflush(ptr::null_mut());
 
             // Restore stdout.
             libc::dup2(stdout_fd, 1);
@@ -1316,6 +1316,7 @@ mod tests {
 
     /// Smoke test that verifies that calling hulk_rt_noop does not cause a panic or crash.
     #[test]
+    #[serial(global)]
     fn noop_does_not_panic() {
         hulk_rt_noop();
     }
@@ -1324,6 +1325,7 @@ mod tests {
     /// on a valid pointer does not cause an immediate runtime failure.
     /// Minimal sanity check for the memory management infrastructure.
     #[test]
+    #[serial(global)]
     fn retain_release_does_not_crash() {
         let ptr = hulk_rt_alloc(64);
         assert!(!ptr.is_null());
@@ -1336,6 +1338,7 @@ mod tests {
 
     /// Tests that converting a number to a string produces the expected result.
     #[test]
+    #[serial(global)]
     fn number_to_string() {
         let ptr = hulk_rt_number_to_string(42.0);
         assert!(!ptr.is_null());
@@ -1347,6 +1350,7 @@ mod tests {
 
     /// Tests that converting a boolean to a string produces the expected result.
     #[test]
+    #[serial(global)]
     fn bool_to_string() {
         let ptr = hulk_rt_bool_to_string(true);
         assert!(!ptr.is_null());
@@ -1364,6 +1368,7 @@ mod tests {
 
     /// Tests that concatenating two strings produces the expected result.
     #[test]
+    #[serial(global)]
     fn string_concat() {
         let a = hulk_rt_number_to_string(10.0);
         let b = hulk_rt_bool_to_string(true);
@@ -1379,6 +1384,7 @@ mod tests {
 
     /// Tests that concatenating two strings with a space produces the expected result.
     #[test]
+    #[serial(global)]
     fn string_concat_space() {
         let a = hulk_rt_number_to_string(10.0);
         let b = hulk_rt_bool_to_string(true);
@@ -1396,6 +1402,7 @@ mod tests {
 
     /// Tests that creating a vector, setting values, and retrieving them works as expected.
     #[test]
+    #[serial(global)]
     fn vector_new_and_get_set() {
         let vec = hulk_rt_vector_new(3);
         assert!(!vec.is_null());
@@ -1424,6 +1431,7 @@ mod tests {
 
     /// Tests that iterating over a vector works as expected.
     #[test]
+    #[serial(global)]
     fn vector_iterator() {
         let vec = hulk_rt_vector_new(3);
         assert!(!vec.is_null());
@@ -1456,6 +1464,7 @@ mod tests {
 
     /// Tests that creating a range and iterating over its values works as expected.
     #[test]
+    #[serial(global)]
     fn range_basic() {
         let rng = hulk_rt_range_new(1.0, 5.0);
         assert!(!rng.is_null());
@@ -1472,6 +1481,7 @@ mod tests {
 
     /// Tests that creating an empty range works as expected.
     #[test]
+    #[serial(global)]
     fn range_empty() {
         let rng = hulk_rt_range_new(5.0, 5.0);
         assert!(!rng.is_null());
@@ -1484,6 +1494,7 @@ mod tests {
 
     /// Tests that the math functions work as expected.
     #[test]
+    #[serial(global)]
     fn math_functions() {
         assert_eq!(hulk_rt_sqrt(4.0), 2.0);
         assert!((hulk_rt_sin(0.0) - 0.0).abs() < 1e-10);
@@ -1494,6 +1505,7 @@ mod tests {
 
     /// Tests that the random number generator produces values in the expected range.
     #[test]
+    #[serial(global)]
     fn rand_returns_in_range() {
         let r = hulk_rt_rand();
         assert!((0.0..1.0).contains(&r));
@@ -1503,6 +1515,7 @@ mod tests {
 
     /// Tests that printing a number outputs the expected string representation.
     #[test]
+    #[serial(global)]
     fn print_outputs_number() {
         let s = hulk_rt_number_to_string(42.0);
         let output = capture_stdout(|| {
@@ -1514,6 +1527,7 @@ mod tests {
 
     /// Tests that printing a boolean outputs the expected string representation.
     #[test]
+    #[serial(global)]
     fn print_outputs_boolean() {
         let s = hulk_rt_bool_to_string(true);
         let output = capture_stdout(|| {
@@ -1525,18 +1539,20 @@ mod tests {
 
     /// Tests that printing a string outputs the expected string representation.
     #[test]
+    #[serial(global)]
     fn print_outputs_string_directly() {
         let s = hulk_rt_number_to_string(123.45);
         let output = capture_stdout(|| {
             let _ = hulk_rt_print(s);
         });
-        // Note: the formatting may vary; we accept exact representation.
-        assert!(output == "123.45\n", "output was: {:?}", output);
+        let is_ok = output == "123.45\n";
         hulk_rt_release(s);
+        assert!(is_ok, "output was: {:?}", output);
     }
 
     /// Tests that printing outputs the expected string representation.
     #[test]
+    #[serial(global)]
     fn print_returns_its_argument() {
         let s = hulk_rt_number_to_string(99.0);
         let result = hulk_rt_print(s);
@@ -1546,6 +1562,7 @@ mod tests {
 
     /// Tests that printing handles null pointers.
     #[test]
+    #[serial(global)]
     fn print_handles_null() {
         let result = hulk_rt_print(ptr::null_mut());
         assert!(result.is_null());
@@ -1553,6 +1570,7 @@ mod tests {
 
     /// Tests dynamic vector append and conversion to a fixed-size vector.
     #[test]
+    #[serial(global)]
     fn dynamic_vector_append_and_to_vector() {
         let dyn_vec = hulk_rt_dynamic_vector_new();
         assert!(!dyn_vec.is_null());
@@ -1579,6 +1597,181 @@ mod tests {
             hulk_rt_release(v1);
             hulk_rt_release(v2);
             hulk_rt_release(v3);
+        }
+    }
+}
+
+#[cfg(test)]
+mod gc_tests {
+    use super::*;
+    use serial_test::serial;
+
+    // ── Helper: manually wire a minimal TAG_OBJECT with a vtable ──────
+
+    /// Allocates a raw object of `size` bytes, sets its header fields, and
+    /// links it into the allocation list via hulk_rt_alloc.
+    /// Returns the pointer cast to `*mut ObjHeader`.
+    unsafe fn _make_object(size: usize) -> *mut ObjHeader {
+        let ptr = hulk_rt_alloc(size as i64) as *mut ObjHeader;
+        assert!(!ptr.is_null());
+        (*ptr).ref_count = 1;
+        (*ptr).type_tag = TAG_OBJECT;
+        ptr
+    }
+
+    /// Resets global GC state between tests. Tests must call this at the
+    /// start to avoid cross-test contamination from the static globals.
+    unsafe fn reset_gc_state() {
+        // Free everything in the allocation list without GC logic.
+        let mut cur = ALLOC_LIST_HEAD;
+        while !cur.is_null() {
+            let next = (*cur).next;
+            // Unlink before freeing to avoid stale pointers in the list.
+            list_unlink(cur);
+            let layout = Layout::from_size_align(size_of_object(cur).max(40), 8).unwrap();
+            dealloc(cur as *mut u8, layout);
+            cur = next;
+        }
+        ALLOC_LIST_HEAD = ptr::null_mut();
+        ALLOC_BYTES = 0;
+        SHADOW_TOP = 0;
+    }
+
+    // ── Test 1: shadow stack push/pop balance ─────────────────────────
+
+    #[test]
+    #[serial(global)]
+    fn shadow_push_pop_balanced() {
+        unsafe {
+            reset_gc_state();
+            let mut slot: *mut std::ffi::c_void = ptr::null_mut();
+            let depth_before = SHADOW_TOP;
+            hulk_rt_shadow_push(&mut slot as *mut _ as *mut std::ffi::c_void);
+            let top = SHADOW_TOP;
+            assert_eq!(top, depth_before + 1);
+            hulk_rt_shadow_pop();
+            let top = SHADOW_TOP;
+            assert_eq!(top, depth_before);
+        }
+    }
+
+    // ── Test 2: allocation list is maintained correctly ───────────────
+
+    #[test]
+    #[serial(global)]
+    fn alloc_links_into_list() {
+        unsafe {
+            reset_gc_state();
+            let p = hulk_rt_alloc(40) as *mut ObjHeader;
+            assert!(!p.is_null());
+            // The object must be the list head (freshly reset state).
+            let head = ALLOC_LIST_HEAD;
+            assert_eq!(head, p);
+            // Clean up without GC.
+            list_unlink(p);
+            dealloc(p as *mut u8, Layout::from_size_align(40, 8).unwrap());
+            ALLOC_BYTES = 0;
+        }
+    }
+
+    // ── Test 3: mark phase reaches objects through shadow stack ───────
+
+    #[test]
+    #[serial(global)]
+    fn mark_phase_marks_roots() {
+        unsafe {
+            reset_gc_state();
+
+            // Allocate a string and register it as a shadow-stack root.
+            let s = hulk_rt_number_to_string(42.0) as *mut ObjHeader;
+            assert!(!s.is_null());
+            (*s).gc_mark = 0; // ensure it starts unmarked
+
+            let mut slot = s as *mut std::ffi::c_void;
+            hulk_rt_shadow_push(&mut slot as *mut _ as *mut std::ffi::c_void);
+
+            gc_mark_roots();
+
+            assert_eq!((*s).gc_mark, 1, "root object should be marked");
+
+            hulk_rt_shadow_pop();
+            // Clean up.
+            (*s).gc_mark = 0;
+            hulk_rt_release(s as *mut std::ffi::c_void);
+        }
+    }
+
+    // ── Test 4: sweep frees unmarked objects ──────────────────────────
+
+    #[test]
+    #[serial(global)]
+    fn sweep_frees_unmarked() {
+        unsafe {
+            reset_gc_state();
+
+            // Allocate a string but do NOT register it as a root and do NOT
+            // mark it. It should be collected by the sweep.
+            let s = hulk_rt_number_to_string(99.0) as *mut ObjHeader;
+            assert!(!s.is_null());
+            // Ensure it is in the alloc list (hulk_rt_string_from_bytes links it).
+            assert!(!ALLOC_LIST_HEAD.is_null());
+
+            // Mark phase: no roots registered → nothing gets marked.
+            gc_mark_roots(); // SHADOW_TOP == 0 → no-op
+
+            let bytes_before = ALLOC_BYTES;
+            gc_sweep(); // should free `s`
+
+            // Bytes freed must be non-zero (the string was in the list).
+            assert!(
+                ALLOC_BYTES < bytes_before,
+                "sweep should have reduced ALLOC_BYTES"
+            );
+            // The list should now be empty.
+            assert!(ALLOC_LIST_HEAD.is_null(), "alloc list should be empty after sweep");
+        }
+    }
+
+    // ── Test 5: full collect on a simple two-node cycle ───────────────
+
+    /// Builds a two-node cycle (A.next = B, B.next = A) with no external
+    /// roots and verifies that a GC cycle reclaims both nodes.
+    ///
+    /// Because TAG_OBJECT requires a valid vtable with a field map to trace
+    /// children, this test uses TAG_VECTOR (whose children are all traced by
+    /// the mark phase unconditionally) to represent the cycle nodes.
+    #[test]
+    #[serial(global)]
+    fn gc_collects_two_node_cycle() {
+        unsafe {
+            reset_gc_state();
+
+            // Allocate two single-element vectors.
+            let a = hulk_rt_vector_new(1);
+            let b = hulk_rt_vector_new(1);
+            assert!(!a.is_null() && !b.is_null());
+
+            // Wire the cycle: a[0] = b, b[0] = a
+            hulk_rt_retain(b as *mut std::ffi::c_void);
+            *(*a).data = b as *mut std::ffi::c_void;
+            hulk_rt_retain(a as *mut std::ffi::c_void);
+            *(*b).data = a as *mut std::ffi::c_void;
+
+            // Drop external references (ref counts drop to 1 each, held by the cycle)
+            (*a).header.ref_count -= 1; // would normally be done by codegen release
+            (*b).header.ref_count -= 1;
+
+            // No shadow-stack roots registered for a or b.
+            let bytes_before = ALLOC_BYTES;
+            hulk_rt_gc_collect();
+            let bytes_after = ALLOC_BYTES;
+
+            assert!(
+                bytes_after < bytes_before,
+                "GC should have collected the cycle (bytes_before={}, after={})",
+                bytes_before, bytes_after
+            );
+            assert!(ALLOC_LIST_HEAD.is_null(), "alloc list should be empty");
         }
     }
 }

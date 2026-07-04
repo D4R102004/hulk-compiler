@@ -582,12 +582,6 @@ mod macro_tests {
             other => other,
         };
 
-        let rt_lib_path = workspace_target.join(dir_name).join("libhulk_rt.a");
-
-        if rt_lib_path.exists() {
-            return; // Already built.
-        }
-    
         // Build hulk-rt with the current profile.
         let status = std::process::Command::new("cargo")
             .args(["build", "-p", "hulk-rt", "--profile", cargo_profile])
@@ -595,6 +589,8 @@ mod macro_tests {
             .unwrap_or_else(|e| panic!("Failed to invoke cargo to build hulk-rt: {e}"));
 
         assert!(status.success(), "cargo build -p hulk-rt --profile {cargo_profile} failed");
+
+        let rt_lib_path = workspace_target.join(dir_name).join("libhulk_rt.a");
 
         // Verify the library now exists.
         assert!(

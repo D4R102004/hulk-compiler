@@ -386,15 +386,11 @@ pub fn box_primitive<'ctx>(
             i8_type.const_int(TAG_BOX as u64, false),
         )
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    // next = null
-    ctx.codegen
-        .builder
-        .build_store(byte_ptr(16, "next_ptr")?, ptr_type.const_null())
-        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    // prev and next are already assigned by the runtime allocator, so we don't need to set them here.
     // vtable = null
     ctx.codegen
         .builder
-        .build_store(byte_ptr(24, "vtable_ptr")?, ptr_type.const_null())
+        .build_store(byte_ptr(32, "vtable_ptr")?, ptr_type.const_null())
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Store tag
