@@ -148,38 +148,34 @@ pub fn lower_lambda<'ctx>(
                 .build_load(*cap_llvm_ty, *cap_alloca, &format!("cap_{}", cap_name))
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-            // Retain the captured value if it is heap‑allocated
-            if is_heap_allocated_type(cap_sem_ty, ctx.registry) {
-                let retain_fn = ctx
-                    .codegen
-                    .functions
-                    .get("hulk_rt_retain")
-                    .cloned()
-                    .ok_or_else(|| {
-                        CodegenError::unsupported("hulk_rt_retain not declared".to_string(), None)
-                    })?;
-                ctx.codegen
-                    .builder
-                    .build_call(retain_fn, &[cap_val.into()], "cap_retain")
-                    .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            } else if matches!(cap_sem_ty, Type::Function { .. }) {
+            if matches!(cap_sem_ty, Type::Function { .. }) {
                 // Fat pointer: retain only the environment pointer (field 0)
                 let retain_fn = ctx
                     .codegen
                     .functions
                     .get("hulk_rt_retain")
                     .cloned()
-                    .ok_or_else(|| {
-                        CodegenError::unsupported("hulk_rt_retain not declared".to_string(), None)
-                    })?;
-                let env_ptr_from_cap = ctx
+                    .ok_or_else(|| CodegenError::unsupported("hulk_rt_retain not declared".to_string(), None))?;
+                let inner_env_ptr = ctx
                     .codegen
                     .builder
                     .build_extract_value(cap_val.into_struct_value(), 0, "cap_env_ptr")
                     .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
                 ctx.codegen
                     .builder
-                    .build_call(retain_fn, &[env_ptr_from_cap.into()], "cap_env_retain")
+                    .build_call(retain_fn, &[inner_env_ptr.into()], "cap_env_retain")
+                    .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            } else if is_heap_allocated_type(cap_sem_ty, ctx.registry) {
+                // Single pointer: retain the whole value
+                let retain_fn = ctx
+                    .codegen
+                    .functions
+                    .get("hulk_rt_retain")
+                    .cloned()
+                    .ok_or_else(|| CodegenError::unsupported("hulk_rt_retain not declared".to_string(), None))?;
+                ctx.codegen
+                    .builder
+                    .build_call(retain_fn, &[cap_val.into()], "cap_retain")
                     .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             }
 
