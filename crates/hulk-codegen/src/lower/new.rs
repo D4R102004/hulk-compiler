@@ -6,7 +6,7 @@ use hulk_semantic::{Type, TypeRegistry};
 
 use super::lower_expr;
 use crate::error::CodegenError;
-use crate::lower::utils::field_indices;
+use crate::lower::utils::{field_indices, ensure_boxed};
 use crate::lower::LowerCtx;
 
 /// Lowers a `new T(args)` expression.
@@ -207,7 +207,9 @@ pub fn lower_new<'ctx>(
         })?;
 
         // 3. Lower the initializer expression.
-        let val = lower_expr(ctx, init_expr)?;
+        let mut val = lower_expr(ctx, init_expr)?;
+        // Box primitive if attribute type is Object.
+        val = ensure_boxed(ctx, val, &init_expr.anno, attr_ty)?;
 
         // 4. Compute the field pointer as an i8*.
         let offset_val = ctx

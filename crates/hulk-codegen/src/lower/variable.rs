@@ -5,7 +5,7 @@ use inkwell::values::BasicValueEnum;
 use super::lower_expr;
 use crate::error::CodegenError;
 use crate::lower::builtins::lookup_constant;
-use crate::lower::utils::{convert_to_protocol, is_heap_allocated_type};
+use crate::lower::utils::{convert_to_protocol, is_heap_allocated_type, ensure_boxed};
 use crate::lower::LowerCtx;
 
 /// Lowers a variable reference.
@@ -85,7 +85,10 @@ pub fn lower_assign_variable<'ctx>(
         }
     }
 
-    // 4. Load the old value (for release).
+    // 4. Box primitive if target type is Object.
+    stored_val = ensure_boxed(ctx, stored_val, val_ty, &target_ty)?;
+
+    // 5. Load the old value (for release).
     let old_val = ctx
         .codegen
         .builder
@@ -96,7 +99,7 @@ pub fn lower_assign_variable<'ctx>(
         )
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
-    // 5. If the target type is heap-allocated, release the old value and retain the new.
+    // 6. If the target type is heap-allocated, release the old value and retain the new.
     if is_heap_allocated_type(&target_ty, ctx.registry) {
         let release_fn = ctx
             .codegen
@@ -121,9 +124,9 @@ pub fn lower_assign_variable<'ctx>(
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     }
 
-    // 6. Store the (possibly converted) value.
+    // 7. Store the (possibly converted) value.
     ctx.store_var(name, stored_val, Some(span))?;
 
-    // 7. The assignment expression returns the stored value.
+    // 8. The assignment expression returns the stored value.
     Ok(stored_val)
 }

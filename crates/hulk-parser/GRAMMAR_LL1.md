@@ -239,6 +239,59 @@ MacroArgList -> MacroArg (',' MacroArg)* | ε
 MacroArg     -> '@' id | Expr
 ```
 
+### Macro pattern matching (inside macro bodies)
+
+Inside a macro body, the `match` keyword is parsed as a compile‑time pattern‑matching
+expression, not as a runtime `MatchExpr`. The syntax is:
+
+```ebnf
+MacroMatch     -> 'match' '(' Expr ')' '{' MacroCase* '}'
+MacroCase      -> 'case' '(' MacroPattern ')' '=>' Expr ';'
+                | 'default' '=>' Expr ';'
+
+The default arm is represented by the identifier default (not a keyword) and is
+only recognised in the arm position. It is parsed as a wildcard pattern.
+
+Macro patterns have a precedence structure that mirrors expression precedence, but
+patterns are not expressions — they describe the shape of an AST node. The pattern 
+grammar is parsed only when in_macro_body is true. In normal code, match continues 
+to be parsed as a runtime MatchExpr.
+
+MacroPattern   -> MacroOr
+MacroOr        -> MacroAnd ('|' MacroAnd)*
+MacroAnd       -> MacroEquality ('&' MacroEquality)*
+MacroEquality  -> MacroComparison (('==' | '!=') MacroComparison)*
+MacroComparison -> MacroConcat (('<' | '<=' | '>' | '>=') MacroConcat)*
+MacroConcat    -> MacroTerm (('@' | '@@') MacroTerm)*
+MacroTerm      -> MacroFactor (('+' | '-') MacroFactor)*
+MacroFactor    -> MacroUnary (('*' | '/' | '%') MacroUnary)*
+MacroUnary     -> ('-' | '!') MacroUnary | MacroPower
+MacroPower     -> MacroPrimary ('^' MacroUnary)?
+MacroPrimary   -> number
+                | string
+                | 'true'
+                | 'false'
+                | '_'                     // wildcard
+                | id MacroPrimaryId       // binding or simple identifier
+                | '(' MacroPattern ')'
+
+MacroPrimaryId -> ':' TypeRef             // type‑annotated wildcard binding
+                | ':' '(' MacroPattern ')' // compound binding: name: (pattern)
+                | ε                        // simple variable binding (no type)
+
+A MacroPrimary that starts with an identifier may be:
+
+- x → binds the matched expression to x (wildcard shape).
+
+- x: Number → binds to x with type constraint.
+
+- x: (pattern) → binds the whole matched expression to x, where the inner
+pattern is the shape that must be satisfied.
+
+The wildcard _ matches any expression without binding it.
+
+
+
 ## Implementation map
 
 | Grammar non-terminal | Rust method |

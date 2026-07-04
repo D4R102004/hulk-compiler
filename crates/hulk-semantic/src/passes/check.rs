@@ -345,6 +345,16 @@ impl<'a> Checker<'a> {
                 ));
                 // Do not recurse into arguments or body – they are invalid at this stage.
             }
+            ExprKind::MacroMatch(_mm) => {
+                // Should never be reached if hulk-transpile ran before the semantic pass.
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::MacroReferenceFound {
+                        macro_expr: "Match expression".to_string(),
+                    },
+                    expr.span,
+                ));
+                // Do not recurse into arguments or body – they are invalid at this stage.
+            }
         }
     }
 

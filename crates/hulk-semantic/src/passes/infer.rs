@@ -18,7 +18,7 @@ use hulk_ast::{
     IfExpr, IndexExpr, LambdaExpr, LetBinding, LetExpr, Literal, MatchCase, MatchExpr, MemberExpr,
     NewExpr, Pattern, Program, SourceSpan, TypeDecl, TypeMember, TypeMemberKind, TypeParent,
     TypeRef, TypeTestExpr, UnaryExpr, UnaryOp, VectorComprehension, VectorExpr, VectorGenerator, 
-    WhileExpr, MacroArg, MacroDecl, MacroCallExpr,
+    WhileExpr, MacroArg, MacroDecl, MacroCallExpr, MacroMatchExpr
 };
 
 use crate::environment::Environment;
@@ -524,6 +524,26 @@ impl<'a> InferState<'a> {
                 };
 
                 typed_expr(ExprKind::MacroCall(mc_typed), Type::Error, expr.span)
+            }
+            ExprKind::MacroMatch(_mm) => {
+                self.errors.push(SemanticError::error(
+                    SemanticErrorKind::MacroReferenceFound {
+                        macro_expr: "macro match".to_string(),
+                    },
+                    expr.span,
+                ));
+
+                // Return a dummy MacroMatchExpr annotated with Error to satisfy the type system.
+                let dummy_scrutinee = Expr {
+                    kind: ExprKind::Variable("".to_string()),
+                    anno: Type::Error,
+                    span: expr.span,
+                };
+                let macro_match = MacroMatchExpr {
+                    scrutinee: Box::new(dummy_scrutinee),
+                    cases: Vec::new(),
+                };
+                typed_expr(ExprKind::MacroMatch(macro_match), Type::Error, expr.span)
             }
         }
     }

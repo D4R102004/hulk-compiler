@@ -8,12 +8,13 @@
 use std::collections::HashSet;
 use hulk_ast::{
     DeclarationKind, Expr, ExprKind, MacroArg, MacroCallExpr,
-    MacroParam, MacroParamKind, Program, TypeMemberKind,
+    MacroParam, MacroParamKind, Program, TypeMemberKind, MacroMatchExpr,
 };
 
 use crate::collect::MacroRegistry;
 use crate::error::{MacroError, MacroErrorKind};
 use crate::substitute::{collect_let_bindings, substitute, SubstMap};
+use crate::pattern::try_match;
 
 /// Hard-coded expansion passes limit
 const MAX_EXPANSION_PASSES: usize = 64;
@@ -128,6 +129,45 @@ fn expand_expr(
             }
             // Not a macro call -> recursively expand children and keep as Call
             rebuild_expr_children(expr, registry, errors, depth)
+        }
+       ExprKind::MacroMatch(mm) => {
+            // Clone the scrutinee to avoid moving out of mm.
+            let scrutinee = expand_expr((*mm.scrutinee).clone(), registry, errors, depth);
+
+            // Try each case in order.
+            for case in &mm.cases {
+                match try_match(&case.pattern, &scrutinee) {
+                    Ok(Some(bindings)) => {
+                        let mut subst = SubstMap::new();
+                        for (name, expr) in bindings {
+                            subst.insert_expr(name, expr);
+                        }
+                        let body = substitute(&case.body, &subst);
+                        return expand_expr(body, registry, errors, depth + 1);
+                    }
+                    Ok(None) => continue,
+                    Err(err_kind) => {
+                        errors.push(MacroError::new(err_kind, expr.span));
+                        // Return the expanded expression with the error.
+                        let new_mm = MacroMatchExpr {
+                            scrutinee: Box::new(scrutinee),
+                            cases: mm.cases.clone(),
+                        };
+                        return Expr::new(ExprKind::MacroMatch(new_mm), expr.span);
+                    }
+                }
+            }
+
+            // No case matched – report error and return the expanded expression.
+            errors.push(MacroError::new(
+                MacroErrorKind::NonExhaustiveMacroMatch,
+                expr.span,
+            ));
+            let new_mm = MacroMatchExpr {
+                scrutinee: Box::new(scrutinee),
+                cases: mm.cases.clone(),
+            };
+            Expr::new(ExprKind::MacroMatch(new_mm), expr.span)
         }
         // For all other expression kinds, recursively expand children.
         _ => rebuild_expr_children(expr, registry, errors, depth),

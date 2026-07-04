@@ -271,6 +271,9 @@ fn collect_used_pairs(program: &Program<Type>, registry: &TypeRegistry) -> HashS
                     mc.name
                 );
             }
+            ExprKind::MacroMatch(_mm) => {
+                panic!("internal error: macro match reached code generation unexpanded");
+            }
         }
     }
 
