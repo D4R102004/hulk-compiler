@@ -449,7 +449,7 @@ fn is_immortal_ptr(ptr: *mut std::ffi::c_void) -> bool {
     }
 }
 
-fn is_immortal_header(header: *mut ObjHeader) -> bool {
+fn _is_immortal_header(header: *mut ObjHeader) -> bool {
     if header.is_null() {
         return false;
     }
@@ -666,10 +666,40 @@ pub extern "C" fn hulk_rt_print(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_
 #[no_mangle]
 pub extern "C" fn hulk_rt_alloc(size: i64) -> *mut std::ffi::c_void {
     if size <= 0 {
-        return ptr::null_mut();
+        return std::ptr::null_mut();
     }
-    let layout = Layout::from_size_align(size as usize, 8).unwrap_or_else(|_| Layout::new::<u8>());
-    unsafe { alloc(layout) as *mut std::ffi::c_void }
+    let byte_count = size as usize;
+
+    // ── 1. Threshold check — trigger GC before allocating ────────────
+    // Collect first so the new object is not in the list during the mark phase. 
+    // This is the only safe window; after insertion the mark phase may encounter 
+    // a partially initialised header.
+    unsafe {
+        if ALLOC_BYTES.saturating_add(byte_count) > gc_threshold() {
+            hulk_rt_gc_collect();
+        }
+    }
+
+    // ── 2. Allocate zeroed memory ─────────────────────────────────────
+    let layout = match Layout::from_size_align(byte_count, 8) {
+        Ok(l) => l,
+        Err(_) => return std::ptr::null_mut(),
+    };
+    let raw = unsafe { alloc_zeroed(layout) };
+    if raw.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    // ── 3. Link into the allocation list and update byte counter ──────
+    // The memory is zero-initialised, which is a safe sentinel state
+    // (ref_count=0, gc_mark=0, tag=TAG_STRING, vtable=null).
+    unsafe {
+        let header = raw as *mut ObjHeader;
+        list_insert_head(header);
+        ALLOC_BYTES = ALLOC_BYTES.saturating_add(byte_count);
+    }
+
+    raw as *mut std::ffi::c_void
 }
 
 /// Increments the reference count of an object pointed to by `ptr`.
@@ -684,7 +714,7 @@ pub extern "C" fn hulk_rt_retain(ptr: *mut std::ffi::c_void) {
     }
     unsafe {
         let header = ptr as *mut ObjHeader;
-        // WHY: ref_count == -1 is the immortal sentinel (CPython PEP 683 pattern).
+        // ref_count == -1 is the immortal sentinel (CPython PEP 683 pattern).
         // String literals live in read-only .rodata; attempting to write would SIGSEGV.
         if (*header).ref_count == -1 {
             return;
@@ -697,61 +727,104 @@ pub extern "C" fn hulk_rt_retain(ptr: *mut std::ffi::c_void) {
 /// If the reference count reaches zero, the object is deallocated.
 #[no_mangle]
 pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
-    if ptr.is_null() || is_immortal_ptr(ptr)
-    // Retain is a no-op for immortal types.
-    {
+    if ptr.is_null() || is_immortal_ptr(ptr) {
         return;
     }
     unsafe {
         let header = ptr as *mut ObjHeader;
-        // WHY: ref_count == -1 is the immortal sentinel (CPython PEP 683 pattern).
-        // String literals live in read-only .rodata; attempting to write would SIGSEGV.
         if (*header).ref_count == -1 {
-            return;
+            return; // immortal sentinel
         }
         (*header).ref_count -= 1;
-        if (*header).ref_count == 0 {
-            match (*header).type_tag {
-                TAG_VECTOR => {
-                    let vec = ptr as *mut HulkVector;
-                    let data = (*vec).data;
-                    let len = (*vec).len as usize;
-                    let data_layout = Layout::array::<*mut std::ffi::c_void>(len).unwrap();
-                    dealloc(data as *mut u8, data_layout);
-                    let vec_layout = Layout::new::<HulkVector>();
-                    dealloc(vec as *mut u8, vec_layout);
-                }
-                TAG_STRING => {
-                    let s = ptr as *mut HulkString;
-                    let data = (*s).data;
-                    let len = (*s).len as usize;
+        if (*header).ref_count != 0 {
+            return;
+        }
+
+        // ref_count reached zero: unlink from alloc list first (O(1)),
+        // then dispatch to the type-specific destructor.
+        list_unlink(header);
+        ALLOC_BYTES = ALLOC_BYTES.saturating_sub(size_of_object(header));
+
+        match (*header).type_tag {
+            TAG_STRING => {
+                let s = ptr as *mut HulkString;
+                let len = (*s).len as usize;
+                if len > 0 && !(*s).data.is_null() {
                     let data_layout = Layout::array::<u8>(len).unwrap();
-                    dealloc(data, data_layout);
-                    let string_layout = Layout::new::<HulkString>();
-                    dealloc(s as *mut u8, string_layout);
+                    dealloc((*s).data, data_layout);
                 }
-                TAG_BOX => {
-                    let boxed = ptr as *mut HulkBox;
-                    let box_layout = Layout::new::<HulkBox>();
-                    dealloc(boxed as *mut u8, box_layout);
+                dealloc(s as *mut u8, Layout::new::<HulkString>());
+            }
+            TAG_VECTOR => {
+                let vec = ptr as *mut HulkVector;
+                let data = (*vec).data;
+                let len = (*vec).len as usize;
+                // Release each element before freeing the array.
+                for i in 0..len {
+                    let elem = *data.offset(i as isize);
+                    if !elem.is_null() {
+                        hulk_rt_release(elem);
+                    }
                 }
-                TAG_RANGE => {
-                    let range = ptr as *mut HulkRange;
-                    let range_layout = Layout::new::<HulkRange>();
-                    dealloc(range as *mut u8, range_layout);
+                let data_layout = Layout::array::<*mut std::ffi::c_void>(len).unwrap();
+                dealloc(data as *mut u8, data_layout);
+                dealloc(vec as *mut u8, Layout::new::<HulkVector>());
+            }
+            TAG_BOX => {
+                dealloc(ptr as *mut u8, Layout::new::<HulkBox>());
+            }
+            TAG_RANGE => {
+                dealloc(ptr as *mut u8, Layout::new::<HulkRange>());
+            }
+            TAG_DYN_VEC => {
+                // Release elements before dropping -> the Vec owns the slice.
+                let dyn_vec = ptr as *mut HulkDynamicVector;
+                for &elem in &(*dyn_vec).data {
+                    if !elem.is_null() {
+                        hulk_rt_release(elem);
+                    }
                 }
-                TAG_DYN_VEC => {
-                    // Reconstruct the Box and drop it, which frees the Vec and the struct.
-                    let _ = Box::from_raw(ptr as *mut HulkDynamicVector);
+                drop(Box::from_raw(dyn_vec));
+            }
+            TAG_OBJECT => {
+                // ── Read object size and pointer-field offsets from field map ──
+                // vtable layout: [field_map_ptr, parent_vtable_ptr, methods…]
+                // field_map layout: [size_bytes, offset_0, …, offset_N, -1]
+                let vtable = (*header).vtable as *const *const i64;
+                if !vtable.is_null() {
+                    let field_map = *vtable; // vtable[0] = field map
+                    if !field_map.is_null() {
+                        let obj_size = *field_map as usize; // field_map[0] = size
+
+                        // Release each pointer-typed child field.
+                        let mut i = 1isize; // start at index 1, skip size
+                        loop {
+                            let offset = *field_map.offset(i);
+                            if offset == -1 { break; }
+                            let field_addr =
+                                (ptr as *mut u8).offset(offset as isize)
+                                as *mut *mut std::ffi::c_void;
+                            let child = *field_addr;
+                            if !child.is_null() {
+                                hulk_rt_release(child);
+                            }
+                            i += 1;
+                        }
+
+                        // Free the object header + fields in one allocation.
+                        let layout = Layout::from_size_align(obj_size, 8)
+                            .unwrap_or_else(|_| Layout::from_size_align(BOX_HEADER_SIZE as usize, 8).unwrap());
+                        dealloc(ptr as *mut u8, layout);
+                    }
                 }
-                _ => {
-                    // Fallback for unknown tags (should not happen)
-                    if is_immortal_header(header) {
-                        return;
-                    } // Do not deallocate immortal objects
-                    let layout = Layout::from_size_align(32, 8).unwrap();
-                    dealloc(ptr as *mut u8, layout);
-                }
+            }
+            _ => {
+                // Unknown tag: object was allocated by hulk_rt_alloc but its
+                // tag was never set to a known value. Free with the minimum
+                // header size to avoid a leak; log in debug builds.
+                debug_assert!(false, "hulk_rt_release: unknown type_tag {}", (*header).type_tag);
+                let layout = Layout::from_size_align(BOX_HEADER_SIZE as usize, 8).unwrap();
+                dealloc(ptr as *mut u8, layout);
             }
         }
     }
@@ -1129,7 +1202,16 @@ pub extern "C" fn hulk_rt_rand() -> f64 {
 
 // ─── Downcast and match traps ──────────────────────────────────────────
 
-/// Checks if the object can be downcast to the target vtable type.
+/// Checks whether `obj` is an instance of the type identified by `target_vtable`.
+///
+/// Walks the ancestor chain by following vtable slot 1 (the parent vtable
+/// pointer) at each step until a match is found or the chain is exhausted
+/// (null parent = root type, no match).
+///
+/// vtable layout (canonical):
+///   [0] = GC field map ptr  — skip
+///   [1] = parent vtable ptr — follow for ancestor walk
+///   [2..] = method ptrs
 #[no_mangle]
 pub extern "C" fn hulk_rt_downcast_check(
     obj: *mut std::ffi::c_void,
@@ -1140,14 +1222,14 @@ pub extern "C" fn hulk_rt_downcast_check(
     }
     unsafe {
         let header = obj as *mut ObjHeader;
-        let mut vtable = (*header).vtable;
-        while !vtable.is_null() {
-            if vtable == target_vtable {
+        let mut current_vtable = (*header).vtable;
+        while !current_vtable.is_null() {
+            if current_vtable == target_vtable {
                 return true;
             }
-            // Read the parent pointer (first element of the vtable array)
-            let parent_ptr = vtable as *const *const ();
-            vtable = *parent_ptr;
+            // Read the parent pointer (vtable[1])
+            let parent_slot = (current_vtable as *const *const ()).offset(1);
+            current_vtable = *parent_slot as *const ();
         }
         false
     }
