@@ -23,17 +23,15 @@ use std::collections::HashSet;
 
 use hulk_ast::{AssignTarget, Expr, ExprKind, LambdaExpr, VectorExpr};
 use hulk_semantic::Type;
+use hulk_rt::ENV_SLOT_BYTES;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum};
 use inkwell::values::{BasicValueEnum, PointerValue};
 
 use super::lower_expr;
 use crate::error::CodegenError;
 use crate::lower::scope::ScopeStack;
-use crate::lower::utils::llvm_type;
+use crate::lower::utils::{llvm_type, is_heap_allocated_type};
 use crate::lower::LowerCtx;
-
-/// Bytes reserved per captured-variable slot in the environment struct.
-const ENV_SLOT_BYTES: u64 = 16;
 
 /// (name, outer alloca ptr, LLVM type, semantic type) for one captured variable.
 type Capture<'ctx> = (String, PointerValue<'ctx>, BasicTypeEnum<'ctx>, Type);
@@ -76,6 +74,33 @@ pub fn lower_lambda<'ctx>(
     let name = format!("lambda_{}", ctx.codegen.next_lambda_id());
     let lambda_fn = ctx.codegen.module.add_function(&name, fn_type, None);
 
+    // Build a field map for the GC: list of byte offsets (within the slots buffer)
+    // that contain a heap‑allocated pointer or another closure environment pointer.
+    let mut field_offsets: Vec<i64> = Vec::new();
+    for (i, (_, _, _, sem_ty)) in free_vars.iter().enumerate() {
+        let slot_offset = (i as i64) * ENV_SLOT_BYTES as i64;
+        if is_heap_allocated_type(sem_ty, ctx.registry) {
+            field_offsets.push(slot_offset);
+        } else if matches!(sem_ty, Type::Function { .. }) {
+            // Fat pointer: only the env_ptr (first field) is traced.
+            field_offsets.push(slot_offset);
+        }
+        // Number, Boolean, etc. – no pointers.
+    }
+    field_offsets.push(-1); // sentinel
+
+    let field_map_global = ctx.codegen.module.add_global(
+        ctx.codegen.context.i64_type().array_type(field_offsets.len() as u32),
+        None,
+        &format!("{}_env_map", name),
+    );
+    let const_offsets: Vec<_> = field_offsets
+        .iter()
+        .map(|&o| ctx.codegen.context.i64_type().const_int(o as u64, true))
+        .collect();
+    field_map_global.set_initializer(&ctx.codegen.context.i64_type().const_array(&const_offsets));
+    field_map_global.set_constant(true);
+
     // 2. Save the outer function's insertion point.
     let saved_bb = ctx.codegen.builder.get_insert_block();
 
@@ -83,36 +108,81 @@ pub fn lower_lambda<'ctx>(
     let env_ptr: PointerValue<'ctx> = if free_vars.is_empty() {
         ptr_type.const_null()
     } else {
-        let alloc_fn = ctx
+        // Declare and retrieve hulk_rt_env_new
+        let env_new_fn = ctx
             .codegen
             .functions
-            .get("hulk_rt_alloc")
+            .get("hulk_rt_env_new")
             .cloned()
             .ok_or_else(|| {
-                CodegenError::unsupported("hulk_rt_alloc not declared".to_string(), None)
+                CodegenError::unsupported("hulk_rt_env_new not declared".to_string(), None)
             })?;
-        let env_size = ctx
+
+        let slot_count = ctx
             .codegen
             .context
             .i64_type()
-            .const_int(free_vars.len() as u64 * ENV_SLOT_BYTES, false);
+            .const_int(free_vars.len() as u64, false);
+        let field_map_ptr = field_map_global.as_pointer_value();
+
         let env_alloc = ctx
             .codegen
             .builder
-            .build_call(alloc_fn, &[env_size.into()], "env_alloc")
+            .build_call(
+                env_new_fn,
+                &[slot_count.into(), field_map_ptr.into()],
+                "env_new",
+            )
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
 
+        // Now store captured values, retaining pointer‑typed captures.
         let i64_type = ctx.codegen.context.i64_type();
         let i8_type = ctx.codegen.context.i8_type();
-        for (i, (cap_name, cap_alloca, cap_llvm_ty, _)) in free_vars.iter().enumerate() {
+        for (i, (cap_name, cap_alloca, cap_llvm_ty, cap_sem_ty)) in free_vars.iter().enumerate() {
             let cap_val = ctx
                 .codegen
                 .builder
                 .build_load(*cap_llvm_ty, *cap_alloca, &format!("cap_{}", cap_name))
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+            // Retain the captured value if it is heap‑allocated
+            if is_heap_allocated_type(cap_sem_ty, ctx.registry) {
+                let retain_fn = ctx
+                    .codegen
+                    .functions
+                    .get("hulk_rt_retain")
+                    .cloned()
+                    .ok_or_else(|| {
+                        CodegenError::unsupported("hulk_rt_retain not declared".to_string(), None)
+                    })?;
+                ctx.codegen
+                    .builder
+                    .build_call(retain_fn, &[cap_val.into()], "cap_retain")
+                    .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            } else if matches!(cap_sem_ty, Type::Function { .. }) {
+                // Fat pointer: retain only the environment pointer (field 0)
+                let retain_fn = ctx
+                    .codegen
+                    .functions
+                    .get("hulk_rt_retain")
+                    .cloned()
+                    .ok_or_else(|| {
+                        CodegenError::unsupported("hulk_rt_retain not declared".to_string(), None)
+                    })?;
+                let env_ptr_from_cap = ctx
+                    .codegen
+                    .builder
+                    .build_extract_value(cap_val.into_struct_value(), 0, "cap_env_ptr")
+                    .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+                ctx.codegen
+                    .builder
+                    .build_call(retain_fn, &[env_ptr_from_cap.into()], "cap_env_retain")
+                    .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            }
+
             let byte_offset = i64_type.const_int(i as u64 * ENV_SLOT_BYTES, false);
             let slot_ptr = unsafe {
                 ctx.codegen

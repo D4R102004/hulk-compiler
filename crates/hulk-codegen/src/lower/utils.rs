@@ -172,7 +172,7 @@ pub fn resolve_attribute_with_offset(
 pub fn is_heap_allocated_type(ty: &Type, _registry: &TypeRegistry) -> bool {
     matches!(
         ty,
-        Type::String | Type::Object | Type::Vector(_) | Type::Iterable(_) | Type::Named(_)
+        Type::String | Type::Object | Type::Vector(_) | Type::Iterable(_) | Type::Named(_) | Type::Function { .. },
     )
 }
 
@@ -619,7 +619,7 @@ pub fn object_pointer_from_fat_ptr<'ctx>(
     val: BasicValueEnum<'ctx>,
     ty: &Type,
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-    if is_protocol_or_iterable(ty, ctx.registry) {
+    if is_protocol_or_iterable(ty, ctx.registry) || matches!(ty, Type::Function { .. }) {
         let struct_val = val.into_struct_value();
         let data_ptr = ctx
             .codegen

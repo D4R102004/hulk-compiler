@@ -21,12 +21,15 @@ pub const TAG_BOOLEAN: u8 = 5; // used inside HulkBox
 pub const TAG_DYN_VEC: u8 = 6; // used for dynamic vectors (comprehensions)
 pub const TAG_LITERAL_STRING: u8 = 7; // used for string literals (immutable, immortal)
 pub const TAG_OBJECT: u8 = 8; // used for object instances
+pub const TAG_ENV: u8 = 9; // closure environments
 pub const TAG_FREED: u8 = 0xFF; // sentinel: this header was already released
 
 /// Total number of header fields in the LLVM struct type.
 pub const HEADER_FIELD_COUNT: usize = 6;
 // The size of the header portion of a boxed object, in bytes.
 pub const BOX_HEADER_SIZE: u64 = (8 * (HEADER_FIELD_COUNT - 1)) as u64;
+/// Bytes reserved per captured-variable slot in the environment struct.
+pub const ENV_SLOT_BYTES: u64 = 16;
 
 // ─── Object header ─────────────────────────────────────────────────────
 #[repr(C)]
@@ -237,6 +240,25 @@ unsafe fn gc_mark_object(obj: *mut ObjHeader) {
                 i += 1;
             }
         }
+        TAG_ENV => {
+            let env = obj as *mut HulkEnv;
+            let field_map = (*obj).vtable as *const i64;
+            if field_map.is_null() || (*env).data.is_null() {
+                return;
+            }
+            let mut i = 0isize;
+            loop {
+                let offset = *field_map.offset(i);
+                if offset == -1 {
+                    break; // sentinel: no more pointer slots
+                }
+                let field_addr =
+                    (*env).data.offset(offset as isize)
+                    as *mut *mut ObjHeader;
+                gc_mark_object(*field_addr);
+                i += 1;
+            }
+        }
         _ => {
             // Unknown tag: conservatively do not follow any fields.
             // The object will survive if it is in the allocation list
@@ -293,6 +315,7 @@ unsafe fn size_of_object(obj: *mut ObjHeader) -> usize {
             if field_map.is_null() { return BOX_HEADER_SIZE as usize; }
             *field_map as usize // field_map[0] = size
         }
+        TAG_ENV => size_of::<HulkEnv>(),
         _ => BOX_HEADER_SIZE as usize, // conservative fallback
     }
 }
@@ -353,6 +376,16 @@ unsafe fn gc_free_object(obj: *mut ObjHeader) {
             // Fallback: vtable or field map missing; use minimum header size.
             dealloc(obj as *mut u8, Layout::from_size_align(BOX_HEADER_SIZE as usize, 8).unwrap());
         }
+        TAG_ENV => {
+            let env = obj as *mut HulkEnv;
+            if !(*env).data.is_null() {
+                let byte_len = (*env).slot_count as usize * ENV_SLOT_BYTES as usize;
+                if byte_len > 0 {
+                    dealloc((*env).data, Layout::array::<u8>(byte_len).unwrap());
+                }
+            }
+            dealloc(env as *mut u8, Layout::new::<HulkEnv>());
+        }
         _ => {
             dealloc(obj as *mut u8, Layout::from_size_align(BOX_HEADER_SIZE as usize, 8).unwrap());
         }
@@ -399,6 +432,16 @@ pub struct HulkRange {
     pub min: f64,
     pub max: f64,
     pub current: f64,
+}
+
+// ─── Closure environment ───────────────────────────────────────────────
+
+/// Holds the values captured by a closure at creation time.
+#[repr(C)]
+pub struct HulkEnv {
+    pub header: ObjHeader,
+    pub slot_count: i64,
+    pub data: *mut u8,
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -831,6 +874,32 @@ pub extern "C" fn hulk_rt_release(ptr: *mut std::ffi::c_void) {
                     }
                 }
             }
+            TAG_ENV => {
+                let env = ptr as *mut HulkEnv;
+                let field_map = (*header).vtable as *const i64;
+                if !field_map.is_null() && !(*env).data.is_null() {
+                    let mut i = 0isize;
+                    loop {
+                        let offset = *field_map.offset(i);
+                        if offset == -1 {
+                            break;
+                        }
+                        let slot = (*env).data.offset(offset as isize) as *mut *mut std::ffi::c_void;
+                        if !(*slot).is_null() {
+                            hulk_rt_release(*slot);
+                        }
+                        i += 1;
+                    }
+                }
+                if !(*env).data.is_null() {
+                    let byte_len = (*env).slot_count as usize * ENV_SLOT_BYTES as usize;
+                    if byte_len > 0 {
+                        ALLOC_BYTES = ALLOC_BYTES.saturating_sub(byte_len);
+                        dealloc((*env).data, Layout::array::<u8>(byte_len).unwrap());
+                    }
+                }
+                dealloc(env as *mut u8, Layout::new::<HulkEnv>());
+            }
             _ => {
                 // Unknown tag: object was allocated by hulk_rt_alloc but its
                 // tag was never set to a known value. Free with the minimum
@@ -1149,6 +1218,55 @@ pub unsafe extern "C" fn hulk_rt_range_current(rng: *mut HulkRange) -> f64 {
         return 0.0;
     }
     unsafe { (*rng).current }
+}
+
+// ─── Closure Environments ──────────────────────────────────────────────────
+
+/// Allocates a closure environment with `slot_count` capture slots of
+/// `ENV_SLOT_BYTES` each, tagged with `field_map` for GC tracing (see
+/// `HulkEnv`). Returns a fully-initialised, ref_count = 1 object.
+#[no_mangle]
+pub extern "C" fn hulk_rt_env_new(
+    slot_count: i64,
+    field_map: *const i64,
+) -> *mut std::ffi::c_void {
+    if slot_count < 0 {
+        return ptr::null_mut();
+    }
+    let struct_size = std::mem::size_of::<HulkEnv>() as i64;
+    let env_ptr = hulk_rt_alloc(struct_size) as *mut HulkEnv;
+    if env_ptr.is_null() {
+        return ptr::null_mut();
+    }
+    unsafe {
+        (*env_ptr).header.type_tag = TAG_ENV;
+        (*env_ptr).header.ref_count = 1;
+        (*env_ptr).header.vtable = field_map as *const ();
+        (*env_ptr).slot_count = slot_count;
+
+        let byte_len = slot_count as usize * ENV_SLOT_BYTES as usize;
+        if byte_len == 0 {
+            (*env_ptr).data = std::ptr::NonNull::dangling().as_ptr();
+        } else {
+            let layout = match Layout::array::<u8>(byte_len) {
+                Ok(l) => l,
+                Err(_) => {
+                    list_unlink(env_ptr as *mut ObjHeader);
+                    dealloc(env_ptr as *mut u8, Layout::new::<HulkEnv>());
+                    return ptr::null_mut();
+                }
+            };
+            let data_ptr = alloc_zeroed(layout);
+            if data_ptr.is_null() {
+                list_unlink(env_ptr as *mut ObjHeader);
+                dealloc(env_ptr as *mut u8, Layout::new::<HulkEnv>());
+                return ptr::null_mut();
+            }
+            (*env_ptr).data = data_ptr;
+            ALLOC_BYTES = ALLOC_BYTES.saturating_add(byte_len);
+        }
+    }
+    env_ptr as *mut std::ffi::c_void
 }
 
 // ─── Math builtin functions ──────────────────────────────────────────────

@@ -229,6 +229,19 @@ pub fn declare_range_current<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx
         .add_function("hulk_rt_range_current", fn_type, None)
 }
 
+// ─── Closure environments ──────────────────────────────────────────────────
+
+/// Declares `hulk_rt_env_new(slot_count: i64, field_map: ptr) -> ptr`.
+pub fn declare_env_new<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(f) = ctx.module.get_function("hulk_rt_env_new") {
+        return f;
+    }
+    let i64_type = ctx.context.i64_type();
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let fn_type = ptr_type.fn_type(&[i64_type.into(), ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_env_new", fn_type, None)
+} 
+
 // ─── Match fail trap ──────────────────────────────────────────────────────
 
 /// Declares `hulk_rt_match_fail() -> !` (noreturn).
@@ -539,6 +552,11 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
         .insert("Range::current".to_string(), range_current);
     ctx.functions
         .insert("hulk_rt_range_current".to_string(), range_current);
+
+    // ─── Closure environments ─────────────────────────────────────────────────────
+
+    let env_new = declare_env_new(ctx);
+    ctx.functions.insert("hulk_rt_env_new".to_string(), env_new);
 
     // ─── Print ─────────────────────────────────────────────────────────────
 
