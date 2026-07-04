@@ -3,8 +3,8 @@
 use inkwell::FloatPredicate;
 use inkwell::values::BasicValueEnum;
 use hulk_ast::{TypeRef, SourceSpan};
-use hulk_rt::{TAG_BOOLEAN, TAG_BOX, TAG_NUMBER};
 use hulk_semantic::{Type, TypeRegistry};
+pub use hulk_rt::{TAG_BOOLEAN, TAG_BOX, TAG_NUMBER, HEADER_FIELD_COUNT, BOX_HEADER_SIZE};
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
@@ -26,10 +26,6 @@ pub mod field_indices {
     pub const VTABLE: u32 = 5;
 }
 
-/// Total number of header fields in the LLVM struct type.
-pub const HEADER_FIELD_COUNT: usize = 6;
-// The size of the header portion of a boxed object, in bytes.
-const BOX_HEADER_SIZE: u64 = (8 * (HEADER_FIELD_COUNT - 1)) as u64;
 // Header (40) + Original_tag (1) + Padding (7) + Payload (8)
 const BOX_SIZE: u64 = BOX_HEADER_SIZE + 1 + 7 + 8;
 // The offset of the payload portion of a boxed object, in bytes.
