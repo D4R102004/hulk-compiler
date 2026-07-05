@@ -6,7 +6,8 @@ use hulk_semantic::Type;
 use super::lower_expr;
 use crate::error::CodegenError;
 use crate::lower::utils::{
-    field_indices, is_heap_allocated_type, llvm_type, resolve_attribute_with_offset,
+    field_indices, is_heap_allocated_type, llvm_type, 
+    resolve_attribute_with_offset, object_pointer_from_fat_ptr,
 };
 use crate::lower::LowerCtx;
 
@@ -136,9 +137,11 @@ pub fn lower_member_assign<'ctx>(
             .get("hulk_rt_release")
             .cloned()
             .ok_or_else(|| CodegenError::unsupported("hulk_rt_release not declared", Some(span)))?;
+        // Extract old value pointer if it's a fat pointer
+        let old_ptr = object_pointer_from_fat_ptr(ctx, old_val, &attr_type)?;
         ctx.codegen
             .builder
-            .build_call(release_fn, &[old_val.into()], "release_old_attr")
+            .build_call(release_fn, &[old_ptr.into()], "release_old_attr")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
         let retain_fn = ctx
@@ -147,9 +150,11 @@ pub fn lower_member_assign<'ctx>(
             .get("hulk_rt_retain")
             .cloned()
             .ok_or_else(|| CodegenError::unsupported("hulk_rt_retain not declared", Some(span)))?;
+        // Extract new value pointer if it's a fat pointer
+        let new_ptr = object_pointer_from_fat_ptr(ctx, val, &attr_type)?;
         ctx.codegen
             .builder
-            .build_call(retain_fn, &[val.into()], "retain_new_attr")
+            .build_call(retain_fn, &[new_ptr.into()], "retain_new_attr")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     }
 

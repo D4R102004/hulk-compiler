@@ -6,7 +6,7 @@ use hulk_semantic::{Type, TypeRegistry};
 
 use super::lower_expr;
 use crate::error::CodegenError;
-use crate::lower::utils::{field_indices, ensure_boxed};
+use crate::lower::utils::{field_indices, ensure_boxed, is_heap_allocated_type, object_pointer_from_fat_ptr};
 use crate::lower::LowerCtx;
 
 /// Lowers a `new T(args)` expression.
@@ -58,7 +58,7 @@ pub fn lower_new<'ctx>(
         )
     };
 
-    // Now we have all needed data as owned values; we can safely mutably borrow ctx.
+    // Now that all needed data is saved owned valuescan ctx can be safely mutably borrowed.
 
     // --- 1. Allocate memory -------------------------------------------------
 
@@ -237,10 +237,12 @@ pub fn lower_new<'ctx>(
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
         // 7. If the attribute is heap‑allocated, retain the stored value.
-        if crate::lower::utils::is_heap_allocated_type(attr_ty, ctx.registry) {
+        if is_heap_allocated_type(attr_ty, ctx.registry) {
+            // Extract object pointer if it's a fat pointer
+            let obj_ptr = object_pointer_from_fat_ptr(ctx, val, attr_ty)?;
             ctx.codegen
                 .builder
-                .build_call(retain_fn, &[val.into()], "retain_attr")
+                .build_call(retain_fn, &[obj_ptr.into()], "retain_attr")
                 .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
         }
     }

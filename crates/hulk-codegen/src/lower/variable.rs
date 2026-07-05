@@ -5,7 +5,7 @@ use inkwell::values::BasicValueEnum;
 use super::lower_expr;
 use crate::error::CodegenError;
 use crate::lower::builtins::lookup_constant;
-use crate::lower::utils::{convert_to_protocol, is_heap_allocated_type, ensure_boxed};
+use crate::lower::utils::{convert_to_protocol, is_heap_allocated_type, ensure_boxed, object_pointer_from_fat_ptr};
 use crate::lower::LowerCtx;
 
 /// Lowers a variable reference.
@@ -107,9 +107,11 @@ pub fn lower_assign_variable<'ctx>(
             .get("hulk_rt_release")
             .cloned()
             .ok_or_else(|| CodegenError::unsupported("hulk_rt_release not declared", Some(span)))?;
+        // Extract old value pointer if it's a fat pointer
+        let old_ptr = object_pointer_from_fat_ptr(ctx, old_val, &target_ty)?;
         ctx.codegen
             .builder
-            .build_call(release_fn, &[old_val.into()], "release_old_var")
+            .build_call(release_fn, &[old_ptr.into()], "release_old_var")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
         let retain_fn = ctx
@@ -118,9 +120,11 @@ pub fn lower_assign_variable<'ctx>(
             .get("hulk_rt_retain")
             .cloned()
             .ok_or_else(|| CodegenError::unsupported("hulk_rt_retain not declared", Some(span)))?;
+        // Extract stored value pointer if it's a fat pointer
+        let new_ptr = object_pointer_from_fat_ptr(ctx, stored_val, &target_ty)?;
         ctx.codegen
             .builder
-            .build_call(retain_fn, &[stored_val.into()], "retain_new_var")
+            .build_call(retain_fn, &[new_ptr.into()], "retain_new_var")
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     }
 

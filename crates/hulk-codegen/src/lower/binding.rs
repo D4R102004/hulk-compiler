@@ -22,7 +22,7 @@ use crate::error::CodegenError;
 use crate::lower::utils::{convert_to_protocol, is_protocol_or_iterable, resolve_type_ref_to_type};
 use crate::lower::LowerCtx;
 use crate::lower::{index, member, variable};
-use crate::lower::utils::{ensure_boxed, is_heap_allocated_type};
+use crate::lower::utils::{ensure_boxed, is_heap_allocated_type, object_pointer_from_fat_ptr};
 
 /// Lowers a `let` expression with one or more bindings.
 ///
@@ -86,8 +86,10 @@ pub fn lower_let<'ctx>(
                 let retain_fn = ctx.codegen.functions.get("hulk_rt_retain")
                     .cloned()
                     .ok_or_else(|| CodegenError::unsupported("hulk_rt_retain not declared", Some(binding.initializer.span)))?;
+                // Extract object pointer if it's a fat pointer
+                let obj_ptr = object_pointer_from_fat_ptr(ctx, init_val, &declared_ty)?;
                 ctx.codegen.builder
-                    .build_call(retain_fn, &[init_val.into()], "retain_let")
+                    .build_call(retain_fn, &[obj_ptr.into()], "retain_let")
                     .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
             }
         }
