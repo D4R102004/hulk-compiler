@@ -20,6 +20,7 @@ pub mod error;
 pub mod itables;
 pub mod layout;
 pub mod lower;
+pub mod optimize;
 pub mod options;
 pub mod runtime_decls;
 
@@ -72,8 +73,7 @@ pub fn build_smoke_module(context: &Context) -> Result<CodegenCtx<'_>, CodegenEr
     Ok(ctx)
 }
 
-/// Writes `ctx`'s module to `path` as human-readable LLVM IR. A development
-/// aid only — never part of the required build output.
+/// Writes `ctx`'s module to `path` as human-readable LLVM IR.
 pub fn emit_llvm_ir_to_file(ctx: &CodegenCtx, path: &Path) -> Result<(), CodegenError> {
     ctx.module
         .print_to_file(path)
@@ -149,11 +149,29 @@ pub fn compile(
         .build_return(Some(&i32_type.const_int(0, false)))
         .map_err(|e| error::CodegenError::llvm_verification(e.to_string()))?;
 
-    // Verify module.
+    // Verify pre-optimization module.
     codegen
         .module
         .verify()
-        .map_err(|e| error::CodegenError::llvm_verification(e.to_string()))?;
+        .map_err(|e| error::CodegenError::llvm_verification(
+            format!("pre-optimization: {}", e.to_string())
+        ))?;
+
+    // Optimize IR code
+    optimize::optimize(&codegen, opts.opt_level)?;
+    
+    // Verify post-optimization module.
+    codegen
+        .module
+        .verify()
+        .map_err(|e| error::CodegenError::llvm_verification(
+            format!("post-optimization: {}", e.to_string())
+        ))?;
+
+    // Optional IR dump
+    if let Some(ll_path) = &opts.emit_llvm_path {
+        emit_llvm_ir_to_file(&codegen, ll_path)?;
+    }
 
     // Emit object file.
     let obj_path = opts.output_path.with_extension("o");
