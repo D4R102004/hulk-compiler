@@ -11,9 +11,9 @@ use inkwell::module::Module;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
-use inkwell::OptimizationLevel;
 
 use crate::error::CodegenError;
+use crate::options::OptLevel;
 
 const TARGET_TRIPLE: &str = "x86_64-unknown-linux-gnu";
 
@@ -24,8 +24,12 @@ pub fn init_all_targets() -> Result<(), CodegenError> {
     Ok(())
 }
 
-/// Builds a `TargetMachine` for the Linux x86_64 target.
-pub fn linux_x86_64_target_machine() -> Result<TargetMachine, CodegenError> {
+/// Builds a `TargetMachine` for the Linux x86_64 target at the requested
+/// optimization level.
+///
+/// The optimization level affects machine-code quality (instruction selection,
+/// register allocation, scheduling) independently of the IR-level passes.
+pub fn linux_x86_64_target_machine(opt: OptLevel) -> Result<TargetMachine, CodegenError> {
     let triple = TargetTriple::create(TARGET_TRIPLE);
     let target = Target::from_triple(&triple).map_err(|e| {
         CodegenError::target_emission(format!("could not find Linux x86_64 target: {e}"))
@@ -36,7 +40,7 @@ pub fn linux_x86_64_target_machine() -> Result<TargetMachine, CodegenError> {
             &triple,
             "haswell",
             "+cmov",
-            OptimizationLevel::None,
+            opt.to_inkwell(),
             RelocMode::PIC,
             CodeModel::Small,
         )

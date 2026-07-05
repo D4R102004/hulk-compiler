@@ -48,7 +48,7 @@ fn declare_smoke_runtime_fn<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx>
 /// the smoke example and unit tests can exercise it without needing a real
 /// `VerifiedProgram`.
 pub fn build_smoke_module(context: &Context) -> Result<CodegenCtx<'_>, CodegenError> {
-    let ctx = CodegenCtx::new(context, "hulk_smoke")?;
+    let ctx = CodegenCtx::new(context, "hulk_smoke", OptLevel::None)?;
 
     let noop = declare_smoke_runtime_fn(&ctx);
 
@@ -85,7 +85,7 @@ pub fn compile(
     opts: &options::CodegenOptions,
 ) -> Result<(), error::CodegenError> {
     let context = inkwell::context::Context::create();
-    let mut codegen = context::CodegenCtx::new(&context, "hulk_main")?;
+    let mut codegen = context::CodegenCtx::new(&context, "hulk_main", opts.opt_level)?;
 
     // Declare runtime functions
     runtime_decls::declare_all(&mut codegen);

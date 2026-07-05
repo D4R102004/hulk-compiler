@@ -327,7 +327,7 @@ pub fn lower_expr<'ctx>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{itables, layout, lower, runtime_decls};
+    use crate::{OptLevel, itables, layout, lower, runtime_decls};
     use hulk_lexer::Lexer;
     use hulk_parser::parse;
     use hulk_semantic::analyze;
@@ -500,7 +500,7 @@ mod tests {
     /// Helper: lower an expression and return the LLVM IR string.
     fn lower_expr_to_ir(expr: Expr<Type>) -> String {
         let context = Context::create();
-        let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
+        let mut codegen = CodegenCtx::new(&context, "test", OptLevel::None).expect("codegen ctx");
         let i32_type = context.i32_type();
         let main_fn = codegen
             .module
@@ -569,7 +569,7 @@ mod tests {
 
         // 3. Set up LLVM context and module.
         let context = Context::create();
-        let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
+        let mut codegen = CodegenCtx::new(&context, "test", OptLevel::None).expect("codegen ctx");
 
         // 4. Declare runtime functions needed for the lowered code.
         runtime_decls::declare_all(&mut codegen);
@@ -955,7 +955,7 @@ mod tests {
     fn test_call_function_no_args() {
         // Declare a function f(): Number that returns 42.
         let context = Context::create();
-        let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
+        let mut codegen = CodegenCtx::new(&context, "test", OptLevel::None).expect("codegen ctx");
         let i32_type = context.i32_type();
         let main_fn = codegen
             .module
@@ -1027,7 +1027,7 @@ mod tests {
     fn test_call_function_with_args() {
         // Declare a function add(x: Number, y: Number): Number that returns x + y.
         let context = Context::create();
-        let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
+        let mut codegen = CodegenCtx::new(&context, "test", OptLevel::None).expect("codegen ctx");
         let i32_type = context.i32_type();
         let main_fn = codegen
             .module

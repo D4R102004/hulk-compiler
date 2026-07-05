@@ -10,6 +10,7 @@ use inkwell::values::{FunctionValue, GlobalValue};
 
 use crate::error::CodegenError;
 use crate::layout::TypeLayout;
+use crate::options::OptLevel;
 
 /// Everything a lowering function needs: the LLVM context that owns every
 /// type and value it creates, the module being built, the instruction
@@ -39,11 +40,21 @@ pub struct CodegenCtx<'ctx> {
 }
 
 impl<'ctx> CodegenCtx<'ctx> {
-    pub fn new(context: &'ctx Context, module_name: &str) -> Result<Self, CodegenError> {
+    /// Creates a new codegen context targeting Linux x86_64.
+    ///
+    /// `opt` controls both the `TargetMachine` backend optimisation level and
+    /// is stored for later use by `compile()` when invoking the IR pass
+    /// pipeline. Pass `OptLevel::None` for smoke tests and unit tests that
+    /// do not run the optimizer.
+    pub fn new(
+        context: &'ctx Context,
+        module_name: &str,
+        opt: OptLevel,
+    ) -> Result<Self, CodegenError> {
         let module = context.create_module(module_name);
         let builder = context.create_builder();
         crate::emit::init_all_targets()?;
-        let target_machine = crate::emit::linux_x86_64_target_machine()?;
+        let target_machine = crate::emit::linux_x86_64_target_machine(opt)?;
         module.set_triple(&target_machine.get_triple());
         module.set_data_layout(&target_machine.get_target_data().get_data_layout());
         Ok(Self {
