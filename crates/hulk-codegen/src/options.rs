@@ -1,6 +1,7 @@
 //! Compilation options threaded through `hulk_codegen::compile`.
 
 use std::path::PathBuf;
+use inkwell::OptimizationLevel as InkwellOpt;
 
 /// Optimization level requested for the generated module.
 ///
@@ -10,9 +11,37 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OptLevel {
     None,
+    Less,
     #[default]
     Default,
     Aggressive,
+}
+
+impl OptLevel {
+    /// Converts to the inkwell `OptimizationLevel` used by the LLVM backend
+    /// (target machine instruction selection) and by `PassBuilderOptions`.
+    pub fn to_inkwell(self) -> InkwellOpt {
+        match self {
+            // OptLevel::None maps to inkwell's None (no backend optimizations).
+            OptLevel::None => InkwellOpt::None,
+            OptLevel::Less => InkwellOpt::Less,
+            OptLevel::Default => InkwellOpt::Default,
+            OptLevel::Aggressive => InkwellOpt::Aggressive,
+        }
+    }
+
+    /// Returns the `run_passes` pipeline string for the new pass manager.
+    ///
+    /// `None` returns `None` (skip `run_passes` entirely), rather than an empty 
+    /// string (which would still invoke the pass manager machinery with no passes).
+    pub fn pipeline_str(self) -> Option<&'static str> {
+        match self {
+            OptLevel::None => None,
+            OptLevel::Less => Some("default<O1>"),
+            OptLevel::Default => Some("default<O2>"),
+            OptLevel::Aggressive => Some("default<O3>"),
+        }
+    }
 }
 
 /// Options controlling a single `compile()` invocation.
