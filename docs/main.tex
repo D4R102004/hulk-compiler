@@ -160,7 +160,7 @@
     {\large
         Facultad de Matemática y Computación\\
         Universidad de La Habana\\[0.5em]
-        Junio de 2026
+        \today
     }
 
     \vspace{1.5cm}
@@ -345,13 +345,13 @@ sistema de tipos. La Sección~\ref{sec:extensiones} presenta en detalle las tres
 extensiones propuestas, con su sintaxis formal, reglas de tipado, semántica
 dinámica y comparativas con otros lenguajes. La Sección~\ref{sec:arquitectura}
 analiza la arquitectura completa del compilador y justifica las decisiones de
-diseño más relevantes. La Sección~\ref{sec:pruebas} documenta la metodología de
-pruebas y los casos más significativos. La Sección~\ref{sec:discusion} discute
-las dificultades encontradas y las alternativas descartadas. La
-Sección~\ref{sec:conclusiones} presenta las conclusiones del trabajo, y la
-Sección~\ref{sec:limitaciones} resume las limitaciones identificadas en el
-estado actual del compilador junto con recomendaciones priorizadas de trabajo
-futuro.
+diseño más relevantes. La Sección~\ref{sec:pruebas}
+documenta la metodología de pruebas y los casos más significativos. La
+Sección~\ref{sec:discusion} discute las dificultades encontradas y las
+alternativas descartadas. La Sección~\ref{sec:conclusiones} presenta las
+conclusiones del trabajo, y la Sección~\ref{sec:limitaciones} resume las
+limitaciones identificadas en el estado actual del compilador junto con
+recomendaciones priorizadas de trabajo futuro.
 
 \newpage
 
@@ -1095,6 +1095,40 @@ informaci\'{o}n de posici\'{o}n (\texttt{SourceSpan}). Algunas decisiones  de di
 \end{itemize}
 Los \texttt{tokens} reconocidos fueron presentados previamente en el Cuadro~\ref{tab:tokens} de la Sección~\ref{sec:hulk}.
 
+\subsubsection{Recuperación de errores léxicos y modo de operación continua}
+
+El lexer implementa una estrategia de recuperación de errores de
+\textit{modo de pánico simplificado}: ante un carácter no reconocido, emite un
+token de error \texttt{UnexpectedChar} con el \texttt{SourceSpan} exacto y
+avanza al carácter siguiente, continuando el análisis en lugar de abortar.
+Esta decisión sigue el principio de diagnóstico múltiple descrito en la
+literatura clásica de compiladores~\cite{aho1986}: un compilador resulta
+significativamente más útil cuando expone al programador la totalidad de errores
+presentes en el programa en una sola invocación, en lugar de detenerse en el
+primero. Los tres tipos de error léxico que el compilador puede producir son:
+
+\begin{itemize}
+  \item \textbf{\texttt{UnterminatedString}}: una cadena literal abierta con
+        \texttt{"} pero no cerrada antes del fin de línea o de archivo. El lexer
+        consume hasta el siguiente salto de línea y emite el error con la posición
+        de apertura, de modo que el parser puede interpretar el siguiente token
+        como si la cadena hubiera terminado.
+  \item \textbf{\texttt{UnexpectedChar}}: cualquier carácter que no pertenece al
+        alfabeto del lenguaje (e.g.\ \texttt{\#}, \texttt{\$}, \texttt{\textbackslash}).
+        Se emite un token de error de un solo carácter y el análisis léxico
+        avanza incondicionalmente.
+  \item \textbf{\texttt{InvalidEscape}}: una secuencia de escape desconocida
+        dentro de una cadena (e.g.\ \texttt{\textbackslash{}q}). La secuencia de
+        dos caracteres se consume y el análisis de la cadena continúa, evitando
+        que el carácter siguiente al escape se interprete erróneamente como el
+        delimitador de cierre.
+\end{itemize}
+
+En todos los casos, el \texttt{SourceSpan} incluido en el token de error
+contiene el número de línea, la columna de inicio y la longitud del fragmento
+problemático, información que \texttt{hulk-cli} usa para formatear diagnósticos
+con subrayado de la posición exacta en el código fuente.
+
 \subsection{El analizador sint\'{a}ctico LL(1)}
 
 El parser es un analizador descendente recursivo LL(1) implementado
@@ -1132,6 +1166,38 @@ Los puntos t\'{e}cnicos m\'{a}s importantes de la gram\'{a}tica son:
           lo promueve a \texttt{ExprKind::BaseRef} solo como callee de llamada.
 \end{enumerate}
 
+\subsubsection{Calidad de mensajes de error y extensibilidad gramatical}
+
+Una ventaja práctica del parser recursivo descendente escrito a mano es que, en
+cada punto de error, el contexto de análisis es explícito en la pila de llamadas
+de Rust. Esto permite mensajes como \textit{``se esperaba \texttt{in} tras la
+variable del \texttt{for}''} en lugar del genérico \textit{``error de sintaxis''}
+que producen los parsers tabulares LR cuando el estado de la pila es opaco para
+el usuario. La totalidad de las funciones \texttt{parse\_*} devuelven
+\texttt{Result<Expr, ParseError>}, donde \texttt{ParseError} contiene el
+\texttt{SourceSpan} del token inesperado y una descripción del contexto
+sintáctico en el que se encontraba el parser.
+
+La extensibilidad de la gramática también se ve favorecida por esta arquitectura.
+La adición de la expresión \texttt{match} (Sección~\ref{sec:extensiones}), por
+ejemplo, requirió únicamente añadir la rama \texttt{TokenKind::Match} al
+\texttt{match} de \texttt{parse\_primary}, implementar
+\texttt{finish\_match\_expression} y \texttt{parse\_pattern} como nuevos métodos,
+y añadir los nodos correspondientes al AST. No se modificó ninguna tabla de
+transiciones ni se regeneró ningún parser: el cambio es puramente aditivo y
+localizado, lo que ilustra la característica de extensibilidad abierta
+en el frente de nuevas formas de expresión primaria que tiene este tipo de
+diseño~\cite{aho1986}.
+
+La única contraparte de este enfoque frente a los generadores automáticos es que
+la propiedad LL(1) se verificó por inspección y mediante la suite de pruebas, no
+mediante una demostración formal con tablas FIRST/FOLLOW. En la práctica, los
+conflictos de anticipación detectados durante el desarrollo --el operador
+\texttt{|} compartido entre disyunción y separador de comprensiones, y el
+prefijo común \texttt{id} entre método y atributo en \texttt{TypeMember}--
+se resolvieron mediante las factorizaciones documentadas en el
+Apéndice~\ref{sec:apendice-gramatica}.
+
 \subsection{El analizador sem\'{a}ntico en cinco pasadas}
 
 El an\'{a}lisis sem\'{a}ntico se organiza en cinco pasadas ordenadas, implementando el
@@ -1164,6 +1230,50 @@ La separaci\'{o}n entre \texttt{infer} (pasada 2) y \texttt{check} (pasada 3)
 simplifica el c\'{o}digo: \texttt{infer} solo asigna tipos (puede producir
 \texttt{Type::Unknown}), mientras que \texttt{check} opera sobre el \'{a}rbol ya
 tipado y asume que todos los tipos est\'{a}n resueltos.
+
+\subsubsection{Inferencia bidireccional y propagación de \texttt{Type::Unknown}}
+
+La pasada \texttt{infer} implementa inferencia de tipos bidireccional~\cite{pierce2002}: 
+combina síntesis (abajo-arriba, donde el tipo de una expresión se deduce de sus subexpresiones) 
+con verificación (arriba-abajo, donde el tipo esperado en una posición --el tipo de
+empuje-- se propaga hacia las subexpresiones para refinar la inferencia). El caso más 
+ilustrativo es la asignación de una \textit{lambda} a una variable anotada:
+
+\begin{lstlisting}[caption={Inferencia bidireccional en asignación de lambda},
+                   label=lst:bidir-infer]
+let f: (Number) -> Number = function(x: Number): Number -> x + 1;
+\end{lstlisting}
+
+El tipo de empuje \texttt{(Number) -> Number}, procedente de la anotación de
+\texttt{f}, se propaga hacia la \textit{lambda} para verificar que su tipo sintetizado
+es compatible antes de anotarla definitivamente. Esta interacción hace que la
+inferencia converja sin necesidad de unificación global~\cite{milner1978}, lo que 
+simplifica la implementación a costa de requerir anotaciones explícitas en algunos 
+puntos de entrada no inferibles localmente (principalmente, parámetros de funciones globales).
+
+Cuando una expresión no puede tipificarse en una pasada --por ejemplo, cuando
+un método llama a otro cuyo tipo de retorno aún no se ha inferido-- la pasada
+\texttt{infer} produce \texttt{Type::Unknown} en el nodo correspondiente. La
+pasada \texttt{check} posterior trata cualquier \texttt{Unknown} residual como
+un error de tipo no resuelto y reporta un diagnóstico preciso. Esta
+disciplina garantiza que \texttt{hulk-codegen} nunca reciba un árbol tipado
+con incógnitas: la interfaz \texttt{VerifiedProgram} que separa el frontend del
+backend es, en efecto, una prueba estática de ausencia de \texttt{Unknown}.
+
+\subsubsection{Cómputo del ancestro común más bajo}
+
+Varias construcciones del lenguaje requieren calcular el tipo de resultado de
+ramas alternativas: los brazos de \texttt{if}/\texttt{elif}/\texttt{else}, los
+casos de \texttt{match} y los elementos de un literal de vector deben tener un
+tipo común. En todos estos contextos, el analizador semántico calcula el
+ancestro común más bajo (LCA, \textit{Lowest Common Ancestor}) de los tipos 
+involucrados en la jerarquía nominal de HULK. El LCA se resuelve en la pasada 
+\texttt{hierarchy} --que ya construyó el árbol de herencia completo con intervalos 
+DFS para comprobación de tipo en O(1)-- y su resultado se usa en \texttt{infer} 
+para anotar el nodo contenedor con el tipo más específico que cubre todas las 
+alternativas. Si los tipos son incompatibles (no tienen LCA distinto de \texttt{Object}), 
+el sistema puede producir \texttt{Type::Object} como fallback conservador o un error de 
+tipo si la posición no admite \texttt{Object} como tipo válido.
 
 \subsection{El generador de c\'{o}digo LLVM}
 
@@ -1200,7 +1310,8 @@ complicaciones que introduce en esa misma especificación la herencia múltiple
 (tablas virtuales secundarias, ajuste de \texttt{this}); como HULK no admite
 herencia múltiple, se obtiene la forma más simple de ese modelo de manera
 directa. El \texttt{vtable} es un array de punteros a funciones en orden estable
-(padre-antes-hijo, orden de declaraci\'{o}n). La llamada virtual consiste en cargar el puntero al vtable, indexar por el slot del m\'{e}todo luego llamarlo indirectamente.
+(padre-antes-hijo, orden de declaraci\'{o}n). La llamada virtual consiste en cargar 
+el puntero al vtable, indexar por el slot del m\'{e}todo luego llamarlo indirectamente.
 Cuando el receptor es de un tipo sellado (\texttt{Number}, \texttt{String},
 \texttt{Boolean}, \texttt{Vector}) o de un tipo de usuario sin subtipos
 observados en la unidad de compilación, esta llamada indirecta se sustituye por
@@ -1236,50 +1347,224 @@ de búsqueda en tiempo de ejecución, es la opción disponible estrictamente
 superior, sin pagar el costo de indirección que sí necesitan Go o Java por
 razones ajenas al propio HULK (carga dinámica, compilación separada).
 
-\subsubsection{Gesti\'{o}n de memoria}
+\subsubsection{Gestión de memoria}
 
 HULK no impide construir estructuras autorreferenciales, de modo que un
 esquema de conteo de referencias puro dejaría sin liberar, de forma permanente,
-cualquier ciclo que el programa construya. El dise\~{n}o adoptado es, por ello,
-h\'{i}brido: conteo de referencias como camino r\'{a}pido para el caso ac\'{i}clico,
-combinado con un recolector de marcado y barrido reservado para romper los
-ciclos que el conteo de referencias nunca libera por s\'{i} solo. Este punto del
-espacio de dise\~{n}o -- combinar ambas t\'{e}cnicas en lugar de optar por un
-extremo \'{u}nico -- corresponde a la categor\'{i}a que Bacon, Cheng y Rajan
-identifican como la m\'{a}s eficaz en la pr\'{a}ctica dentro de su taxonom\'{i}a
-unificada de algoritmos de recolecci\'{o}n de basura~\cite{baconrajan2004}, y es,
-en sustancia, la misma estrategia que adopta CPython desde sus primeras
-versiones: conteo de referencias para el camino com\'{u}n, con un recolector
-generacional adicional reservado para romper ciclos~\cite{baconrajan2001}.
+cualquier ciclo que el programa construya. El diseño adoptado es, por ello,
+\textbf{híbrido}: conteo de referencias como camino rápido para el caso
+acíclico, combinado con un recolector de marcado y barrido que rompe los
+ciclos que el conteo de referencias nunca libera por sí solo. Este punto del
+espacio de diseño --combinar ambas técnicas en lugar de optar por un extremo
+único-- corresponde a la categoría que Bacon, Cheng y Rajan identifican como la
+más eficaz en la práctica dentro de su taxonomía unificada de algoritmos de
+recolección de basura~\cite{baconrajan2004}, y es, en sustancia, la misma
+estrategia que adopta CPython: conteo de referencias para el camino común, con
+un recolector adicional reservado para romper ciclos~\cite{baconrajan2001}.
+La Tabla~\ref{tab:gc-functions} resume las funciones de la interfaz de runtime 
+expuestas por \texttt{hulk-rt} para el sistema de gestión de memoria.
 
-\begin{itemize}
-    \item \textbf{Conteo de referencias}: cada asignaci\'{o}n incrementa el contador
-          (\texttt{hulk\_rt\_retain}) y cada liberaci\'{o}n lo decrementa
-          (\texttt{hulk\_rt\_release}). Cuando llega a cero, el objeto se libera.
-          Esta mitad del modelo \textbf{est\'{a} implementada}: \texttt{hulk-rt}
-          expone \texttt{hulk\_rt\_alloc}, \texttt{hulk\_rt\_retain} y
-          \texttt{hulk\_rt\_release}, y \texttt{hulk-codegen} los invoca
-          sistem\'{a}ticamente en la construcci\'{o}n de objetos, la asignaci\'{o}n
-          a miembros y, en particular, al cerrar cada \'{a}mbito l\'{e}xico
-          (\texttt{pop\_scope} libera autom\'{a}ticamente toda variable local de
-          tipo con asignaci\'{o}n din\'{a}mica de memoria).
-    \item \textbf{Mark-sweep c\'{i}clico}: el dise\~{n}o especifica que, para
-          manejar referencias circulares, el GC debe usar una \textit{shadow
-          stack} de ra\'{i}ces y que, cuando la memoria supera un umbral,
-          una funci\'{o}n \texttt{hulk\_rt\_gc\_collect()} deber\'{i}a recorrer
-          la lista de asignaciones (enhebrada por el campo \texttt{next} de
-          \texttt{ObjHeader}) y liberar los objetos no alcanzables. Esta
-          mitad del modelo \textbf{no est\'{a} implementada todav\'{i}a}: ni
-          \texttt{hulk\_rt\_gc\_collect} ni el mecanismo de pila de sombra
-          existen hoy en \texttt{hulk-rt}, y \texttt{hulk-codegen} tampoco
-          emite a\'{u}n el mapa de campos de recolecci\'{o}n junto a cada
-          tabla virtual que ese recorrido necesitar\'{i}a. La consecuencia
-          directa es que, en el estado actual del compilador, todo ciclo de
-          referencias que un programa HULK construya se filtra de manera
-          permanente; se trata de una brecha de correcci\'{o}n reconocida,
-          no de una optimizaci\'{o}n diferible, y se retoma en la
-          Secci\'{o}n~\ref{sec:limitaciones}.
-\end{itemize}
+\begin{table}[h!]
+\centering
+\caption{Funciones de gestión de memoria en \texttt{hulk-rt}}
+\label{tab:gc-functions}
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+\textbf{Función} & \textbf{Responsabilidad} \\
+\midrule
+\texttt{hulk\_rt\_alloc(size)} & Asigna \texttt{size} bytes, encadena el bloque en la lista de asignaciones global, actualiza el contador \texttt{ALLOC\_BYTES} y dispara automáticamente \texttt{hulk\_rt\_gc\_collect} si se supera el umbral configurable. \\
+\texttt{hulk\_rt\_retain(ptr)} & Incrementa \texttt{ref\_count}. Trata \texttt{null} y objetos inmortales (literales de cadena) como no-op. \\
+\texttt{hulk\_rt\_release(ptr)} & Decrementa \texttt{ref\_count}; cuando llega a cero, llama al destructor de tipo (\texttt{gc\_free\_object}) que libera sub-asignaciones específicas (datos de cadena, array de vector, etc.) y el encabezado. \\
+\texttt{hulk\_rt\_shadow\_push(slot)} & Registra la dirección de una ranura local de tipo puntero en la pila de sombra. El GC dereferencia cada ranura durante la fase de marcado para encontrar las raíces vivas. \\
+\texttt{hulk\_rt\_shadow\_pop()} & Elimina la entrada más reciente de la pila de sombra (LIFO, espejando la salida de ámbito). \\
+\texttt{hulk\_rt\_gc\_collect()} & Ejecuta un ciclo completo de marcado y barrido: recorre la pila de sombra para marcar objetos alcanzables y sus descendientes (usando los mapas de campo embebidos en vtables), luego barre la lista de asignaciones liberando los objetos no marcados. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsubsection{Recolector de ciclos: pila de sombra y mapas de campos}
+\label{sec:gc-full}
+
+La fase de \textbf{marcado} del recolector de ciclos necesita enumerar todas
+las raíces vivas (punteros en variables locales y parámetros de todas las
+funciones activas en la pila de llamadas) sin acceder directamente a la pila
+nativa de C, cuya estructura no es portable. La solución adoptada --una
+pila de sombra (\textit{shadow stack}) mantenida por el código generado, no por el sistema
+operativo-- es clásica en la literatura de recolección de basura de
+precisión~\cite{jones2011}: el compilador instrumenta cada variable local de
+tipo puntero con llamadas a \texttt{hulk\_rt\_shadow\_push} al entrar en el
+ámbito y a \texttt{hulk\_rt\_shadow\_pop} al salir.
+
+Concretamente, \texttt{hulk-codegen} emite, para cada variable de tipo con
+asignación dinámica (objetos de usuario, cadenas, vectores y punteros anchos de
+protocolo), el siguiente patrón LLVM IR en \texttt{declare\_var}:
+
+\begin{lstlisting}[language={},caption={Patrón LLVM IR para una variable de tipo puntero con shadow stack},
+                   label=lst:shadow-push-ir]
+%x = alloca ptr                          ; la ranura queda en memoria
+store ptr %init_val, ptr %x
+call void @hulk_rt_shadow_push(ptr %x)  ; registra la DIRECCION de la ranura
+; ... cuerpo del ámbito ...
+; al salir del ámbito (pop_scope):
+%x_val = load ptr, ptr %x
+call void @hulk_rt_release(ptr %x_val)  ; conteo de referencias
+store ptr null, ptr %x                  ; protección doble liberación
+call void @hulk_rt_shadow_pop()         ; desregistra la raíz
+\end{lstlisting}
+
+El hecho de que la dirección de la ranura escape hacia
+\texttt{hulk\_rt\_shadow\_push} tiene un efecto secundario beneficioso: LLVM
+clasifica esa ranura como \textit{address-taken} y la excluye automáticamente
+del pase \texttt{mem2reg}, garantizando que la ranura permanezca en memoria y
+sea actualizable por el generador de código sin romper las invariantes del
+optimizador (véase la Sección~\ref{sec:optimization}).
+
+Para que la fase de marcado pueda seguir punteros dentro de los objetos del
+heap sin una función de traza escrita a mano por tipo, \texttt{hulk-codegen}
+emite un mapa de campos (\textit{field map}) por cada tipo de usuario:
+un array constante de enteros \texttt{i64} que contiene los desplazamientos en
+bytes de los campos de tipo puntero, terminado en centinela \texttt{-1}. Este
+array se almacena en un global de LLVM y se referencia desde la ranura~0
+de la tabla virtual de cada tipo:
+
+\begin{lstlisting}[language={},caption={Estructura de vtable con mapa de campos en slot 0},
+                   label=lst:vtable-fieldmap]
+@Node.field_map = constant [3 x i64] [i64 48, i64 56, i64 -1]
+                          ;             ^val     ^next   ^sentinel
+
+@Node.vtable = constant [5 x ptr] [
+  ptr @Node.field_map,   ; slot 0 -> reservado para GC
+  ptr @Node.value,       ; slot 1 -> primer método
+  ptr @Node.next,        ; slot 2
+  ...
+]
+\end{lstlisting}
+
+El algoritmo de marcado resultante es, por tanto:
+
+\begin{enumerate}[leftmargin=*, label=\arabic*.]
+  \item Para cada ranura registrada en la pila de sombra, desreferenciar la
+        dirección para obtener el puntero al objeto.
+  \item Desde el encabezado del objeto, cargar el campo \texttt{vtable}.
+  \item Desde \texttt{vtable[0]}, cargar el mapa de campos.
+  \item Para cada desplazamiento en el mapa (hasta el centinela \texttt{-1}),
+        calcular \texttt{puntero\_objeto + desplazamiento} y marcar
+        recursivamente el objeto hijo.
+\end{enumerate}
+
+El barrido recorre la lista enlazada global de asignaciones (mantenida a través
+de \texttt{ObjHeader.next}) y libera mediante \texttt{gc\_free\_object} todos
+los bloques cuya marca (\texttt{ObjHeader.gc\_mark}) no fue activada durante
+la fase de marcado --es decir, los que forman ciclos no alcanzables desde
+ninguna raíz viva.
+
+\subsubsection{Robustez y seguridad}
+
+Las dos mitigaciones más significativas implementadas para garantizar seguridad
+al liberar memoria son:
+
+\begin{enumerate}[leftmargin=*, label=\arabic*.]
+  \item \textbf{Envenenamiento de encabezado en la liberación} (\textit{header
+        poisoning}): Inmediatamente antes de devolver un bloque al asignador,
+        \texttt{hulk\_rt\_release} escribe \texttt{type\_tag = TAG\_FREED}
+        (valor \texttt{0xFF}, nunca usado por un objeto vivo) y
+        \texttt{ref\_count = i64::MIN} (valor imposible para un objeto real). Si
+        cualquier puntero colgante posterior intenta retener o liberar ese bloque
+        antes de que el asignador lo recicle, la comprobación de
+        \texttt{TAG\_FREED} al inicio de \texttt{hulk\_rt\_retain}/
+        \texttt{hulk\_rt\_release} lo detecta: en desarrollo (\texttt{debug\_assertions})
+        se genera un \texttt{panic!} con la dirección exacta del bloque; en producción
+        se realiza un no-op en lugar de propagar una corrupción indefinida.
+  \item \textbf{Anulación de ranura tras liberación} (\textit{post-release null
+        store}): Después de emitir la llamada a \texttt{hulk\_rt\_release} para
+        una variable local al cierre de ámbito, \texttt{hulk-codegen} emite
+        inmediatamente una instrucción \texttt{store ptr null, ptr \%alloca},
+        escribiendo \texttt{null} en la ranura de la variable. Cualquier uso
+        posterior de esa variable (por un error de generación de código, una
+        fusión incorrecta de ramas, etc.) cargará \texttt{null}, y
+        \texttt{hulk\_rt\_retain}/\texttt{hulk\_rt\_release} ya tratan \texttt{null}
+        como no-op, convirtiendo una potencial doble liberación en una operación
+        inerte y atribuible.
+\end{enumerate}
+
+Juntas, estas dos defensas cierran los dos casos de fallo más frecuentes en
+sistemas de conteo de referencias: liberar dos veces la misma variable local
+(cubierto por la anulación de ranura) y acceder a un bloque liberado antes de
+que el asignador lo recicle (cubierto por el envenenamiento de encabezado).
+
+\subsection{El proceso de optimización LLVM}
+\label{sec:optimization}
+
+\subsubsection{Arquitectura y niveles de optimización}
+
+El compilador expone un nivel de optimización configurable mediante el campo
+\texttt{opt\_level} de \texttt{CodegenOptions}, con tres variantes que se mapean
+a pipelines distintos del gestor de pases de LLVM~17:
+
+\begin{table}[h!]
+\centering
+\caption{Niveles de optimización del compilador HULK}
+\label{tab:opt-levels}
+\begin{tabularx}{\textwidth}{@{}llX@{}}
+\toprule
+\textbf{Variante} & \textbf{Pipeline LLVM} & \textbf{Uso recomendado} \\
+\midrule
+\texttt{OptLevel::None} & (ningún pase IR) & Pruebas unitarias, depuración de IR \\
+\texttt{OptLevel::Less} & \texttt{"default<O1>"} & Benchmarking \\
+\texttt{OptLevel::Default} & \texttt{"default<O2>"} & Construcciones de producción \\
+\texttt{OptLevel::Aggressive} & \texttt{"default<O3>"} & Benchmarking \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+El nivel también controla la configuración de generación de código de la
+\texttt{TargetMachine}. La instrucción de selección, la asignación de registros
+y el planificador de instrucciones se calibran al nivel correspondiente de forma
+consistente con los pases IR, evitando la situación degenerada de IR optimizado
+alimentado a un selector \texttt{-O0}.
+
+La secuencia de operaciones dentro de \texttt{compile()} sigue el orden
+\textit{verificar $\to$ optimizar $\to$ verificar $\to$ emitir}:
+
+\begin{enumerate}[leftmargin=*, label=\arabic*.]
+  \item \textbf{Verificación previa} (\texttt{module.verify()}): detecta errores
+        del generador de código con mensajes precisos del verificador LLVM antes
+        de que lleguen al optimizador. Un IR inválido en la entrada del optimizador
+        produce comportamiento indefinido en los pases, no mensajes de error
+        útiles.
+  \item \textbf{Optimización} (\texttt{run\_passes}): aplica el pipeline estándar solicitado.
+  \item \textbf{Verificación posterior}: algunos pases (\texttt{instcombine},
+        \texttt{GVN}) pueden revelar inconsistencias de tipo latentes al propagar
+        constantes o eliminar código muerto. Esta segunda verificación las
+        detecta antes de que produzcan código máquina incorrecto.
+  \item \textbf{Emisión de objeto} (\texttt{write\_object\_file}): genera el
+        archivo \texttt{.o} final.
+\end{enumerate}
+
+\subsubsection{Compatibilidad con el recolector de basura}
+
+Los pases LLVM, como \texttt{mem2reg} que afecta las localizaciones de los punteros, no 
+invalidan las invariantes del GC. \texttt{mem2reg} promueve una \texttt{alloca} a 
+registro SSA únicamente si la dirección de esa \texttt{alloca} no escapa nunca, 
+es decir, si sus únicas instrucciones de uso son \texttt{store} y \texttt{load}, 
+sin que la dirección aparezca en ningún argumento de llamada ni en ningún \texttt{getelementptr}
+almacenado en otro lugar. Dado que todas las \texttt{alloca} de tipo puntero
+son registradas con \texttt{hulk\_rt\_shadow\_push(\%alloca)}, su dirección
+escapa hacia esa función externa, y LLVM las clasifica permanentemente como
+\textit{address-taken}, excluyéndolas de \texttt{mem2reg}. Las \texttt{alloca}
+de tipo numérico (\texttt{f64}) y booleano (\texttt{i1}) nunca se registran en
+la pila de sombra y son elegibles para promoción, reduciendo el número de cargas
+y almacenamientos en la aritmética.
+
+Los pases \texttt{instcombine} y \texttt{simplifycfg} operan sobre patrones de
+instrucciones y el grafo de flujo de control respectivamente; ninguno puede
+eliminar llamadas a funciones externas (que en el modelo de memoria de LLVM
+llevan efectos secundarios implícitos). Las funciones de shadow push/pop,
+retain/release y \texttt{hulk\_rt\_alloc} son todas externas y, por tanto,
+inalcanzables por estos pases. El pase \texttt{inline} copia instrucciones del
+callee al caller; dado que los pares push/pop se emiten en los límites de los
+ámbitos HULK --no de las funciones LLVM-- el balance push/pop se preserva
+exactamente tras el inlineado~\cite{allen2001}.
 
 \subsection{Decisiones de dise\~{n}o no triviales}
 
@@ -1368,7 +1653,7 @@ válido, sino que su comportamiento observable en ejecución es el correcto.
 \subsection{Cobertura lograda}
 
 Al momento de redactar este informe, el \textit{workspace} completo contiene
-214 funciones de prueba (anotadas con \texttt{\#[test]}), distribuidas según
+237 funciones de prueba (anotadas con \texttt{\#[test]}), distribuidas según 
 la siguiente tabla:
 
 \begin{table}[h!]
@@ -1379,40 +1664,41 @@ la siguiente tabla:
 \toprule
 \textbf{Crate} & \textbf{Pruebas} \\
 \midrule
-\texttt{hulk-ast} & 4 \\
-\texttt{hulk-lexer} & 16 \\
-\texttt{hulk-parser} & 9 \\
-\texttt{hulk-semantic} & 86 \\
-\texttt{hulk-codegen} & 71 \\
-\texttt{hulk-rt} & 18 \\
+\texttt{hulk-ast}      &  4  \\
+\texttt{hulk-lexer}    & 16  \\
+\texttt{hulk-parser}   &  9  \\
+\texttt{hulk-semantic} & 86  \\
+\texttt{hulk-codegen}  & 79  \\
+\texttt{hulk-rt}       & 43  \\
 \midrule
-Total & 214 \\
+Total & 237 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Dentro de \texttt{hulk-codegen}, las 71 pruebas se reparten en 31 pruebas de
-integración (ELF válido, en \texttt{lib.rs}) y 40 pruebas unitarias de
+Dentro de \texttt{hulk-codegen}, las 79 pruebas se reparten en 36 pruebas de
+integración (ELF válido, en \texttt{lib.rs}) y 43 pruebas unitarias de
 descenso (verificación de IR, en \texttt{lower/mod.rs}). La cobertura por
-construcción del lenguaje, reconstruida a partir de los nombres de las propias
-funciones de prueba, abarca de manera explícita: literales y variables;
-\texttt{let} y sombreado de variables; bloques; operadores unarios y binarios
-(incluida la concatenación con y sin espacio); \texttt{if}/\texttt{elif}/
-\texttt{else}; \texttt{while}; asignación destructiva a variables y a
-miembros; llamadas a funciones libres con y sin argumentos, incluida
-recursión; construcción de objetos (\texttt{new}); lectura de atributos;
-llamadas a métodos, incluida herencia, sobreescritura y llamadas a
-\texttt{base}; referencias a métodos sin invocar (tipos función); \texttt{is}/
-\texttt{as}; bucles \texttt{for} sobre vectores literales y sobre
-\texttt{range}; comprensiones de vectores; \texttt{match} con patrones
-literales, de tipo y de cadena, así como el caso no exhaustivo; despacho a
-través de protocolos; y las funciones matemáticas y constantes incorporadas.
-Esta cobertura coincide, prácticamente uno a uno, con la lista de
-funcionalidades -- incluidas las tres extensiones descritas en la
-Sección~\ref{sec:extensiones} -- que la guía de implementación del backend
-exige completar en sus fases de trabajo, lo cual sugiere que la suite de
-pruebas se diseñó como un mapa de verificación directo de ese plan, y no de
-manera incidental.
+construcción del lenguaje abarca explícitamente: literales y variables;
+\texttt{let} y sombreado; bloques; operadores unarios y binarios (incluida la
+concatenación con y sin espacio); \texttt{if}/\texttt{elif}/\texttt{else};
+\texttt{while}; asignación destructiva a variables y a miembros; llamadas a
+funciones libres con y sin argumentos, incluida recursión; construcción de
+objetos (\texttt{new}); lectura de atributos; llamadas a métodos, incluida
+herencia, sobreescritura y llamadas a \texttt{base}; referencias a métodos sin
+invocar (tipos función); \texttt{is}/\texttt{as}; bucles \texttt{for} sobre
+vectores literales y sobre \texttt{range}; comprensiones de vectores;
+\texttt{match} con patrones literales, de tipo y de cadena; despacho a través
+de protocolos; y las funciones matemáticas incorporadas. Las pruebas del
+GC verifican que las \texttt{alloca}s de tipo puntero no son promovidas por
+\texttt{mem2reg} tras la shadow-push (inspeccionando el IR optimizado); que los
+mapas de campo contienen exactamente los desplazamientos de puntero del tipo; y
+que \texttt{hulk\_rt\_gc\_collect} recoge correctamente ciclos binarios y
+ternarios sin liberar objetos alcanzables. El módulo \texttt{hulk-rt} amplía
+sus pruebas con 25 casos adicionales: corrección de \texttt{retain}/
+\texttt{release} con el TAG\_FREED de envenenamiento, ausencia de fuga en
+\texttt{hulk\_rt\_dynamic\_vector\_to\_vector}, y limpieza correcta de
+\texttt{reset\_gc\_state} para tipos con sub-asignaciones secundarias.
 
 % ============================================================
 % SECCIÓN 7: DISCUSIÓN
@@ -1451,7 +1737,8 @@ pruebas doradas a la totalidad del corpus de características sigue siendo
 trabajo pendiente, y se retoma como recomendación concreta en la
 Sección~\ref{sec:limitaciones}.
 
-Sin embargo, el sistema fue verificado contra las pruebas provistas por los evaluadores en \href{https:/github.com/matcom/compilers}{https:/github.com/matcom/compilers/}.
+Sin embargo, el sistema fue verificado contra las pruebas provistas por los
+evaluadores en \href{https://github.com/matcom/compilers}{https://github.com/matcom/compilers/}.
 
 \subsection{Alternativas consideradas y descartadas}
 
@@ -1481,7 +1768,9 @@ la Sección~\ref{sec:limitaciones} en lugar de intentarse de forma incompleta.
 
 El desarrollo completo de un compilador para HULK, desde el análisis léxico hasta la generación de código nativo para Linux x86\_64, ha demostrado la viabilidad de construir una herramienta de producción académica que integra las fases clásicas de la compilación con un conjunto de extensiones modernas. El compilador implementado cubre la totalidad del lenguaje base, incluyendo el sistema de tipos con herencia simple, protocolos estructurales, inferencia de tipos, y las construcciones de control basadas en expresiones. Además, las tres extensiones propuestas —coincidencia de patrones (\texttt{match}), funciones de primera clase y vectores con comprensiones— han sido integradas de manera coherente, respetando la filosofía del lenguaje y aportando una expresividad comparable a la de lenguajes contemporáneos como Rust~\cite{klabnik2019}, Kotlin~\cite{jemerov2017} o Haskell~\cite{marlow2010}.
 
-La elección de Rust como lenguaje de implementación ha resultado especialmente acertada. El sistema de tipos y el modelo de propiedad han permitido construir un compilador seguro y libre de errores de gestión de memoria, incluso en las fases más complejas como el análisis semántico de cinco pasadas y la generación de código LLVM~\cite{lattner2004}. La parametrización del AST con un tipo de anotación ha facilitado la transición entre el árbol sintáctico sin tipos y el árbol completamente tipado, garantizando que cada fase opere sobre la representación adecuada. Asimismo, el uso de \texttt{inkwell} como interfaz con LLVM ha proporcionado un control fino sobre la generación de código, permitiendo implementar un modelo de objetos eficiente (vtables, itables) y un sistema de gestión de memoria híbrido (conteo de referencias más recolección de ciclos) que se ajusta a las necesidades del lenguaje.
+La elección de Rust como lenguaje de implementación ha resultado especialmente acertada. El sistema de tipos y el modelo de propiedad han permitido construir un compilador seguro y libre de errores de gestión de memoria, incluso en las fases más complejas como el análisis semántico de cinco pasadas y la generación de código LLVM~\cite{lattner2004}. La parametrización del AST con un tipo de anotación ha facilitado la transición entre el árbol sintáctico sin tipos y el árbol completamente tipado, garantizando que cada fase opere sobre la representación adecuada. Asimismo, el uso de \texttt{inkwell} como interfaz con LLVM ha proporcionado un control fino sobre la generación de código, permitiendo implementar un modelo de objetos eficiente (vtables, itables) y un sistema de gestión de memoria híbrido completamente funcional: el conteo de referencias gestiona el camino acíclico común, mientras que el recolector de marcado y barrido --instrumentado con una pila de sombra mantenida por el propio código generado y mapas de campos por tipo embebidos en las vtables-- elimina los ciclos de referencias que el conteo puro no puede liberar~\cite{baconrajan2004,jones2011}.
+
+La incorporación de optimización del código LLVM-IR (pasadas \texttt{mem2reg}, \texttt{instcombine}, \texttt{simplifycfg} e \texttt{inline} a través de \texttt{run\_passes}) permite esperar un código generado de alta calidad. Las variables numéricas se promueven a registros SSA eliminando cargas y almacenamientos redundantes; los métodos pequeños se introducen en sus llamadores devirtualizados; y el flujo de control superfluo se simplifica. La compatibilidad con el GC está garantizada estructuralmente: las ranuras de tipo puntero, al ser registradas con \texttt{hulk\_rt\_shadow\_push}, son clasificadas por LLVM como \textit{address-taken} y excluidas automáticamente de \texttt{mem2reg}, sin necesidad de ninguna anotación adicional ni de modificar el GC~\cite{allen2001}.
 
 La suite de pruebas, con más de doscientas pruebas automatizadas, cubre exhaustivamente las funcionalidades del compilador y ha sido fundamental para validar la corrección de cada fase. La estrategia de pruebas en dos niveles —verificación de IR y ejecución real de binarios— ha demostrado ser efectiva para detectar errores tanto en la generación de código como en el comportamiento dinámico. El enfoque de ``pruebas doradas'' que enlazan y ejecutan programas reales proporciona la máxima confianza en la corrección del sistema, mientras que las pruebas de verificación de IR permiten un ciclo de desarrollo ágil.
 
@@ -1505,13 +1794,13 @@ A pesar del éxito del proyecto, existen limitaciones inherentes al diseño actu
 Desde una perspectiva arquitectónica, el compilador ha optado por soluciones pragmáticas que, si bien son correctas y eficientes, podrían ser refinadas en versiones posteriores:
 
 \begin{enumerate}[leftmargin=1.4em, itemsep=0.35em]
-	\item \textbf{Modelo de gestión de memoria híbrido.} El sistema actual propone combinar conteo de referencias con un recolector de trazado (mark‑sweep) para romper ciclos. Si bien esta estrategia es ampliamente utilizada en lenguajes como Python~\cite{baconrajan2004,baconrajan2001}, la implementación del recolector de trazado no está completa en la versión actual. Esto implica que los programas que construyen estructuras cíclicas pueden presentar fugas de memoria. Una evolución natural sería completar el recolector de trazado y optimizar su integración con el conteo de referencias, siguiendo las mejores prácticas de la literatura.
-	
 	\item \textbf{Inferencia de tipos limitada para recursión mutua.} El algoritmo de inferencia actual resuelve correctamente la recursión simple y la recursión a través de \texttt{self}, pero no puede inferir tipos para funciones mutuamente recursivas sin anotaciones explícitas. Esta es una limitación conocida que podría abordarse mediante un enfoque de unificación basado en restricciones (tipo Hindley‑Milner)~\cite{milner1978} o mediante un análisis de punto fijo más sofisticado. No obstante, el comportamiento actual es seguro y predecible, ya que reporta un error en lugar de producir resultados incorrectos.
 	
-	\item \textbf{Optimización del código generado.} El backend actual emite LLVM IR sin aplicar optimizaciones, lo que da lugar a binarios que, aunque correctos, no son tan eficientes como podrían ser. La conexión de la canalización de optimización de LLVM (pases como \texttt{mem2reg}, \texttt{instcombine} y \texttt{simplifycfg}) mejoraría notablemente el rendimiento y reduciría el tamaño del código. Esta tarea es relativamente sencilla y tendría un alto impacto.
+	\item \textbf{Rendimiento del recolector de ciclos.} El recolector de marcado y barrido se activa globalmente cada vez que el contador \texttt{ALLOC\_BYTES} supera el umbral configurado, lo que implica una pausa proporcional al número de objetos vivos en ese momento. Para programas con muchos objetos vivos, esta pausa puede ser perceptible. La evolución natural es adoptar un diseño generacional~\cite{baconrajan2001}: la mayoría de los objetos mueren jóvenes, y un recolector generacional limitaría el conjunto de objetos examinados en cada ciclo a los de la generación joven, reduciendo drásticamente el costo promedio de recolección.
 	
 	\item \textbf{Almacenamiento uniforme de vectores.} La decisión de almacenar todos los elementos de un vector como punteros, incluso para tipos primitivos, simplifica la implementación del runtime pero introduce una indirección y un coste de memoria adicional. En un contexto de producción, se podría considerar la especialización de vectores para tipos de valor (similar a las \texttt{List} especializadas de Java~\cite{gosling2021} o los \texttt{array} de Go~\cite{donovan2015}) para mejorar el rendimiento.
+
+	\item \textbf{Alcance del proceso de optimización.} La versión actual habilita los pipelines \texttt{default<O1>}, \texttt{default<O2>} y \texttt{default<O3>} de LLVM, que incluyen expansión de métodos (\textit{inlining}) y vectorización básica. Sin embargo, el compilador no realiza análisis interprocedural de flujo de datos (e.g.\ \textit{dead code elimination} entre unidades de compilación) ni especialización de funciones polimórficas basada en tipos concretos (\textit{devirtualization} más allá de la local que ya realiza el backend). Estas técnicas requieren la presencia de todo el programa en memoria y un grafo de llamadas completo, y constituyen una dirección natural para trabajo futuro~\cite{allen2001}.
 \end{enumerate}
 
 \subsection{Recomendaciones para el trabajo futuro}
@@ -1519,13 +1808,15 @@ Desde una perspectiva arquitectónica, el compilador ha optado por soluciones pr
 Desde una perspectiva de investigación y desarrollo, el compilador HULK abre varias líneas de trabajo que podrían explorarse:
 
 \begin{enumerate}[leftmargin=1.4em, itemsep=0.35em]
-	\item \textbf{Ampliación del sistema de tipos.} La introducción de tipos algebraicos (sum types) y patrones de desestructuración más ricos permitiría a HULK acercarse a lenguajes funcionales modernos. La extensión \texttt{match} ya da los primeros pasos en esa dirección; podría completarse con patrones anidados y guardas.
+	\item \textbf{Ampliación del sistema de tipos.} La introducción de tipos algebraicos (\textit{sum types}) y patrones de desestructuración más ricos permitiría a HULK acercarse a lenguajes funcionales modernos. La extensión \texttt{match} ya da los primeros pasos en esa dirección; podría completarse con patrones anidados, guardas booleanas y un verificador de exhaustividad formal~\cite{marlow2010}.
 	
-	\item \textbf{Soporte para compilación incremental y caché.} La arquitectura actual compila todo el programa en una sola pasada. Un sistema de compilación incremental, que recompile solo las partes modificadas, sería beneficioso para proyectos grandes y mejoraría la experiencia de desarrollo.
+	\item \textbf{Recolector generacional.} El recolector de marcado y barrido actual examina todos los objetos vivos en cada ciclo. La adopción de una estrategia generacional --reservar la recolección global para objetos de larga vida y usar un espacio \textit{nursery} de baja latencia para objetos nuevos-- reduciría drásticamente las pausas para programas con muchos objetos de corta vida~\cite{baconrajan2001,jones2011}.
 	
-	\item \textbf{Generación de código para otras plataformas.} Aunque el backend está orientado a Linux x86\_64, la portabilidad de LLVM permitiría generar código para Windows, macOS y arquitecturas ARM con relativo esfuerzo. Esto haría que HULK fuera utilizable en entornos más diversos.
+	\item \textbf{Soporte para compilación incremental y caché.} La arquitectura actual compila todo el programa en una sola pasada. Un sistema de compilación incremental, que recompile solo las partes modificadas, sería beneficioso para proyectos grandes y mejoraría significativamente la experiencia de desarrollo interactivo.
 	
-	\item \textbf{Mejora de la experiencia de usuario.} El compilador actual produce mensajes de error claros y con ubicación, pero se podría enriquecer con sugerencias automáticas (por ejemplo, corrección de errores tipográficos en nombres de variables) y una integración más estrecha con entornos de desarrollo (LSP, extensiones para editores).
+	\item \textbf{Generación de código para otras plataformas.} Aunque el backend está orientado a Linux x86\_64, la portabilidad de LLVM permitiría generar código para Windows, macOS y arquitecturas ARM con relativo esfuerzo. Esto haría que HULK fuera utilizable en entornos más diversos sin cambios en el frontend ni en el análisis semántico.
+	
+	\item \textbf{Mejora de la experiencia de usuario.} El compilador actual produce mensajes de error claros y con ubicación, pero se podría enriquecer con sugerencias automáticas (por ejemplo, corrección de errores tipográficos en nombres de variables mediante distancia de edición) y una integración con entornos de desarrollo mediante el protocolo LSP (\textit{Language Server Protocol}).
 \end{enumerate}
 
 El compilador HULK desarrollado es una herramienta robusta y extensible que cumple con creces los objetivos del proyecto. Las limitaciones identificadas no restan valor a su corrección ni a su utilidad, y las recomendaciones propuestas ofrecen un camino claro para su evolución futura. Este trabajo constituye una base sólida tanto para la docencia como para la investigación en lenguajes de programación y compilación.
@@ -1653,6 +1944,15 @@ Programming (ECOOP 2014)}, 257--281. Springer.
 \bibitem{landwerth2019}
 Landwerth, I. (2019--2020). \textit{Building a Compiler} [serie de videos].
 Repositorio de referencia: \url{https://github.com/terrajobst/minsk}.
+
+\bibitem{jones2011}
+Jones, R., Hosking, A., \& Moss, E. (2011). \textit{The Garbage Collection
+Handbook: The Art of Automatic Memory Management}. CRC Press / Chapman \&
+Hall.
+
+\bibitem{allen2001}
+Allen, R., \& Kennedy, K. (2001). \textit{Optimizing Compilers for Modern
+Architectures: A Dependence-based Approach}. Morgan Kaufmann.
 
 \end{thebibliography}
 
