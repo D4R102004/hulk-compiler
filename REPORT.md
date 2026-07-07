@@ -604,6 +604,16 @@ The lexer implemented in `hulk-lexer` is a hand‑written deterministic finite a
 
 The recognized tokens were presented previously in Table 2 of Section 2.
 
+#### 4.3.1 Lexical error recovery and continuous operation mode
+
+The lexer implements a *simplified panic‑mode* error‑recovery strategy: when it encounters an unrecognized character, it emits an `UnexpectedChar` error token with the exact `SourceSpan` and advances to the next character, continuing the analysis instead of aborting. This decision follows the multiple‑diagnostics principle described in the classic compiler literature [6]: a compiler is significantly more useful when it exposes the programmer to the full set of errors present in the program in a single invocation, rather than stopping at the first one. The three kinds of lexical error the compiler can produce are:
+
+- **`UnterminatedString`**: a string literal opened with `"` but not closed before the end of the line or file. The lexer consumes up to the next line break and emits the error with the opening position, so that the parser can interpret the following token as if the string had ended.
+- **`UnexpectedChar`**: any character that does not belong to the language's alphabet (e.g. `#`, `$`, `\`). A single‑character error token is emitted and lexical analysis unconditionally advances.
+- **`InvalidEscape`**: an unknown escape sequence inside a string (e.g. `\q`). The two‑character sequence is consumed and analysis of the string continues, preventing the character following the escape from being misinterpreted as the closing delimiter.
+
+In every case, the `SourceSpan` included in the error token contains the line number, the starting column, and the length of the problematic fragment — information that `hulk-cli` uses to format diagnostics with an underline at the exact position in the source code.
+
 ### 4.4 The LL(1) syntactic analyzer
 
 The parser is a hand‑implemented LL(1) recursive‑descent analyzer. Each non‑terminal of the grammar corresponds to a Rust method:
@@ -632,6 +642,14 @@ The most important technical points of the grammar are:
 2. **Resolution of vector ambiguity**: the `|` operator appears both in boolean expressions and in comprehensions. This is resolved with a special production, `ExprNoTopOR`.
 3. **Contextual `base`**: the `parse_name()` helper accepts `TokenKind::Base` in identifier positions, but promotes it to `ExprKind::BaseRef` only when it is the callee of a call.
 
+#### 4.4.1 Error message quality and grammatical extensibility
+
+A practical advantage of the hand‑written recursive‑descent parser is that, at every point of error, the parsing context is explicit in Rust's call stack. This allows messages such as *"expected `in` after the `for` variable"* instead of the generic *"syntax error"* produced by table‑driven LR parsers when the stack state is opaque to the user. All of the `parse_*` functions return `Result<Expr, ParseError>`, where `ParseError` carries the `SourceSpan` of the unexpected token and a description of the syntactic context in which the parser found itself.
+
+The grammar's extensibility also benefits from this architecture. Adding the `match` expression (Section 3), for example, required only adding the `TokenKind::Match` branch to the `match` in `parse_primary`, implementing `finish_match_expression` and `parse_pattern` as new methods, and adding the corresponding nodes to the AST. No transition table was modified and no parser was regenerated: the change is purely additive and localized, which illustrates the open‑extensibility characteristic that this kind of design offers on the front of new primary‑expression forms [6].
+
+The only trade‑off of this approach compared to automatic generators is that the LL(1) property was verified by inspection and through the test suite, not through a formal proof using FIRST/FOLLOW tables. In practice, the look‑ahead conflicts detected during development — the `|` operator shared between disjunction and the comprehension separator, and the common `id` prefix between a method and an attribute in `TypeMember` — were resolved through the factorizations documented in the Appendix.
+
 ### 4.5 The five‑pass semantic analyzer
 
 Semantic analysis is organized into five ordered passes, implementing the *two‑pass binder* pattern described by Immo Landwerth in his video series on the construction of the Minsk compiler [27]:
@@ -648,11 +666,28 @@ Semantic analysis is organized into five ordered passes, implementing the *two�
 
 The separation between `infer` (pass 2) and `check` (pass 3) simplifies the code: `infer` only assigns types (it may produce `Type::Unknown`), while `check` operates on the already‑typed tree and assumes all types have been resolved.
 
+#### 4.5.1 Bidirectional inference and `Type::Unknown` propagation
+
+The `infer` pass implements bidirectional type inference [14]: it combines synthesis (bottom‑up, where the type of an expression is deduced from its subexpressions) with checking (top‑down, where the type expected at a position — the *push* type — is propagated into the subexpressions to refine inference). The most illustrative case is assigning a *lambda* to an annotated variable:
+
+**Listing 23.** *Bidirectional inference in a lambda assignment*
+```hulk
+let f: (Number) -> Number = function(x: Number): Number -> x + 1;
+```
+
+The push type `(Number) -> Number`, coming from `f`'s annotation, is propagated into the *lambda* to check that its synthesized type is compatible before it is definitively annotated. This interaction lets inference converge without global unification [20], which simplifies the implementation at the cost of requiring explicit annotations at some entry points that cannot be inferred locally (mainly, the parameters of global functions).
+
+When an expression cannot be typed in a single pass — for example, when a method calls another whose return type has not yet been inferred — the `infer` pass produces `Type::Unknown` on the corresponding node. The subsequent `check` pass treats any residual `Unknown` as an unresolved type error and reports a precise diagnostic. This discipline guarantees that `hulk-codegen` never receives a typed tree containing unknowns: the `VerifiedProgram` interface that separates the front end from the back end is, in effect, a static proof of the absence of `Unknown`.
+
+#### 4.5.2 Computing the lowest common ancestor
+
+Several language constructs require computing the result type of alternative branches: the arms of `if`/`elif`/`else`, the cases of `match`, and the elements of a vector literal must share a common type. In all of these contexts, the semantic analyzer computes the *lowest common ancestor* (LCA) of the involved types within HULK's nominal hierarchy. The LCA is resolved in the `hierarchy` pass — which has already built the complete inheritance tree with DFS intervals for O(1) type checking — and its result is used in `infer` to annotate the containing node with the most specific type that covers all alternatives. If the types are incompatible (they have no LCA other than `Object`), the system may produce `Type::Object` as a conservative fallback, or a type error if the position does not accept `Object` as a valid type.
+
 ### 4.6 The LLVM code generator
 
 The code generator uses LLVM 17 through the `inkwell` library. The public entry function is:
 
-**Listing 23.** *Public API of `hulk-codegen`*
+**Listing 24.** *Public API of `hulk-codegen`*
 ```rust
 pub fn compile(
     verified: &VerifiedProgram,
@@ -664,7 +699,7 @@ pub fn compile(
 
 Each HULK type is represented in memory as a structure with an object header (`ObjHeader`) followed by its attributes:
 
-**Listing 24.** *Object memory layout*
+**Listing 25.** *Object memory layout*
 ```c
 struct ObjHeader {
     ref_count: i64,       // reference counter
@@ -686,10 +721,107 @@ HULK's design — resolving the table address entirely at compile time — match
 
 HULK does not prevent the construction of self‑referential structures, so a pure reference‑counting scheme would permanently leak any cycle that a program constructs. The adopted design is therefore hybrid: reference counting as the fast path for the acyclic case, combined with a mark‑and‑sweep collector reserved for breaking the cycles that reference counting never frees on its own. This point in the design space — combining both techniques rather than choosing a single extreme — corresponds to the category that Bacon, Cheng, and Rajan identify as the most effective in practice within their unified taxonomy of garbage‑collection algorithms [9], and is, in substance, the same strategy adopted by CPython since its earliest versions: reference counting for the common path, with an additional generational collector reserved for breaking cycles [10].
 
-- **Reference counting**: every assignment increments the counter (`hulk_rt_retain`), and every release decrements it (`hulk_rt_release`). When it reaches zero, the object is freed. This half of the model **is implemented**: `hulk-rt` exposes `hulk_rt_alloc`, `hulk_rt_retain`, and `hulk_rt_release`, and `hulk-codegen` invokes them systematically when constructing objects, when assigning to members, and in particular when closing each lexical scope (`pop_scope` automatically releases every local variable of a dynamically allocated type).
-- **Cyclic mark‑sweep**: the design specifies that, in order to handle circular references, the GC should use a *shadow stack* of roots and that, when memory exceeds a threshold, a function `hulk_rt_gc_collect()` should walk the list of allocations (threaded through the `next` field of `ObjHeader`) and free unreachable objects. This half of the model **is not yet implemented**: neither `hulk_rt_gc_collect` nor the shadow‑stack mechanism exists today in `hulk-rt`, and `hulk-codegen` does not yet emit the field map that such a traversal would need alongside each vtable. The direct consequence is that, in the compiler's current state, every reference cycle that a HULK program constructs leaks permanently; this is a recognized correctness gap, not a deferrable optimization, and it is revisited in Section 8.
+This point in the design space corresponds to the category that Bacon, Cheng, and Rajan identify as the most effective in practice within their unified taxonomy of garbage‑collection algorithms [9], and is, in substance, the same strategy adopted by CPython since its earliest versions: reference counting for the common path, with an additional collector reserved for breaking cycles [10]. Table 8 summarizes the runtime‑interface functions exposed by `hulk-rt` for the memory‑management system.
 
-### 4.7 Non‑trivial design decisions
+**Table 8.** *Memory‑management functions in `hulk-rt`*
+
+| Function | Responsibility |
+|---|---|
+| `hulk_rt_alloc(size)` | Allocates `size` bytes, chains the block into the global allocation list, updates the `ALLOC_BYTES` counter, and automatically triggers `hulk_rt_gc_collect` if the configurable threshold is exceeded. |
+| `hulk_rt_retain(ptr)` | Increments `ref_count`. Treats `null` and immortal objects (string literals) as a no‑op. |
+| `hulk_rt_release(ptr)` | Decrements `ref_count`; when it reaches zero, calls the type's destructor (`gc_free_object`), which frees type‑specific sub‑allocations (string data, a vector's array, etc.) and the header. |
+| `hulk_rt_shadow_push(slot)` | Registers the address of a local pointer‑typed slot on the shadow stack. The GC dereferences each slot during the mark phase to find the live roots. |
+| `hulk_rt_shadow_pop()` | Removes the most recent entry from the shadow stack (LIFO, mirroring scope exit). |
+| `hulk_rt_gc_collect()` | Runs a complete mark‑and‑sweep cycle: it walks the shadow stack to mark reachable objects and their descendants (using the field maps embedded in the vtables), then sweeps the allocation list, freeing unmarked objects. |
+
+- **Reference counting**: every assignment increments the counter (`hulk_rt_retain`), and every release decrements it (`hulk_rt_release`). When it reaches zero, the object is freed. `hulk-rt` exposes `hulk_rt_alloc`, `hulk_rt_retain`, and `hulk_rt_release`, and `hulk-codegen` invokes them systematically when constructing objects, when assigning to members, and in particular when closing each lexical scope (`pop_scope` automatically releases every local variable of a dynamically allocated type).
+- **Cyclic mark‑sweep**: to handle circular references, the GC maintains a *shadow stack* of roots, and, once memory exceeds a configurable threshold, `hulk_rt_gc_collect()` walks the list of allocations (threaded through the `next` field of `ObjHeader`) and frees unreachable objects. This half of the model is fully implemented: `hulk-rt` provides the shadow‑stack mechanism and `hulk_rt_gc_collect`, and `hulk-codegen` emits the field map that each traversal needs alongside every vtable, as detailed below.
+
+#### 4.6.4 Cycle collector: shadow stack and field maps
+
+The **mark** phase of the cycle collector needs to enumerate all live roots (pointers held in local variables and parameters of every function active on the call stack) without directly accessing the native C stack, whose layout is not portable. The adopted solution — a *shadow stack* maintained by the generated code itself, not by the operating system — is classic in the precise garbage‑collection literature [28]: the compiler instruments every pointer‑typed local variable with calls to `hulk_rt_shadow_push` on scope entry and to `hulk_rt_shadow_pop` on scope exit.
+
+Concretely, `hulk-codegen` emits the following LLVM IR pattern in `declare_var` for every variable of a dynamically allocated type (user objects, strings, vectors, and protocol wide pointers):
+
+**Listing 26.** *LLVM IR pattern for a pointer‑typed variable with a shadow stack*
+```text
+%x = alloca ptr                          ; the slot lives in memory
+store ptr %init_val, ptr %x
+call void @hulk_rt_shadow_push(ptr %x)  ; registers the slot's ADDRESS
+; ... scope body ...
+; on scope exit (pop_scope):
+%x_val = load ptr, ptr %x
+call void @hulk_rt_release(ptr %x_val)  ; reference counting
+store ptr null, ptr %x                  ; double‑free protection
+call void @hulk_rt_shadow_pop()         ; deregisters the root
+```
+
+The fact that the slot's address escapes into `hulk_rt_shadow_push` has a beneficial side effect: LLVM classifies that slot as *address‑taken* and automatically excludes it from the `mem2reg` pass, guaranteeing that the slot stays in memory and can be updated by the code generator without breaking the optimizer's invariants (see Section 4.7).
+
+For the mark phase to be able to follow pointers inside heap objects without a hand‑written per‑type trace function, `hulk-codegen` emits a *field map* for every user type: a constant array of `i64` integers containing the byte offsets of the type's pointer‑typed fields, terminated by a `-1` sentinel. This array is stored in an LLVM global and referenced from slot 0 of each type's virtual table:
+
+**Listing 27.** *Vtable layout with the field map in slot 0*
+```text
+@Node.field_map = constant [3 x i64] [i64 48, i64 56, i64 -1]
+                          ;             ^val     ^next   ^sentinel
+
+@Node.vtable = constant [5 x ptr] [
+  ptr @Node.field_map,   ; slot 0 -> reserved for the GC
+  ptr @Node.value,       ; slot 1 -> first method
+  ptr @Node.next,        ; slot 2
+  ...
+]
+```
+
+The resulting mark algorithm is therefore:
+
+1. For every slot registered on the shadow stack, dereference the address to obtain the pointer to the object.
+2. From the object's header, load the `vtable` field.
+3. From `vtable[0]`, load the field map.
+4. For every offset in the map (up to the `-1` sentinel), compute `object_pointer + offset` and recursively mark the child object.
+
+The sweep walks the global linked list of allocations (maintained through `ObjHeader.next`) and frees, via `gc_free_object`, every block whose mark (`ObjHeader.gc_mark`) was not set during the mark phase — that is, those that form cycles unreachable from any live root.
+
+#### 4.6.5 Robustness and security
+
+The two most significant mitigations implemented to guarantee safety when freeing memory are:
+
+1. **Header poisoning on release**: immediately before returning a block to the allocator, `hulk_rt_release` writes `type_tag = TAG_FREED` (value `0xFF`, never used by a live object) and `ref_count = i64::MIN` (an impossible value for a real object). If any subsequent dangling pointer attempts to retain or release that block before the allocator recycles it, the `TAG_FREED` check at the start of `hulk_rt_retain`/`hulk_rt_release` detects it: in development (`debug_assertions`), a `panic!` is raised with the block's exact address; in production, a no‑op is performed instead of propagating undefined corruption.
+2. **Post‑release slot nulling**: after emitting the call to `hulk_rt_release` for a local variable at scope close, `hulk-codegen` immediately emits a `store ptr null, ptr %alloca` instruction, writing `null` into the variable's slot. Any later use of that variable (due to a code‑generation bug, an incorrect merging of branches, etc.) will load `null`, and `hulk_rt_retain`/`hulk_rt_release` already treat `null` as a no‑op, turning a potential double free into an inert, attributable operation.
+
+Together, these two defenses close the two most frequent failure cases in reference‑counted systems: freeing the same local variable twice (covered by slot nulling) and accessing a block that has been freed before the allocator recycles it (covered by header poisoning).
+
+### 4.7 The LLVM optimization process
+
+#### 4.7.1 Architecture and optimization levels
+
+The compiler exposes a configurable optimization level through the `opt_level` field of `CodegenOptions`, with three variants that map to distinct pipelines of LLVM 17's pass manager:
+
+**Table 9.** *Optimization levels of the HULK compiler*
+
+| Variant | LLVM pipeline | Recommended use |
+|---|---|---|
+| `OptLevel::None` | (no IR passes) | Unit testing, IR debugging |
+| `OptLevel::Less` | `"default<O1>"` | Benchmarking |
+| `OptLevel::Default` | `"default<O2>"` | Production builds |
+| `OptLevel::Aggressive` | `"default<O3>"` | Benchmarking |
+
+The level also controls the code‑generation configuration of the `TargetMachine`. Instruction selection, register allocation, and instruction scheduling are all calibrated to the corresponding level consistently with the IR passes, avoiding the degenerate situation of optimized IR being fed to a `-O0` selector.
+
+The sequence of operations inside `compile()` follows the order *verify → optimize → verify → emit*:
+
+1. **Pre‑verification** (`module.verify()`): catches code‑generator bugs with precise messages from the LLVM verifier before they reach the optimizer. Invalid IR at the optimizer's input produces undefined behavior in the passes, not useful error messages.
+2. **Optimization** (`run_passes`): applies the requested standard pipeline.
+3. **Post‑verification**: some passes (`instcombine`, `GVN`) can reveal latent type inconsistencies while propagating constants or eliminating dead code. This second verification catches them before they produce incorrect machine code.
+4. **Object emission** (`write_object_file`): generates the final `.o` file.
+
+#### 4.7.2 Compatibility with the garbage collector
+
+LLVM passes, such as `mem2reg`, which affects pointer locations, do not invalidate the GC's invariants. `mem2reg` promotes an `alloca` to an SSA register only if that `alloca`'s address never escapes — that is, if its only using instructions are `store` and `load`, with the address never appearing in any call argument or in any `getelementptr` stored elsewhere. Since every pointer‑typed `alloca` is registered with `hulk_rt_shadow_push(%alloca)`, its address escapes into that external function, and LLVM permanently classifies it as *address‑taken*, excluding it from `mem2reg`. `alloca`s of numeric type (`f64`) and boolean type (`i1`) are never registered on the shadow stack and are eligible for promotion, reducing the number of loads and stores in arithmetic.
+
+The `instcombine` and `simplifycfg` passes operate on instruction patterns and the control‑flow graph respectively; neither can eliminate calls to external functions (which, under LLVM's memory model, carry implicit side effects). The shadow push/pop functions, retain/release, and `hulk_rt_alloc` are all external and therefore unreachable by these passes. The `inline` pass copies instructions from the callee into the caller; since push/pop pairs are emitted at the boundaries of HULK scopes — not of LLVM functions — the push/pop balance is preserved exactly after inlining [29].
+
+### 4.8 Non‑trivial design decisions
 
 The choice of Rust over C++ is justified by Rust's greater readability and user‑friendliness, which also comes with more up‑to‑date tooling and an ecosystem (`cargo fmt`, `cargo clippy`, and `cargo test`) that provides formatting, static analysis, and testing without configuration headaches.
 
@@ -715,9 +847,9 @@ The second level, located in `src/lib.rs`, runs the complete pipeline — lexica
 
 ### 5.2 Coverage achieved
 
-At the time of writing this report, the complete workspace contains 214 test functions (annotated with `#[test]`), distributed according to the following table:
+At the time of writing this report, the complete workspace contains 237 test functions (annotated with `#[test]`), distributed according to the following table:
 
-**Table 8.** *Distribution of automated tests by crate*
+**Table 10.** *Distribution of automated tests by crate*
 
 | Crate | Tests |
 |---|---|
@@ -725,11 +857,11 @@ At the time of writing this report, the complete workspace contains 214 test fun
 | `hulk-lexer` | 16 |
 | `hulk-parser` | 9 |
 | `hulk-semantic` | 86 |
-| `hulk-codegen` | 71 |
-| `hulk-rt` | 18 |
-| **Total** | **214** |
+| `hulk-codegen` | 79 |
+| `hulk-rt` | 43 |
+| **Total** | **237** |
 
-Within `hulk-codegen`, the 71 tests are split into 31 integration tests (valid ELF, in `lib.rs`) and 40 unit lowering tests (IR verification, in `lower/mod.rs`). The coverage of language constructs, reconstructed from the names of the test functions themselves, explicitly spans: literals and variables; `let` and variable shadowing; blocks; unary and binary operators (including concatenation with and without a space); `if`/`elif`/`else`; `while`; destructive assignment to variables and to members; calls to free functions with and without arguments, including recursion; object construction (`new`); attribute reads; method calls, including inheritance, overriding, and calls to `base`; method references without invocation (function types); `is`/`as`; `for` loops over literal vectors and over `range`; vector comprehensions; `match` with literal, type, and string patterns, as well as the non‑exhaustive case; dispatch through protocols; and the built‑in mathematical functions and constants. This coverage matches, almost one‑to‑one, the list of features — including the three extensions described in Section 3 — that the backend's implementation guide requires to be completed in its work phases, which suggests that the test suite was designed as a direct verification map for that plan, rather than incidentally.
+Within `hulk-codegen`, the 79 tests are split into 36 integration tests (valid ELF, in `lib.rs`) and 43 unit lowering tests (IR verification, in `lower/mod.rs`). The coverage of language constructs explicitly spans: literals and variables; `let` and variable shadowing; blocks; unary and binary operators (including concatenation with and without a space); `if`/`elif`/`else`; `while`; destructive assignment to variables and to members; calls to free functions with and without arguments, including recursion; object construction (`new`); attribute reads; method calls, including inheritance, overriding, and calls to `base`; method references without invocation (function types); `is`/`as`; `for` loops over literal vectors and over `range`; vector comprehensions; `match` with literal, type, and string patterns; dispatch through protocols; and the built‑in mathematical functions. The GC tests verify that pointer‑typed `alloca`s are not promoted by `mem2reg` after the shadow push (by inspecting the optimized IR); that field maps contain exactly the pointer offsets of the type; and that `hulk_rt_gc_collect` correctly collects binary and ternary cycles without freeing reachable objects. The `hulk-rt` module extends its tests with 25 additional cases: correctness of `retain`/`release` with the `TAG_FREED` poisoning value, absence of leaks in `hulk_rt_dynamic_vector_to_vector`, and correct cleanup by `reset_gc_state` for types with secondary sub‑allocations.
 
 ---
 
@@ -751,7 +883,9 @@ Two testing‑methodology alternatives were consciously discarded. The first was
 
 The complete development of a HULK compiler, from lexical analysis through native code generation for Linux x86_64, has demonstrated the feasibility of building an academic production‑quality tool that integrates the classic phases of compilation with a set of modern extensions. The implemented compiler covers the entirety of the base language, including the type system with single inheritance, structural protocols, type inference, and expression‑based control constructs. In addition, the three proposed extensions — pattern matching (`match`), first‑class functions, and vectors with comprehensions — have been integrated coherently, respecting the language's philosophy while contributing an expressiveness comparable to that of contemporary languages such as Rust [17], Kotlin [19], or Haskell [23].
 
-The choice of Rust as the implementation language has proven especially well suited. Its type system and ownership model have made it possible to build a compiler that is safe and free of memory‑management errors, even in the most complex phases such as the five‑pass semantic analysis and LLVM code generation [7]. Parameterizing the AST with an annotation type has eased the transition between the untyped syntax tree and the fully typed tree, ensuring that each phase operates on the appropriate representation. Likewise, the use of `inkwell` as an interface to LLVM has provided fine‑grained control over code generation, making it possible to implement an efficient object model (vtables, itables) and a hybrid memory‑management system (reference counting plus cycle collection) tailored to the needs of the language.
+The choice of Rust as the implementation language has proven especially well suited. Its type system and ownership model have made it possible to build a compiler that is safe and free of memory‑management errors, even in the most complex phases such as the five‑pass semantic analysis and LLVM code generation [7]. Parameterizing the AST with an annotation type has eased the transition between the untyped syntax tree and the fully typed tree, ensuring that each phase operates on the appropriate representation. Likewise, the use of `inkwell` as an interface to LLVM has provided fine‑grained control over code generation, making it possible to implement an efficient object model (vtables, itables) and a fully functional hybrid memory‑management system: reference counting handles the common acyclic path, while the mark‑and‑sweep collector — instrumented with a shadow stack maintained by the generated code itself and per‑type field maps embedded in the vtables — eliminates the reference cycles that pure counting cannot free [9, 28].
+
+The addition of LLVM‑IR optimization (the `mem2reg`, `instcombine`, `simplifycfg`, and `inline` passes, applied through `run_passes`) allows high‑quality generated code to be expected. Numeric variables are promoted to SSA registers, eliminating redundant loads and stores; small methods are inlined into their devirtualized callers; and superfluous control flow is simplified. Compatibility with the GC is guaranteed structurally: pointer‑typed slots, by being registered with `hulk_rt_shadow_push`, are classified by LLVM as *address‑taken* and automatically excluded from `mem2reg`, with no need for any additional annotation or any modification to the GC [29].
 
 The test suite, with more than two hundred automated tests, exhaustively covers the compiler's functionality and has been essential to validating the correctness of each phase. The two‑level testing strategy — IR verification and actual execution of binaries — has proven effective at catching errors both in code generation and in dynamic behavior. The "golden test" approach, which links and runs real programs, provides the highest confidence in the system's correctness, while IR‑verification tests allow for an agile development cycle.
 
@@ -769,25 +903,27 @@ Despite the project's success, there are limitations inherent to the current des
 
 From an architectural standpoint, the compiler has opted for pragmatic solutions that, while correct and efficient, could be refined in later versions:
 
-1. **Hybrid memory‑management model.** The current system proposes combining reference counting with a tracing (mark‑sweep) collector to break cycles. Although this strategy is widely used in languages such as Python [9, 10], the implementation of the tracing collector is not complete in the current version. This means that programs that build cyclic structures may experience memory leaks. A natural evolution would be to complete the tracing collector and optimize its integration with reference counting, following best practices from the literature.
+1. **Limited type inference for mutual recursion.** The current inference algorithm correctly resolves simple recursion and recursion through `self`, but cannot infer types for mutually recursive functions without explicit annotations. This is a known limitation that could be addressed through a constraint‑based unification approach (Hindley–Milner style) [20] or through a more sophisticated fixed‑point analysis. Nevertheless, the current behavior is safe and predictable, since it reports an error rather than producing incorrect results.
 
-2. **Limited type inference for mutual recursion.** The current inference algorithm correctly resolves simple recursion and recursion through `self`, but cannot infer types for mutually recursive functions without explicit annotations. This is a known limitation that could be addressed through a constraint‑based unification approach (Hindley–Milner style) [20] or through a more sophisticated fixed‑point analysis. Nevertheless, the current behavior is safe and predictable, since it reports an error rather than producing incorrect results.
+2. **Cycle‑collector performance.** The mark‑and‑sweep collector is triggered globally every time the `ALLOC_BYTES` counter exceeds the configured threshold, which implies a pause proportional to the number of objects alive at that moment. For programs with many live objects, this pause can be noticeable. The natural evolution is to adopt a generational design [10]: most objects die young, and a generational collector would limit the set of objects examined in each cycle to the young generation, drastically reducing the average collection cost.
 
-3. **Optimization of generated code.** The current backend emits LLVM IR without applying any optimizations, which results in binaries that, although correct, are not as efficient as they could be. Hooking up LLVM's optimization pipeline (passes such as `mem2reg`, `instcombine`, and `simplifycfg`) would notably improve performance and reduce code size. This task is relatively simple and would have a high impact.
+3. **Uniform vector storage.** The decision to store every vector element as a pointer, even for primitive types, simplifies the runtime implementation but introduces additional indirection and memory overhead. In a production context, one could consider specializing vectors for value types (similar to Java's specialized `List` types [11] or Go's `array`s [16]) in order to improve performance.
 
-4. **Uniform vector storage.** The decision to store every vector element as a pointer, even for primitive types, simplifies the runtime implementation but introduces additional indirection and memory overhead. In a production context, one could consider specializing vectors for value types (similar to Java's specialized `List` types [11] or Go's `array`s [16]) in order to improve performance.
+4. **Scope of the optimization process.** The current version enables LLVM's `default<O1>`, `default<O2>`, and `default<O3>` pipelines, which include method inlining and basic vectorization. However, the compiler does not perform interprocedural data‑flow analysis (e.g. dead‑code elimination across compilation units) or specialization of polymorphic functions based on concrete types (devirtualization beyond the local devirtualization the backend already performs). These techniques require the whole program to be present in memory along with a complete call graph, and constitute a natural direction for future work [29].
 
 ### 8.2 Recommendations for future work
 
 From a research‑and‑development perspective, the HULK compiler opens up several lines of work that could be explored:
 
-1. **Expansion of the type system.** Introducing algebraic (sum) types and richer destructuring patterns would let HULK move closer to modern functional languages. The `match` extension already takes the first steps in that direction; it could be completed with nested patterns and guards.
+1. **Expansion of the type system.** Introducing algebraic (sum) types and richer destructuring patterns would let HULK move closer to modern functional languages. The `match` extension already takes the first steps in that direction; it could be completed with nested patterns, boolean guards, and a formal exhaustiveness checker [23].
 
-2. **Support for incremental compilation and caching.** The current architecture compiles the entire program in a single pass. An incremental compilation system, which recompiles only the modified parts, would be beneficial for large projects and would improve the development experience.
+2. **Generational collector.** The current mark‑and‑sweep collector examines every live object on each cycle. Adopting a generational strategy — reserving global collection for long‑lived objects and using a low‑latency *nursery* space for new objects — would drastically reduce pause times for programs with many short‑lived objects [10, 28].
 
-3. **Code generation for other platforms.** Although the backend currently targets Linux x86_64, LLVM's portability would allow code to be generated for Windows, macOS, and ARM architectures with relatively little effort. This would make HULK usable in more diverse environments.
+3. **Support for incremental compilation and caching.** The current architecture compiles the entire program in a single pass. An incremental compilation system, which recompiles only the modified parts, would be beneficial for large projects and would significantly improve the interactive development experience.
 
-4. **Improving the user experience.** The current compiler produces clear, location‑aware error messages, but it could be enriched with automatic suggestions (for example, correcting typos in variable names) and tighter integration with development environments (LSP, editor extensions).
+4. **Code generation for other platforms.** Although the backend currently targets Linux x86_64, LLVM's portability would allow code to be generated for Windows, macOS, and ARM architectures with relatively little effort. This would make HULK usable in more diverse environments without changes to the front end or the semantic analyzer.
+
+5. **Improving the user experience.** The current compiler produces clear, location‑aware error messages, but it could be enriched with automatic suggestions (for example, correcting typos in variable names via edit distance) and tighter integration with development environments through the Language Server Protocol (LSP).
 
 The developed HULK compiler is a robust and extensible tool that more than fulfills the project's objectives. The limitations identified do not detract from its correctness or usefulness, and the proposed recommendations offer a clear path for its future evolution. This work constitutes a solid foundation both for teaching and for research in programming languages and compilation.
 
@@ -822,6 +958,8 @@ The developed HULK compiler is a robust and extensible tool that more than fulfi
 25. Warsaw, B. (2000). *PEP 202 — List Comprehensions*. Python Software Foundation.
 26. Bierman, G., Abadi, M., & Torgersen, M. (2014). Understanding TypeScript. In *Proceedings of the 28th European Conference on Object‑Oriented Programming (ECOOP 2014)*, 257–281. Springer.
 27. Landwerth, I. (2019–2020). *Building a Compiler* [video series]. Reference repository: <https://github.com/terrajobst/minsk>.
+28. Jones, R., Hosking, A., & Moss, E. (2011). *The Garbage Collection Handbook: The Art of Automatic Memory Management*. CRC Press / Chapman & Hall.
+29. Allen, R., & Kennedy, K. (2001). *Optimizing Compilers for Modern Architectures: A Dependence‑based Approach*. Morgan Kaufmann.
 
 ---
 
@@ -966,7 +1104,7 @@ This allows `[x^2 | x in range(1, 10)]` to be parsed as a comprehension, while `
 
 ### 10.7 Grammar–implementation correspondence table
 
-**Table 9.** *Grammar–implementation correspondence table*
+**Table 11.** *Grammar–implementation correspondence table*
 
 | Non‑terminal | Rust method |
 |---|---|
