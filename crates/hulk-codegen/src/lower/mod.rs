@@ -102,36 +102,68 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
     }
 
     /// Pops the innermost lexical scope.
+    ///
+    /// For owned pointer-typed bindings: loads the current value and releases it.
+    /// For all pointer-typed bindings (owned or borrowed): pops their shadow-stack
+    /// entries in reverse declaration order (LIFO) so the push/pop sequence is
+    /// always balanced.
     pub fn pop_scope(&mut self) -> Result<(), CodegenError> {
-        let scope = self.scope_stack.pop_scope();
+        let (scope, shadow_slots) = self.scope_stack.pop_scope();
+
+        // ── 1. Release owned heap-allocated bindings ──────────────────────
         let release_fn = self.codegen.functions.get("hulk_rt_release").cloned();
         if let Some(release) = release_fn {
-            for (_name, (ptr, llvm_ty, sem_ty, owned)) in scope {
-                if owned && is_heap_allocated_type(&sem_ty, self.registry) {
+            for (_name, (ptr, llvm_ty, sem_ty, owned)) in &scope {
+                if *owned && is_heap_allocated_type(sem_ty, self.registry) {
                     // Load the full value using its stored LLVM type.
                     let val = self
                         .codegen
                         .builder
-                        .build_load(llvm_ty, ptr, "scope_exit_load")
+                        .build_load(*llvm_ty, *ptr, "scope_exit_load")
                         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
                     // If it's a fat pointer, extract the object data.
-                    let obj_ptr = object_pointer_from_fat_ptr(self, val, &sem_ty)?;
+                    let obj_ptr = object_pointer_from_fat_ptr(self, val, sem_ty)?;
                     self.codegen
                         .builder
                         .build_call(release, &[obj_ptr.into()], "scope_exit_release")
                         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+                    // Null the slot to prevent accidental reuse
+                    let null_val = llvm_ty.const_zero();
+                    self.codegen
+                        .builder
+                        .build_store(*ptr, null_val)
+                        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
                 }
             }
         }
+
+        // ── 2. Pop shadow-stack entries in reverse (LIFO) order ──────────
+        let pop_fn = self.codegen.functions.get("hulk_rt_shadow_pop").cloned();
+        if let Some(pop) = pop_fn {
+            for _slot in shadow_slots.iter().rev() {
+                // The runtime shadow stack is purely positional (LIFO)
+                self.codegen
+                    .builder
+                    .build_call(pop, &[], "shadow_pop")
+                    .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            }
+        }
+
         Ok(())
     }
-
-    /// Declares a variable in the current scope and initialises it with `value`.
+    
+    /// Declares an owned variable in the current scope and initialises it.
+    ///
+    /// If the variable is pointer-typed (heap-allocated), the alloca's address
+    /// is immediately registered with the GC shadow stack via
+    /// `hulk_rt_shadow_push`. This keeps the object reachable as a root during
+    /// any collection triggered while the variable is in scope.
     pub fn declare_var(
         &mut self,
         name: &str,
         value: BasicValueEnum<'ctx>,
         sem_ty: Type,
+        is_param: bool, // indicates if the caller already owns the reference
     ) -> Result<(), CodegenError> {
         let llvm_ty = value.get_type();
         let ptr = self
@@ -143,7 +175,33 @@ impl<'a, 'ctx> LowerCtx<'a, 'ctx> {
             .builder
             .build_store(ptr, value)
             .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        self.scope_stack.declare(name, ptr, llvm_ty, sem_ty, true);
+
+        // Shadow-push pointer-typed locals so the GC mark phase can find them.
+        // Taking the alloca's address causes LLVM to treat it as address-taken,
+        // preventing mem2reg from promoting it to an SSA value — the slot must
+        // stay in memory because the GC will dereference it during collection.
+        let shadow_slot = if is_heap_allocated_type(&sem_ty, self.registry) {
+            let push_fn = self
+                .codegen
+                .functions
+                .get("hulk_rt_shadow_push")
+                .cloned()
+                .ok_or_else(|| {
+                    CodegenError::unsupported("hulk_rt_shadow_push not declared", None)
+                })?;
+            self.codegen
+                .builder
+                .build_call(push_fn, &[ptr.into()], "shadow_push")
+                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+            Some(ptr)
+        } else {
+            None // not a GC root, no shadow involvement
+        };
+
+        // owned: false -> caller retains ownership; pop_scope will not release.
+        let owned = !is_param;
+        self.scope_stack
+            .declare(name, ptr, llvm_ty, sem_ty, owned, shadow_slot);
         Ok(())
     }
 
@@ -513,7 +571,11 @@ mod tests {
         let context = Context::create();
         let mut codegen = CodegenCtx::new(&context, "test").expect("codegen ctx");
 
-        // 4. Create main function (entry point).
+        // 4. Declare runtime functions needed for the lowered code.
+        runtime_decls::declare_all(&mut codegen);
+        declare_test_builtins(&mut codegen);
+
+        // 5. Create main function (entry point).
         let i32_type = context.i32_type();
         let main_fn = codegen
             .module
@@ -521,17 +583,20 @@ mod tests {
         let entry_bb = context.append_basic_block(main_fn, "entry");
         codegen.builder.position_at_end(entry_bb);
 
-        // 5. Build layouts for user‑defined types.
+        // 6. Build layouts for user‑defined types.
         layout::build_layouts(&verified.typed_program, &verified.registry, &mut codegen)
             .expect("build layouts");
 
-        // 6. Declare free functions and methods.
+        // 7. Declare free functions and methods.
         lower::decl::declare_functions(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("declare functions");
         lower::method::declare_methods(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("declare methods");
 
-        // 7. Build vtables and itables for every (type, protocol) pair the program actually uses.
+        // 8. Build vtables and itables for every (type, protocol) pair the program actually uses.
+        // Emit GC field maps (before build_vtables)
+        let _ = layout::build_gc_field_maps(&mut codegen, &verified.registry);
+
         layout::build_vtables(&mut codegen, &verified.registry).expect("build vtables");
 
         itables::build_itables(&mut codegen, &verified.registry, &verified.typed_program)
@@ -540,18 +605,14 @@ mod tests {
         lower::decl::define_functions(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("define functions");
 
-        // 8. Define free functions and methods.
+        // 9. Define free functions and methods.
         lower::decl::define_functions(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("define functions");
         lower::method::define_methods(&mut codegen, &verified.typed_program, &verified.registry)
             .expect("define methods");
 
-        // 9. Reset builder to main entry.
+        // 10. Reset builder to main entry.
         codegen.builder.position_at_end(entry_bb);
-
-        // 10. Declare runtime functions needed for the lowered code.
-        runtime_decls::declare_all(&mut codegen);
-        declare_test_builtins(&mut codegen);
 
         // 11. Lower the entry expression.
         let mut lower_ctx =

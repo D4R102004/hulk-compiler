@@ -16,7 +16,9 @@ use hulk_semantic::{topological_order, TypeInfo, TypeRegistry};
 
 use crate::context::CodegenCtx;
 use crate::error::CodegenError;
-use crate::lower::utils::{llvm_type, HEADER_FIELD_COUNT};
+use crate::lower::utils::{llvm_type, is_heap_allocated_type, HEADER_FIELD_COUNT};
+
+const METHOD_HEADER_SLOTS: usize = 2;
 
 /// Layout information for a single HULK type.
 #[derive(Clone)]
@@ -29,6 +31,8 @@ pub struct TypeLayout<'ctx> {
     pub method_slots: HashMap<String, usize>,
     /// The vtable global (built later, initially None).
     pub vtable_global: Option<GlobalValue<'ctx>>,
+    /// Global constant i64 array: [object_size_bytes, offset0, offset1, …, -1 (sentinel)]
+    pub field_map_global: Option<GlobalValue<'ctx>>,
     /// The total size of the struct in bytes.
     pub size: usize,
 }
@@ -40,6 +44,7 @@ impl<'ctx> TypeLayout<'ctx> {
             field_offsets: HashMap::new(),
             method_slots: HashMap::new(),
             vtable_global: None,
+            field_map_global: None,
             size,
         }
     }
@@ -103,7 +108,8 @@ pub fn build_layouts(
             &info.methods
         };
         for (idx, method_name) in methods.keys().enumerate() {
-            layout.method_slots.insert(method_name.clone(), idx);
+            // Method dispatch indices are METHOD_HEADER_SLOTS-based
+            layout.method_slots.insert(method_name.clone(), idx + METHOD_HEADER_SLOTS);
         }
 
         layouts.insert(type_name.clone(), layout);
@@ -218,6 +224,7 @@ fn build_struct_type<'ctx>(
         i64_type.into(), // ref_count
         i1_type.into(),  // gc_mark
         i8_type.into(),  // type_tag
+        ptr_type.into(), // prev
         ptr_type.into(), // next
         ptr_type.into(), // vtable
     ];
@@ -253,8 +260,13 @@ fn build_struct_type<'ctx>(
 ///
 /// Must be called after all methods have been declared, because vtables
 /// reference the method function declarations stored in `ctx.functions`.
-pub fn build_vtables(ctx: &mut CodegenCtx, registry: &TypeRegistry) -> Result<(), CodegenError> {
-    let type_names: Vec<_> = ctx.type_layouts.keys().cloned().collect();
+pub fn build_vtables<'ctx>(
+    ctx: &mut CodegenCtx<'ctx>,
+    registry: &TypeRegistry,
+) -> Result<(), CodegenError> {
+    let type_names: Vec<String> = ctx.type_layouts.keys().cloned().collect();
+    let ptr_type = ctx.context.ptr_type(Default::default());
+
     for type_name in type_names {
         let info = registry.lookup_type(&type_name).ok_or_else(|| {
             CodegenError::llvm_verification(format!("type '{}' not found", type_name))
@@ -266,7 +278,36 @@ pub fn build_vtables(ctx: &mut CodegenCtx, registry: &TypeRegistry) -> Result<()
             &info.methods
         };
 
-        let mut fn_ptrs = Vec::new();
+        // ── Slot 0: pointer to the GC field map ──────────────────────────
+        // Mark phase dereferences vtable[0] for pointer-field offsets and object size. 
+        // Must come before build_gc_field_maps is called.
+        let field_map_ptr = ctx
+            .type_layouts
+            .get(&type_name)
+            .and_then(|l| l.field_map_global)
+            .map(|g| g.as_pointer_value())
+            .ok_or_else(|| {
+                CodegenError::llvm_verification(format!(
+                    "no field map for '{}' — call build_gc_field_maps first",
+                    type_name
+                ))
+            })?;
+
+        // ── Slot 1: parent vtable pointer ────────────────────────────────
+        // hulk_rt_downcast_check walks vtable[1] to ascend the ancestor chain.
+        // Null terminates the walk (root types have no parent vtable).
+        let parent_vtable_ptr = info
+            .parent
+            .as_ref()
+            .and_then(|p| ctx.type_layouts.get(&p.name))
+            .and_then(|l| l.vtable_global)
+            .map(|g| g.as_pointer_value())
+            .unwrap_or_else(|| ptr_type.const_null());
+
+        let mut fn_ptrs: Vec<inkwell::values::PointerValue<'ctx>> =
+            vec![field_map_ptr, parent_vtable_ptr]; // slots 0 and 1
+
+        // ── Slots 2…N+1: method function pointers ────────────────────────
         for method_name in methods.keys() {
             let owner =
                 owning_type_for_method(&type_name, method_name, registry).ok_or_else(|| {
@@ -283,7 +324,6 @@ pub fn build_vtables(ctx: &mut CodegenCtx, registry: &TypeRegistry) -> Result<()
             fn_ptrs.push(fn_ptr);
         }
 
-        let ptr_type = ctx.context.ptr_type(Default::default());
         let vtable_type = ptr_type.array_type(fn_ptrs.len() as u32);
         let vtable_global =
             ctx.module
@@ -336,6 +376,99 @@ pub fn has_subtypes(type_name: &str, registry: &TypeRegistry) -> bool {
         .types
         .values()
         .any(|info| info.parent.as_ref().is_some_and(|p| p.name == type_name))
+}
+
+/// Emits a per-type GC field map for every user-defined type in `ctx.type_layouts`.
+///
+/// Array layout:  [size_bytes, ptr_offset_0, …, ptr_offset_N-1, -1]
+///
+/// Must be called before `build_vtables` so that vtable construction
+/// can embed a pointer to each type's map at vtable slot 0.
+pub fn build_gc_field_maps<'ctx>(
+    ctx: &mut CodegenCtx<'ctx>,
+    registry: &TypeRegistry,
+) -> Result<(), CodegenError> {
+    let i64_type = ctx.context.i64_type();
+
+    // Collect type names first to avoid borrowing ctx mutably and immutably.
+    let type_names: Vec<String> = ctx.type_layouts.keys().cloned().collect();
+
+    for type_name in type_names {
+        // ── Collect byte offsets of pointer-typed fields ──────────────────
+        // A field is a GC pointer if its semantic type is heap-allocated
+        // (String, Object, Named, Vector, Iterable — anything that becomes a
+        // `ptr` in LLVM IR and is reference-counted).
+        let (obj_size, pointer_offsets): (u64, Vec<u64>) = {
+            let layout = &ctx.type_layouts[&type_name];
+            registry.lookup_type(&type_name).ok_or_else(|| {
+                CodegenError::llvm_verification(format!(
+                    "type '{}' not found in registry during field-map build",
+                    type_name
+                ))
+            })?;
+
+            let mut offsets = Vec::new();
+            for (attr_name, &byte_offset) in &layout.field_offsets {
+                // Resolve the attribute's semantic type through the registry,
+                // walking the ancestor chain (flattened attributes live in the
+                // TypeInfo but the declaring ancestor holds the canonical type).
+                let attr_ty = find_attribute_type(&type_name, attr_name, registry);
+                if let Some(ty) = attr_ty {
+                    if is_heap_allocated_type(&ty, registry) {
+                        offsets.push(byte_offset as u64);
+                    }
+                }
+            }
+            offsets.sort_unstable(); // deterministic order for reproducible IR
+            (layout.size as u64, offsets)
+        };
+
+        // ── Build the constant array: [size, offsets…, -1] ───────────────
+        // field_map[0] is the object size so hulk_rt_release can find the 
+        // deallocation Layout for TAG_OBJECT without a separate vtable slot.
+        // The mark phase skips field_map[0] and reads from index 1.
+        let mut values: Vec<inkwell::values::IntValue<'ctx>> =
+            vec![i64_type.const_int(obj_size, false)]; // [0] = size
+        values.extend(
+            pointer_offsets
+                .iter()
+                .map(|&off| i64_type.const_int(off, false)),
+        );
+        // -1 sentinel: u64::MAX interpreted as two's-complement i64(-1).
+        values.push(i64_type.const_int(u64::MAX, false));
+
+        let array_ty = i64_type.array_type(values.len() as u32);
+        let global_name = format!("{}__gc_field_map", type_name);
+        let global = ctx.module.add_global(array_ty, None, &global_name);
+        let const_array = i64_type.const_array(&values);
+        global.set_initializer(&const_array);
+        global.set_constant(true);
+
+        ctx.type_layouts
+            .get_mut(&type_name)
+            .unwrap()
+            .field_map_global = Some(global);
+    }
+
+    Ok(())
+}
+
+/// Searches `type_name` and its ancestor chain for the semantic type of
+/// `attr_name`. Returns `None` only if the attribute is not found
+/// (which should never happen for a semantically valid program).
+fn find_attribute_type(
+    type_name: &str,
+    attr_name: &str,
+    registry: &TypeRegistry,
+) -> Option<hulk_semantic::Type> {
+    let mut current = type_name.to_string();
+    loop {
+        let info = registry.lookup_type(&current)?;
+        if let Some(attr) = info.attributes.get(attr_name) {
+            return attr.declared_type.clone();
+        }
+        current = info.parent.as_ref()?.name.clone();
+    }
 }
 
 #[cfg(test)]

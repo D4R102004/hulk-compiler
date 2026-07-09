@@ -197,7 +197,7 @@ pub fn lower_for<'ctx>(
         .build_store(var_ptr, unboxed_current)
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
     ctx.scope_stack
-        .declare(&for_expr.var, var_ptr, elem_llvm_ty, elem_ty.clone(), false);
+        .declare(&for_expr.var, var_ptr, elem_llvm_ty, elem_ty.clone(), false, None);
 
     // Lower the body.
     let body_val = lower_expr(ctx, body_expr)?;

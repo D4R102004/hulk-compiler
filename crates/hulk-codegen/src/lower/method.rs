@@ -110,12 +110,11 @@ fn define_methods_for_type(
     let _layout = ctx.type_layouts.get(type_name).ok_or_else(|| {
         CodegenError::llvm_verification(format!("no layout for type '{}'", type_name))
     })?;
-    let self_ty = ctx.context.ptr_type(Default::default());
 
     for (method_name, method_sig) in methods {
-        // WHY: canonical OOP codegen pattern — each type only defines LLVM
-        // functions for methods it owns. Inherited methods (defined_in != type_name)
-        // are resolved via vtable dispatch; their bodies live in the declaring type.
+        // Canonical OOP codegen pattern - each type only defines LLVM functions
+        // for methods it owns. Inherited methods (defined_in != type_name) are
+        // resolved via vtable dispatch; their bodies live in the declaring type.
         if method_sig.defined_in != *type_name {
             continue;
         }
@@ -135,45 +134,20 @@ fn define_methods_for_type(
         lower_ctx.current_method = Some(method_name.clone());
         lower_ctx.push_scope(); // function scope
 
-        // Bind `self` parameter.
         let params = fn_value.get_params();
-        let self_param = params[0];
-        let self_alloca = lower_ctx
-            .codegen
-            .builder
-            .build_alloca(self_ty, "self")
-            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-        lower_ctx
-            .codegen
-            .builder
-            .build_store(self_alloca, self_param)
-            .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+
+        // Bind `self` parameter.
         let self_sem_ty = Type::Named(type_name.clone());
-        lower_ctx
-            .scope_stack
-            .declare("self", self_alloca, self_ty.into(), self_sem_ty, false);
+        lower_ctx.declare_var("self", params[0], self_sem_ty, true)?;
 
         // Bind other parameters.
         for (i, (param_name, param_ty)) in method_sig.params.iter().enumerate() {
-            let param_value = params[i + 1];
-            let llvm_param_ty = utils::llvm_type(lower_ctx.codegen, registry, param_ty)?;
-            let alloca = lower_ctx
-                .codegen
-                .builder
-                .build_alloca(llvm_param_ty, param_name)
-                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            lower_ctx
-                .codegen
-                .builder
-                .build_store(alloca, param_value)
-                .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-            lower_ctx.scope_stack.declare(
-                param_name,
-                alloca,
-                llvm_param_ty,
-                param_ty.clone(),
-                false,
-            );
+            let param_value = params
+                .get(i + 1) // +1 because params[0] is self
+                .ok_or_else(|| {
+                    CodegenError::llvm_verification(format!("missing method parameter {}", i))
+                })?;
+            lower_ctx.declare_var(param_name, *param_value, param_ty.clone(), true)?;
         }
 
         // Find the corresponding method body in the AST.

@@ -10,6 +10,8 @@
 //! String literals are immutable and are never modified at runtime; they are
 //! emitted once per unique string in the module.
 
+use std::u64;
+
 use inkwell::module::Linkage;
 
 use hulk_ast::Literal;
@@ -65,9 +67,9 @@ pub fn lower_literal<'ctx>(
             data_global.set_unnamed_addr(true);
 
             // ─── HulkString header global ────────────────────────────────────
-            // MUST be byte-for-byte compatible with `hulk_rt::HulkString`
-            // (ObjHeader{ref_count:i64, gc_mark:u8, type_tag:u8, next:ptr,
-            // vtable:ptr} followed by len:i64, data:ptr — 48 bytes total).
+            // Must be byte-for-byte compatible with `hulk_rt::HulkString`
+            // (ObjHeader{ref_count:i64, gc_mark:u8, type_tag:u8, prev:ptr, next:ptr,
+            // vtable:ptr} = 40 bytes, followed by len:i64, data:ptr — 56 bytes total).
 
             let i64_type = ctx.codegen.context.i64_type();
             let i8_type = ctx.codegen.context.i8_type();
@@ -75,19 +77,21 @@ pub fn lower_literal<'ctx>(
 
             let header_ty = ctx.codegen.context.struct_type(
                 &[
-                    i64_type.into(),
-                    i8_type.into(),
-                    i8_type.into(),
-                    ptr_type.into(),
-                    ptr_type.into(),
+                    i64_type.into(),  // ref_count  – offset 0
+                    i8_type.into(),   // gc_mark    – offset 8
+                    i8_type.into(),   // type_tag   – offset 9  [+ 6 pad]
+                    ptr_type.into(),  // prev       – offset 16
+                    ptr_type.into(),  // next       – offset 24
+                    ptr_type.into(),  // vtable     – offset 32
                 ],
                 false,
             );
             let header_const = ctx.codegen.context.const_struct(
                 &[
-                    i64_type.const_int(0, false).into(), // ref_count
+                    i64_type.const_int(u64::MAX, false).into(), // ref_count
                     i8_type.const_int(0, false).into(),  // gc_mark
                     i8_type.const_int(TAG_LITERAL_STRING as u64, false).into(), // type_tag
+                    ptr_type.const_null().into(),        // prev
                     ptr_type.const_null().into(),        // next
                     ptr_type.const_null().into(),        // vtable
                 ],

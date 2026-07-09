@@ -3,8 +3,8 @@
 use inkwell::FloatPredicate;
 use inkwell::values::BasicValueEnum;
 use hulk_ast::{TypeRef, SourceSpan};
-use hulk_rt::{TAG_BOOLEAN, TAG_BOX, TAG_NUMBER};
 use hulk_semantic::{Type, TypeRegistry};
+pub use hulk_rt::{TAG_BOOLEAN, TAG_BOX, TAG_NUMBER, HEADER_FIELD_COUNT, BOX_HEADER_SIZE};
 
 use crate::error::CodegenError;
 use crate::lower::LowerCtx;
@@ -21,18 +21,15 @@ pub mod field_indices {
     pub const REF_COUNT: u32 = 0;
     pub const GC_MARK: u32 = 1;
     pub const TYPE_TAG: u32 = 2;
-    pub const NEXT: u32 = 3;
-    pub const VTABLE: u32 = 4;
+    pub const PREV: u32 = 3;
+    pub const NEXT: u32 = 4;
+    pub const VTABLE: u32 = 5;
 }
 
-/// Total number of header fields in the LLVM struct type.
-pub const HEADER_FIELD_COUNT: usize = 5;
-// Header (32) + Original_tag (1) + Padding (7) + Payload (8)
-const BOX_SIZE: u64 = 48;
-// The size of the header portion of a boxed object, in bytes.
-const BOX_HEADER_SIZE: u64 = 32;
+// Header (40) + Original_tag (1) + Padding (7) + Payload (8)
+const BOX_SIZE: u64 = BOX_HEADER_SIZE + 1 + 7 + 8;
 // The offset of the payload portion of a boxed object, in bytes.
-const PAYLOAD_OFFSET: u64 = BOX_HEADER_SIZE + 8; // 40
+const PAYLOAD_OFFSET: u64 = BOX_HEADER_SIZE + 8; // 48
 
 // ====================================================================================
 // Shared helper functions
@@ -175,7 +172,7 @@ pub fn resolve_attribute_with_offset(
 pub fn is_heap_allocated_type(ty: &Type, _registry: &TypeRegistry) -> bool {
     matches!(
         ty,
-        Type::String | Type::Object | Type::Vector(_) | Type::Iterable(_) | Type::Named(_)
+        Type::String | Type::Object | Type::Vector(_) | Type::Iterable(_) | Type::Named(_) | Type::Function { .. },
     )
 }
 
@@ -389,15 +386,11 @@ pub fn box_primitive<'ctx>(
             i8_type.const_int(TAG_BOX as u64, false),
         )
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
-    // next = null
-    ctx.codegen
-        .builder
-        .build_store(byte_ptr(16, "next_ptr")?, ptr_type.const_null())
-        .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
+    // prev and next are already assigned by the runtime allocator, so we don't need to set them here.
     // vtable = null
     ctx.codegen
         .builder
-        .build_store(byte_ptr(24, "vtable_ptr")?, ptr_type.const_null())
+        .build_store(byte_ptr(32, "vtable_ptr")?, ptr_type.const_null())
         .map_err(|e| CodegenError::llvm_verification(e.to_string()))?;
 
     // Store tag
@@ -626,7 +619,7 @@ pub fn object_pointer_from_fat_ptr<'ctx>(
     val: BasicValueEnum<'ctx>,
     ty: &Type,
 ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
-    if is_protocol_or_iterable(ty, ctx.registry) {
+    if is_protocol_or_iterable(ty, ctx.registry) || matches!(ty, Type::Function { .. }) {
         let struct_val = val.into_struct_value();
         let data_ptr = ctx
             .codegen

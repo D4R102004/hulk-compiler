@@ -229,6 +229,19 @@ pub fn declare_range_current<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx
         .add_function("hulk_rt_range_current", fn_type, None)
 }
 
+// ─── Closure environments ──────────────────────────────────────────────────
+
+/// Declares `hulk_rt_env_new(slot_count: i64, field_map: ptr) -> ptr`.
+pub fn declare_env_new<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(f) = ctx.module.get_function("hulk_rt_env_new") {
+        return f;
+    }
+    let i64_type = ctx.context.i64_type();
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let fn_type = ptr_type.fn_type(&[i64_type.into(), ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_env_new", fn_type, None)
+} 
+
 // ─── Match fail trap ──────────────────────────────────────────────────────
 
 /// Declares `hulk_rt_match_fail() -> !` (noreturn).
@@ -365,6 +378,54 @@ pub fn declare_rand<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
     ctx.module.add_function("hulk_rt_rand", fn_type, None)
 }
 
+// ─── GC shadow stack ──────────────────────────────────────────────────────
+
+/// Declares `hulk_rt_shadow_push(slot: ptr) -> void`.
+///
+/// `slot` is the address of a pointer-typed local's `alloca` slot (a `ptr`
+/// that holds a `ptr`). The GC dereferences it during the mark phase to
+/// find the live object. Passing the alloca address makes it escape the
+/// function, intentionally preventing mem2reg from promoting the slot.
+pub fn declare_shadow_push<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(f) = ctx.module.get_function("hulk_rt_shadow_push") {
+        return f;
+    }
+    let ptr_type = ctx.context.ptr_type(Default::default());
+    let void_type = ctx.context.void_type();
+    // Signature: (slot: *mut ptr) -> void
+    let fn_type = void_type.fn_type(&[ptr_type.into()], false);
+    ctx.module.add_function("hulk_rt_shadow_push", fn_type, None)
+}
+
+/// Declares `hulk_rt_shadow_pop() -> void`.
+///
+/// Removes the most-recently-pushed entry from the shadow stack. Must be
+/// called once for every prior `hulk_rt_shadow_push` call, in reverse
+/// (LIFO) order, exactly mirroring scope exit.
+pub fn declare_shadow_pop<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(f) = ctx.module.get_function("hulk_rt_shadow_pop") {
+        return f;
+    }
+    let void_type = ctx.context.void_type();
+    let fn_type = void_type.fn_type(&[], false);
+    ctx.module.add_function("hulk_rt_shadow_pop", fn_type, None)
+}
+
+/// Declares `hulk_rt_gc_collect() -> void`.
+///
+/// Runs a full mark-sweep cycle. The runtime calls this automatically from
+/// `hulk_rt_alloc` once the allocation byte-counter crosses the threshold;
+/// this declaration exists so the function can also be called explicitly
+/// in tests or for forced collection at program exit.
+pub fn declare_gc_collect<'ctx>(ctx: &CodegenCtx<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(f) = ctx.module.get_function("hulk_rt_gc_collect") {
+        return f;
+    }
+    let void_type = ctx.context.void_type();
+    let fn_type = void_type.fn_type(&[], false);
+    ctx.module.add_function("hulk_rt_gc_collect", fn_type, None)
+}
+
 // ─── Group Declarations ──────────────────────────────────────────────────────
 
 /// Returns the existing declaration for `name` if this module already has
@@ -492,6 +553,11 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
     ctx.functions
         .insert("hulk_rt_range_current".to_string(), range_current);
 
+    // ─── Closure environments ─────────────────────────────────────────────────────
+
+    let env_new = declare_env_new(ctx);
+    ctx.functions.insert("hulk_rt_env_new".to_string(), env_new);
+
     // ─── Print ─────────────────────────────────────────────────────────────
 
     let print_fn = declare_print(ctx);
@@ -516,4 +582,18 @@ pub fn declare_all(ctx: &mut CodegenCtx) {
 
     let rand_fn = declare_rand(ctx);
     ctx.functions.insert("hulk_rt_rand".to_string(), rand_fn);
+
+    // ─── GC shadow stack ─────────────────────────────────────────────────────
+
+    let shadow_push = declare_shadow_push(ctx);
+    ctx.functions
+        .insert("hulk_rt_shadow_push".to_string(), shadow_push);
+
+    let shadow_pop = declare_shadow_pop(ctx);
+    ctx.functions
+        .insert("hulk_rt_shadow_pop".to_string(), shadow_pop);
+
+    let gc_collect = declare_gc_collect(ctx);
+    ctx.functions
+        .insert("hulk_rt_gc_collect".to_string(), gc_collect);
 }
