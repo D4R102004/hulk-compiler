@@ -28,7 +28,7 @@ use std::process::Command;
 
 use inkwell::context::Context;
 
-use hulk_codegen::emit;
+use hulk_codegen::{emit, OptLevel};
 
 fn main() {
     let work_dir = std::env::temp_dir().join("hulk_codegen_smoke");
@@ -43,7 +43,7 @@ fn main() {
     println!("wrote IR to {}", ll_path.display());
 
     emit::init_all_targets().expect("initialize LLVM targets");
-    let machine = emit::linux_x86_64_target_machine().expect("create Linux x86_64 target machine");
+    let machine = emit::linux_x86_64_target_machine(OptLevel::None).expect("create Linux x86_64 target machine");
 
     let obj_path = work_dir.join("smoke.o");
     emit::write_object_file(&machine, &ctx.module, &obj_path).expect("write object file");

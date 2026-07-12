@@ -34,6 +34,8 @@ pub enum CodegenErrorKind {
     Unsupported { construct: String },
     /// Internal unnidentified compiler error.
     Internal(String),
+    /// The LLVM optimization pipeline rejected or crashed on the module.
+    Optimization(String),
 }
 
 // ─── Constructors ─────────────────────────────────────────────────────────
@@ -87,6 +89,13 @@ impl CodegenError {
         }
     }
 
+    pub fn optimization(msg: impl Into<String>) -> Self {
+        Self {
+            kind: CodegenErrorKind::Optimization(msg.into()),
+            span: None,
+        }
+    }
+
     pub fn with_span(mut self, span: SourceSpan) -> Self {
         self.span = Some(span);
         self
@@ -136,6 +145,9 @@ impl fmt::Display for CodegenError {
             }
             CodegenErrorKind::Internal(msg) => {
                 write!(f, "internal compiler error: {msg}")
+            }
+            CodegenErrorKind::Optimization(msg) => {
+                write!(f, "optimization pipeline failed: {msg}")
             }
         }
     }
